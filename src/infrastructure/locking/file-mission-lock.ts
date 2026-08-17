@@ -171,14 +171,16 @@ export class FileMissionLock implements MissionLock {
         throw ioError("Failed to write the mission lock", error);
       }
       await handle.close();
+
+      // The guard is held for the entire critical section, so release never has
+      // to re-acquire it and can never leak the lock file under contention.
+      try {
+        return await action();
+      } finally {
+        await this.releaseLock(lockPath, token);
+      }
     } finally {
       await this.releaseGuard(guardPath, guardToken);
-    }
-
-    try {
-      return await action();
-    } finally {
-      await this.release(lockPath, token);
     }
   }
 
@@ -214,7 +216,12 @@ export class FileMissionLock implements MissionLock {
           throw ioError("Failed to acquire the mission lock guard", error);
         }
         const owner = await this.readGuardOwner(guardPath);
-        if (owner !== undefined && (await this.isProcessAlive(owner.pid))) {
+        if (owner === undefined) {
+          // The guard exists but has no readable owner marker yet: another
+          // process is mid-acquisition. Treat it as held, never break it.
+          throw lockedError(process.pid);
+        }
+        if (await this.isProcessAlive(owner.pid)) {
           throw lockedError(owner.pid);
         }
         await this.breakGuard(guardPath);
@@ -292,23 +299,13 @@ export class FileMissionLock implements MissionLock {
     return staleLockError(current.pid);
   }
 
-  private async release(lockPath: string, token: string): Promise<void> {
-    const guardPath = this.guardPath(lockPath);
-    let guardToken: string;
-    try {
-      guardToken = await this.acquireGuard(guardPath);
-    } catch {
+  /** Remove the lock file if we still own it. The guard is already held. */
+  private async releaseLock(lockPath: string, token: string): Promise<void> {
+    const current = await this.readLock(lockPath);
+    if (current === undefined || current.token !== token) {
       return;
     }
-    try {
-      const current = await this.readLock(lockPath);
-      if (current === undefined || current.token !== token) {
-        return;
-      }
-      await unlink(lockPath);
-    } finally {
-      await this.releaseGuard(guardPath, guardToken);
-    }
+    await unlink(lockPath);
   }
 
   private async readLock(lockPath: string): Promise<LockFile | undefined> {
