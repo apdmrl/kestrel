@@ -1,6 +1,6 @@
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { MissionId } from "../../domain/shared/identifiers.js";
 import type { RepositoryIdentity } from "../../domain/challenge/repository-identity.js";
@@ -43,6 +43,43 @@ describe("FilesystemWorkspaceManager", () => {
     expect(plan.missionDirectory).not.toContain("..");
     expect(plan.missionDirectory.startsWith(dir)).toBe(true);
     expect(plan.branchName).toBe("kestrel/1-my-repo");
+  });
+
+  it("rejects a relative workspace root before resolving", () => {
+    expect(() => manager.planWorkspace("relative-root", missionId, repository, 42)).toThrow();
+    expect(() =>
+      manager.assertSafePath({
+        root: "relative-root",
+        missionDirectory: "relative-root/m",
+        repositoryPath: "relative-root/m/repo",
+        sidecarPath: "relative-root/m/kestrel",
+        branchName: "kestrel/42-hello-world",
+      }),
+    ).toThrow();
+  });
+
+  it("rejects a symlink in an intermediate mission component", async () => {
+    const outside = await mkdtemp(join(tmpdir(), "kestrel-outside-"));
+    await symlink(outside, join(dir, "mission-link"));
+    const plan = {
+      root: dir,
+      missionDirectory: join(dir, "mission-link", "mission"),
+      repositoryPath: join(dir, "mission-link", "mission", "repo"),
+      sidecarPath: join(dir, "mission-link", "mission", "kestrel"),
+      branchName: "kestrel/42-hello-world",
+    };
+    await expect(manager.createSidecar(plan)).rejects.toMatchObject({ code: "DM_UNSAFE_PATH" });
+    await rm(outside, { recursive: true, force: true });
+  });
+
+  it("verifies the sidecar real path stays inside the workspace root", async () => {
+    const plan = manager.planWorkspace(dir, missionId, repository, 42);
+    await manager.createSidecar(plan);
+    const { realpath } = await import("node:fs/promises");
+    const rootReal = await realpath(dir);
+    const sidecarReal = await realpath(plan.sidecarPath);
+    expect(sidecarReal.startsWith(rootReal + sep)).toBe(true);
+    expect(sidecarReal.startsWith(plan.repositoryPath + sep)).toBe(false);
   });
 
   it("rejects path traversal outside the root", () => {

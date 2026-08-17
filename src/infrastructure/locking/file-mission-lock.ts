@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, open, readFile, unlink } from "node:fs/promises";
+import { mkdir, open, readFile, rename, unlink } from "node:fs/promises";
 import { dirname } from "node:path";
 import { z } from "zod";
 import { createKestrelError } from "../../application/errors/kestrel-error.js";
@@ -141,14 +141,27 @@ export class FileMissionLock implements MissionLock {
   }
 
   async breakStaleLock(lockPath: string): Promise<void> {
-    const current = await this.readLock(lockPath);
-    if (current === undefined) {
-      return;
+    // Atomically claim the lock file so a replacement lock is never unlinked
+    // by this breaker; only the unique staging path is ever removed.
+    const stagingPath = lockPath + ".break." + randomUUID();
+    try {
+      await rename(lockPath, stagingPath);
+    } catch (error) {
+      if (isEnoent(error)) {
+        return;
+      }
+      throw ioError("Failed to claim the stale lock", error);
     }
-    if (isProcessAlive(current.pid)) {
-      throw lockedError(current.pid);
+    const claimed = await this.readLock(stagingPath);
+    if (claimed === undefined) {
+      await rename(stagingPath, lockPath).catch(() => undefined);
+      throw malformedLockError();
     }
-    await unlink(lockPath);
+    if (isProcessAlive(claimed.pid)) {
+      await rename(stagingPath, lockPath).catch(() => undefined);
+      throw lockedError(claimed.pid);
+    }
+    await unlink(stagingPath).catch(() => undefined);
   }
 
   private async classifyExistingLock(lockPath: string) {
@@ -163,14 +176,23 @@ export class FileMissionLock implements MissionLock {
   }
 
   private async release(lockPath: string, token: string): Promise<void> {
-    const current = await this.readLock(lockPath);
-    if (current === undefined) {
+    // Atomically claim the lock file, then verify ownership on the unique
+    // staging path. A replacement lock is restored rather than deleted.
+    const stagingPath = lockPath + ".release." + randomUUID();
+    try {
+      await rename(lockPath, stagingPath);
+    } catch (error) {
+      if (isEnoent(error)) {
+        return;
+      }
+      throw ioError("Failed to release the mission lock", error);
+    }
+    const claimed = await this.readLock(stagingPath);
+    if (claimed === undefined || claimed.token !== token) {
+      await rename(stagingPath, lockPath).catch(() => undefined);
       return;
     }
-    if (current.token !== token) {
-      return;
-    }
-    await unlink(lockPath).catch(() => undefined);
+    await unlink(stagingPath).catch(() => undefined);
   }
 
   private async readLock(lockPath: string): Promise<LockFile | undefined> {

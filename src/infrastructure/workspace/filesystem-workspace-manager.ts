@@ -1,5 +1,5 @@
-import { mkdir, realpath } from "node:fs/promises";
-import { isAbsolute, join, resolve, sep } from "node:path";
+import { lstat, mkdir, realpath } from "node:fs/promises";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createKestrelError } from "../../application/errors/kestrel-error.js";
 import type { RepositoryIdentity } from "../../domain/challenge/repository-identity.js";
 import type { MissionId } from "../../domain/shared/identifiers.js";
@@ -30,6 +30,41 @@ function isWithin(root: string, target: string): boolean {
   return target === root || target.startsWith(root + sep);
 }
 
+function isEnoent(error: unknown): boolean {
+  return (
+    typeof error === "object" && error !== null && (error as { code?: string }).code === "ENOENT"
+  );
+}
+
+/**
+ * Walk every existing path component between root and target with lstat,
+ * rejecting any symbolic link or reparse point. Components that do not exist
+ * yet are skipped (they are created below and verified afterwards).
+ */
+async function assertNoSymlinkComponents(root: string, target: string): Promise<void> {
+  const relativeTarget = relative(root, target);
+  if (relativeTarget === "" || relativeTarget.startsWith("..") || isAbsolute(relativeTarget)) {
+    throw unsafePathError(target);
+  }
+  const parts = relativeTarget.split(sep).filter((part) => part.length > 0);
+  let current = root;
+  for (const part of parts) {
+    current = join(current, part);
+    let entry;
+    try {
+      entry = await lstat(current);
+    } catch (error) {
+      if (isEnoent(error)) {
+        return; // nothing below this component exists yet
+      }
+      throw error;
+    }
+    if (entry.isSymbolicLink()) {
+      throw unsafePathError(current);
+    }
+  }
+}
+
 export class FilesystemWorkspaceManager implements WorkspaceManager {
   planWorkspace(
     root: string,
@@ -37,6 +72,9 @@ export class FilesystemWorkspaceManager implements WorkspaceManager {
     repository: RepositoryIdentity,
     issueNumber: number,
   ): WorkspacePlan {
+    if (!isAbsolute(root)) {
+      throw unsafePathError(root);
+    }
     const repoSlug = slug(repository.name);
     const missionDirectory = join(root, slug(missionId) + "-" + repoSlug + "-" + issueNumber);
     return {
@@ -49,7 +87,7 @@ export class FilesystemWorkspaceManager implements WorkspaceManager {
   }
 
   assertSafePath(plan: WorkspacePlan): void {
-    if (!isAbsolute(resolve(plan.root))) {
+    if (!isAbsolute(plan.root)) {
       throw unsafePathError(plan.root);
     }
     const root = resolve(plan.root);
@@ -62,7 +100,7 @@ export class FilesystemWorkspaceManager implements WorkspaceManager {
         throw unsafePathError(path);
       }
     }
-    if (isWithin(repositoryPath, sidecarPath)) {
+    if (isWithin(repositoryPath, sidecarPath) || isWithin(sidecarPath, repositoryPath)) {
       throw unsafePathError(sidecarPath);
     }
   }
@@ -70,12 +108,19 @@ export class FilesystemWorkspaceManager implements WorkspaceManager {
   async createSidecar(plan: WorkspacePlan): Promise<void> {
     this.assertSafePath(plan);
 
-    const rootReal = await realpath(plan.root).catch(() => resolve(plan.root));
-    const missionReal = await realpath(plan.missionDirectory).catch(() => undefined);
-    if (missionReal !== undefined && !isWithin(rootReal, missionReal)) {
-      throw unsafePathError(plan.missionDirectory);
+    const rootReal = await realpath(plan.root).catch(() => undefined);
+    if (rootReal !== undefined) {
+      await assertNoSymlinkComponents(rootReal, resolve(plan.missionDirectory));
     }
 
     await mkdir(join(plan.sidecarPath, "handoffs"), { recursive: true });
+
+    // Verify real paths after creation stay within the workspace root.
+    const verifiedRoot = await realpath(plan.root);
+    const sidecarReal = await realpath(plan.sidecarPath);
+    if (!isWithin(verifiedRoot, sidecarReal)) {
+      throw unsafePathError(plan.sidecarPath);
+    }
+    await assertNoSymlinkComponents(verifiedRoot, resolve(plan.sidecarPath));
   }
 }

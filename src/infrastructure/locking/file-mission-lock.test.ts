@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -117,5 +117,34 @@ describe("FileMissionLock", () => {
     await lock.withMissionLock(lockPath(), missionId, "complete", async () => {
       await expectCode(lock.breakStaleLock(lockPath()), "DM_MISSION_LOCKED");
     });
+  });
+
+  it("converges when two stale-lock breakers race a new owner", async () => {
+    await writeLock(staleLockContent(99999999));
+    const lock = new FileMissionLock();
+    const results = await Promise.allSettled([
+      lock.breakStaleLock(lockPath()),
+      lock.breakStaleLock(lockPath()),
+    ]);
+    expect(results.some((r) => r.status === "fulfilled")).toBe(true);
+
+    let ran = false;
+    await lock.withMissionLock(lockPath(), missionId, "new", async () => {
+      ran = true;
+      await expectCode(lock.breakStaleLock(lockPath()), "DM_MISSION_LOCKED");
+    });
+    expect(ran).toBe(true);
+    await expect(stat(lockPath())).rejects.toThrow();
+  });
+
+  it("restores a replacement lock instead of deleting it on release", async () => {
+    const lock = new FileMissionLock();
+    await lock.withMissionLock(lockPath(), missionId, "complete", async () => {
+      // A different process replaces the lock file while we hold it.
+      await writeLock(staleLockContent(99999998));
+    });
+    const raw = await readFile(lockPath(), "utf8");
+    expect((JSON.parse(raw) as { token: string }).token).toBe("stale-token");
+    await lock.breakStaleLock(lockPath());
   });
 });
