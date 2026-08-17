@@ -1,8 +1,8 @@
 # Kestrel v0.1 Implementation Progress
 
-Current milestone: 14
-Current task: 14.3
-Last green commit: faf984e
+Current milestone: 15
+Current task: 15.1
+Last green commit: ee73e63
 Last verification: npm run check && npm run build (green)
 
 ## Decisions
