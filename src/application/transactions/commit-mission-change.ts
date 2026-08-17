@@ -4,15 +4,18 @@ import type { Mission } from "../../domain/mission/mission.js";
 import type { MissionId, TransactionId } from "../../domain/shared/identifiers.js";
 import { createKestrelError, isKestrelError } from "../errors/kestrel-error.js";
 import type { JourneyStore } from "../../ports/journey-store.js";
+import type { MissionIndexStore } from "../../ports/mission-index-store.js";
 import type { MissionLock } from "../../ports/mission-lock.js";
 import type { MissionStore } from "../../ports/mission-store.js";
 import type { TransactionJournal } from "../../ports/transaction-journal.js";
+import { missionIndexEntry, upsertMissionIndex } from "../mission/mission-index-maintenance.js";
 
 export interface CommitMissionDeps {
   readonly lock: MissionLock;
   readonly journal: TransactionJournal;
   readonly missionStore: MissionStore;
   readonly journeyStore: JourneyStore;
+  readonly indexStore: MissionIndexStore;
 }
 
 export interface MissionChange {
@@ -50,6 +53,10 @@ export async function commitMissionChangeUnderLock(
       change.targetMission,
       change.expectedStateVersion,
     );
+    await upsertMissionIndex(
+      deps.indexStore,
+      missionIndexEntry(change.targetMission, change.sidecarPath, change.event.occurredAt),
+    );
     await deps.journal.advancePhase(change.transactionId, "STATE_WRITTEN");
     await deps.journeyStore.append(change.event);
     await deps.journal.advancePhase(change.transactionId, "EVENT_APPENDED");
@@ -74,7 +81,7 @@ export async function commitMissionChangeUnderLock(
 
 /**
  * Persist a Mission state change and its Journey event as one recoverable unit:
- * lock → intent → state → event → complete.
+ * lock → intent → state → index → event → complete.
  */
 export async function commitMissionChange(
   deps: CommitMissionDeps,

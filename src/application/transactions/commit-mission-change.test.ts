@@ -28,6 +28,7 @@ import { createKestrelError } from "../errors/kestrel-error.js";
 import { recordAllPreparationCheckpoints } from "../../test-utils/prepare.js";
 import { commitMissionChange, type MissionChange } from "./commit-mission-change.js";
 import { recoverTransactions } from "./recover-transactions.js";
+import { FakeIndexStore } from "../../test-utils/fake-index-store.js";
 
 const acceptedAt = "2026-08-15T10:00:00Z" as IsoDateTime;
 const sidecarPath = "/tmp/mission/kestrel";
@@ -239,6 +240,7 @@ function deps() {
     journal: new FakeJournal(),
     missionStore: new FakeMissionStore(),
     journeyStore: new FakeJourneyStore(),
+    indexStore: new FakeIndexStore(),
   };
 }
 

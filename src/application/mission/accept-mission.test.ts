@@ -20,6 +20,7 @@ import type {
   TransactionPhase,
 } from "../../ports/transaction-journal.js";
 import { acceptMission } from "./accept-mission.js";
+import { FakeIndexStore } from "../../test-utils/fake-index-store.js";
 
 const now = "2026-08-15T10:00:00Z" as IsoDateTime;
 
@@ -153,6 +154,7 @@ function deps() {
     journal: new FakeJournal(),
     missionStore: new FakeMissionStore(),
     journeyStore: new FakeJourneyStore(),
+    indexStore: new FakeIndexStore(),
     workspaceManager,
     idGenerator,
     clock: { now: () => now },

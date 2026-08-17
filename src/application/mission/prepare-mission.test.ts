@@ -34,6 +34,7 @@ import {
   restartMissionPreparation,
   resumeMissionPreparation,
 } from "./prepare-mission.js";
+import { FakeIndexStore } from "../../test-utils/fake-index-store.js";
 
 const now = "2026-08-15T10:00:00Z" as IsoDateTime;
 const repository: RepositoryIdentity = {
@@ -189,6 +190,7 @@ async function makeHarness() {
   const journal = new FileTransactionJournal(join(dir, "transactions"));
   const lock = new FileMissionLock();
   const workspaceManager = new FilesystemWorkspaceManager();
+  const indexStore = new FakeIndexStore();
 
   async function seed(missionId: MissionId) {
     const accepted = Mission.accept({
@@ -213,6 +215,7 @@ async function makeHarness() {
       journal,
       missionStore: overrides.missionStore ?? missionStore,
       journeyStore,
+      indexStore,
       workspaceManager,
       idGenerator,
       clock: { now: () => now },

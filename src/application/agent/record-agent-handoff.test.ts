@@ -20,6 +20,7 @@ import type { MissionStore, StoredMission } from "../../ports/mission-store.js";
 import type { TransactionJournal } from "../../ports/transaction-journal.js";
 import { genericPromptRenderer } from "./generic-prompt-renderer.js";
 import { recordAgentHandoff } from "./record-agent-handoff.js";
+import { FakeIndexStore } from "../../test-utils/fake-index-store.js";
 
 const now = "2026-08-15T10:00:00Z" as IsoDateTime;
 
@@ -128,6 +129,7 @@ function deps(saved: AgentHandoff[]) {
     journal: new FakeJournal(),
     missionStore: new FakeMissionStore(),
     journeyStore: new FakeJourneyStore(),
+    indexStore: new FakeIndexStore(),
     idGenerator,
     clock: { now: () => now },
     renderer: genericPromptRenderer,

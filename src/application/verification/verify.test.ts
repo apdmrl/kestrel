@@ -32,6 +32,7 @@ import { recordAllPreparationCheckpoints } from "../../test-utils/prepare.js";
 import { createKestrelError } from "../errors/kestrel-error.js";
 import { verifySubmission } from "./verify-submission.js";
 import { verifyIssueLink } from "./verify-issue-link.js";
+import { FakeIndexStore } from "../../test-utils/fake-index-store.js";
 
 const now = "2026-08-15T10:00:00Z" as IsoDateTime;
 
@@ -192,6 +193,7 @@ function deps(gateway: FakeGateway, journeyStore: JourneyStore = new FakeJourney
     journal: new FakeJournal(),
     missionStore: new FakeMissionStore(),
     journeyStore,
+    indexStore: new FakeIndexStore(),
     gateway,
     idGenerator,
     clock: { now: () => now },

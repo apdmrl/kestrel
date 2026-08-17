@@ -1,19 +1,22 @@
 import { join } from "node:path";
 import type { JourneyStore } from "../../ports/journey-store.js";
+import type { MissionIndexStore } from "../../ports/mission-index-store.js";
 import type { MissionLock } from "../../ports/mission-lock.js";
 import type { MissionStore } from "../../ports/mission-store.js";
 import type { TransactionJournal } from "../../ports/transaction-journal.js";
+import { missionIndexEntry, upsertMissionIndex } from "../mission/mission-index-maintenance.js";
 
 export interface RecoverDeps {
   readonly lock: MissionLock;
   readonly journal: TransactionJournal;
   readonly missionStore: MissionStore;
   readonly journeyStore: JourneyStore;
+  readonly indexStore: MissionIndexStore;
 }
 
 /**
  * Idempotently finish pending Mission/Journey transactions. Each intent is
- * replayed so that exactly one final state and one event exist.
+ * replayed so that exactly one final state, one index entry, and one event exist.
  */
 export async function recoverTransactions(deps: RecoverDeps): Promise<void> {
   const intents = await deps.journal.listPending();
@@ -29,6 +32,10 @@ export async function recoverTransactions(deps: RecoverDeps): Promise<void> {
           intent.expectedStateVersion,
         );
       }
+      await upsertMissionIndex(
+        deps.indexStore,
+        missionIndexEntry(intent.targetMission, intent.sidecarPath, intent.event.occurredAt),
+      );
       if (!(await deps.journeyStore.contains(intent.eventId))) {
         await deps.journeyStore.append(intent.event);
       }

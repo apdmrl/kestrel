@@ -22,6 +22,7 @@ import { recordAllPreparationCheckpoints } from "../../test-utils/prepare.js";
 import { createReflection } from "../../domain/reflection/reflection.js";
 import { addReflection } from "./add-reflection.js";
 import { abandonMission } from "./abandon-mission.js";
+import { FakeIndexStore } from "../../test-utils/fake-index-store.js";
 
 const now = "2026-08-15T10:00:00Z" as IsoDateTime;
 
@@ -139,6 +140,7 @@ function deps() {
     journal: new FakeJournal(),
     missionStore: new FakeMissionStore(),
     journeyStore: new FakeJourneyStore(),
+    indexStore: new FakeIndexStore(),
     idGenerator,
     clock: { now: () => now },
   };

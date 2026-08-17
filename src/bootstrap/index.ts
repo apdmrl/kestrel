@@ -140,7 +140,7 @@ export async function bootstrap(config: KestrelConfig): Promise<CommandHandlers>
     createOAuthDeviceAuth,
   );
 
-  await recoverTransactions({ lock, journal, missionStore, journeyStore });
+  await recoverTransactions({ lock, journal, missionStore, journeyStore, indexStore });
 
   const loadPreferences = async (): Promise<{
     explicit: ExplicitPreferences;
@@ -255,7 +255,16 @@ export async function bootstrap(config: KestrelConfig): Promise<CommandHandlers>
       const preferences = await loadPreferences();
       const workspaceRoot = preferences.explicit.workspaceRoot ?? config.workspaceRoot;
       const mission = await acceptMission(
-        { lock, journal, missionStore, journeyStore, workspaceManager, idGenerator, clock },
+        {
+          lock,
+          journal,
+          missionStore,
+          journeyStore,
+          indexStore,
+          workspaceManager,
+          idGenerator,
+          clock,
+        },
         {
           recommendation: recommendationResult.recommendation,
           mode: preferences.explicit.defaultMode,
@@ -272,6 +281,7 @@ export async function bootstrap(config: KestrelConfig): Promise<CommandHandlers>
           journal,
           missionStore,
           journeyStore,
+          indexStore,
           workspaceManager,
           idGenerator,
           clock,
@@ -289,6 +299,7 @@ export async function bootstrap(config: KestrelConfig): Promise<CommandHandlers>
           journal,
           missionStore,
           journeyStore,
+          indexStore,
           workspaceManager,
           idGenerator,
           clock,
@@ -317,6 +328,7 @@ export async function bootstrap(config: KestrelConfig): Promise<CommandHandlers>
           journal,
           missionStore,
           journeyStore,
+          indexStore,
           git: gitFactory(repositoryPath),
           idGenerator,
           clock,
@@ -336,7 +348,7 @@ export async function bootstrap(config: KestrelConfig): Promise<CommandHandlers>
       }
       const resolved = await resolveMission(missionId);
       const abandoned = await abandonMission(
-        { lock, journal, missionStore, journeyStore, idGenerator, clock },
+        { lock, journal, missionStore, journeyStore, indexStore, idGenerator, clock },
         {
           mission: resolved.mission,
           sidecarPath: resolved.sidecarPath,
@@ -355,6 +367,7 @@ export async function bootstrap(config: KestrelConfig): Promise<CommandHandlers>
           journal,
           missionStore,
           journeyStore,
+          indexStore,
           idGenerator,
           clock,
           renderer: genericPromptRenderer,
@@ -386,6 +399,7 @@ export async function bootstrap(config: KestrelConfig): Promise<CommandHandlers>
           journal,
           missionStore,
           journeyStore,
+          indexStore,
           gateway,
           idGenerator,
           clock,
@@ -415,7 +429,7 @@ export async function bootstrap(config: KestrelConfig): Promise<CommandHandlers>
       const resolved = await resolveMission(missionId);
       const token = await requireGithubToken();
       const result = await verifyIssueLink(
-        { lock, journal, missionStore, journeyStore, gateway, idGenerator, clock },
+        { lock, journal, missionStore, journeyStore, indexStore, gateway, idGenerator, clock },
         {
           mission: resolved.mission,
           sidecarPath: resolved.sidecarPath,
@@ -435,7 +449,7 @@ export async function bootstrap(config: KestrelConfig): Promise<CommandHandlers>
       const resolved = await resolveMission(missionId);
       const token = await requireGithubToken();
       const result = await verifyMerge(
-        { lock, journal, missionStore, journeyStore, gateway, idGenerator, clock },
+        { lock, journal, missionStore, journeyStore, indexStore, gateway, idGenerator, clock },
         {
           mission: resolved.mission,
           sidecarPath: resolved.sidecarPath,

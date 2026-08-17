@@ -7,6 +7,7 @@ import type { Clock } from "../../ports/clock.js";
 import type { GitClient } from "../../ports/git-client.js";
 import type { IdGenerator } from "../../ports/id-generator.js";
 import type { JourneyStore } from "../../ports/journey-store.js";
+import type { MissionIndexStore } from "../../ports/mission-index-store.js";
 import type { MissionLock } from "../../ports/mission-lock.js";
 import type { MissionStore } from "../../ports/mission-store.js";
 import type { TransactionJournal } from "../../ports/transaction-journal.js";
@@ -19,6 +20,7 @@ export interface CompleteMissionDeps {
   readonly journal: TransactionJournal;
   readonly missionStore: MissionStore;
   readonly journeyStore: JourneyStore;
+  readonly indexStore: MissionIndexStore;
   readonly git: GitClient;
   readonly idGenerator: IdGenerator;
   readonly clock: Clock;
@@ -123,6 +125,7 @@ export async function completeMission(
       journal: deps.journal,
       missionStore: deps.missionStore,
       journeyStore: deps.journeyStore,
+      indexStore: deps.indexStore,
     },
     {
       transactionId: deps.idGenerator.newTransactionId(),
