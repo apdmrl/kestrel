@@ -9,6 +9,17 @@ import type { Challenge } from "../challenge/challenge.js";
 import type { EvidenceDecision } from "../policy/evidence-decision.js";
 import { Mission } from "./mission.js";
 import type { WorkspaceInfo } from "./mission.js";
+import {
+  createIssueLinkEvidence,
+  createMergeEvidence,
+  createPullRequestEvidence,
+  type EvidenceId,
+} from "../evidence/evidence.js";
+import type {
+  IssueLinkEvidence,
+  MergeEvidence,
+  PullRequestEvidence,
+} from "../evidence/evidence.js";
 
 const acceptedAt = "2026-08-15T10:00:00Z" as IsoDateTime;
 const accepted: EvidenceDecision = { accepted: true, blockingReasons: [], warnings: [] };
@@ -201,5 +212,140 @@ describe("Mission lifecycle", () => {
       owner: "o",
       name: "n",
     });
+  });
+});
+
+function prEvidence(number: number): PullRequestEvidence {
+  const result = createPullRequestEvidence({
+    id: `pr-${number}` as EvidenceId,
+    missionId: "m1" as MissionId,
+    observedAt: acceptedAt,
+    number,
+    url: `https://github.com/o/n/pull/${number}`,
+    repository: { provider: "github", owner: "o", name: "n" },
+    author: "dev",
+    commits: ["abc"],
+    state: "OPEN",
+  });
+  if (!result.ok) {
+    throw new Error("expected ok");
+  }
+  return result.value;
+}
+
+function issueLinkEvidence(): IssueLinkEvidence {
+  const result = createIssueLinkEvidence({
+    id: "link-1" as EvidenceId,
+    missionId: "m1" as MissionId,
+    observedAt: acceptedAt,
+    issueNumber: 1,
+    repository: { provider: "github", owner: "o", name: "n" },
+    relationship: "CLOSING_KEYWORD",
+  });
+  if (!result.ok) {
+    throw new Error("expected ok");
+  }
+  return result.value;
+}
+
+function mergeEvidence(number: number): MergeEvidence {
+  const result = createMergeEvidence({
+    id: `merge-${number}` as EvidenceId,
+    missionId: "m1" as MissionId,
+    observedAt: acceptedAt,
+    pullRequestNumber: number,
+    repository: { provider: "github", owner: "o", name: "n" },
+    mergeSha: "merge-sha",
+    mergedAt: acceptedAt,
+  });
+  if (!result.ok) {
+    throw new Error("expected ok");
+  }
+  return result.value;
+}
+
+describe("Mission submission verification", () => {
+  it("starts with NONE and requires verified PR evidence to become SUBMITTED", () => {
+    const mission = preparedMission();
+    expect(mission.submissionVerification).toBe("NONE");
+
+    const submitted = mission.recordSubmitted(prEvidence(99));
+    expect(submitted.ok).toBe(true);
+    if (submitted.ok) {
+      expect(submitted.value.submissionVerification).toBe("SUBMITTED");
+    }
+  });
+
+  it("requires merge evidence but not issue-link evidence to reach MERGED", () => {
+    const submitted = preparedMission().recordSubmitted(prEvidence(99));
+    if (!submitted.ok) {
+      throw new Error("expected ok");
+    }
+    const merged = submitted.value.recordMerged(mergeEvidence(99));
+    expect(merged.ok).toBe(true);
+    if (merged.ok) {
+      expect(merged.value.submissionVerification).toBe("MERGED");
+      expect(merged.value.issueLink).toBeUndefined();
+    }
+  });
+
+  it("rejects a manual merge before a submitted PR", () => {
+    const result = preparedMission().recordMerged(mergeEvidence(99));
+    expect(result.ok).toBe(false);
+  });
+
+  it("allows issue linkage before merge", () => {
+    const submitted = preparedMission().recordSubmitted(prEvidence(99));
+    if (!submitted.ok) {
+      throw new Error("expected ok");
+    }
+    const linked = submitted.value.recordIssueLink(issueLinkEvidence());
+    expect(linked.ok).toBe(true);
+    if (linked.ok) {
+      expect(linked.value.issueLink).toBeDefined();
+      const merged = linked.value.recordMerged(mergeEvidence(99));
+      expect(merged.ok).toBe(true);
+      if (merged.ok) {
+        expect(merged.value.submissionVerification).toBe("MERGED");
+      }
+    }
+  });
+
+  it("allows issue linkage after merge", () => {
+    const submitted = preparedMission().recordSubmitted(prEvidence(99));
+    if (!submitted.ok) {
+      throw new Error("expected ok");
+    }
+    const merged = submitted.value.recordMerged(mergeEvidence(99));
+    if (!merged.ok) {
+      throw new Error("expected ok");
+    }
+    const linked = merged.value.recordIssueLink(issueLinkEvidence());
+    expect(linked.ok).toBe(true);
+    if (linked.ok) {
+      expect(linked.value.submissionVerification).toBe("MERGED");
+      expect(linked.value.issueLink).toBeDefined();
+    }
+  });
+
+  it("replays identical verification idempotently and rejects conflicting evidence", () => {
+    const submitted = preparedMission().recordSubmitted(prEvidence(99));
+    if (!submitted.ok) {
+      throw new Error("expected ok");
+    }
+    const replay = submitted.value.recordSubmitted(prEvidence(99));
+    expect(replay.ok).toBe(true);
+    if (replay.ok) {
+      expect(replay.value.submissionVerification).toBe("SUBMITTED");
+    }
+
+    const conflicting = submitted.value.recordSubmitted(prEvidence(100));
+    expect(conflicting.ok).toBe(false);
+  });
+
+  it("exposes no manual merge setter", () => {
+    const mission = preparedMission();
+    expect((mission as unknown as Record<string, unknown>).markMerged).toBeUndefined();
+    expect((mission as unknown as Record<string, unknown>).setVerification).toBeUndefined();
   });
 });

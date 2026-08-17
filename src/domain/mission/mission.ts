@@ -2,6 +2,11 @@ import type { Challenge } from "../challenge/challenge.js";
 import { snapshotChallenge } from "../challenge/challenge.js";
 import { createEvidenceCollection } from "../evidence/evidence-collection.js";
 import type { EvidenceCollection } from "../evidence/evidence-collection.js";
+import type {
+  IssueLinkEvidence,
+  MergeEvidence,
+  PullRequestEvidence,
+} from "../evidence/evidence.js";
 import type { EvidenceDecision } from "../policy/evidence-decision.js";
 import type { DeveloperMode } from "../preferences/preferences.js";
 import type { RecommendationSnapshot } from "../recommendation/recommendation.js";
@@ -10,7 +15,9 @@ import type { MissionId } from "../shared/identifiers.js";
 import type { DomainResult } from "../shared/result.js";
 import { err, ok } from "../shared/result.js";
 import type { IsoDateTime } from "../shared/time.js";
+import type { RepositoryIdentity } from "../challenge/repository-identity.js";
 import type { MissionStatus } from "./mission-status.js";
+import type { SubmissionVerification } from "./submission-verification.js";
 
 export interface AcceptanceContext {
   readonly mode: DeveloperMode;
@@ -35,6 +42,10 @@ interface MissionState {
   readonly immutableBaseCommit: string | undefined;
   readonly branch: string | undefined;
   readonly evidence: EvidenceCollection;
+  readonly submissionVerification: SubmissionVerification;
+  readonly submittedPullRequest: PullRequestEvidence | undefined;
+  readonly mergeEvidence: MergeEvidence | undefined;
+  readonly issueLink: IssueLinkEvidence | undefined;
 }
 
 export interface AcceptMissionInput {
@@ -52,9 +63,25 @@ export interface CompletePreparationInput {
   readonly branch: string;
 }
 
+function sameRepository(a: RepositoryIdentity, b: RepositoryIdentity): boolean {
+  return a.owner === b.owner && a.name === b.name && a.provider === b.provider;
+}
+
+function copyPullRequest(pr: PullRequestEvidence): PullRequestEvidence {
+  return { ...pr, repository: { ...pr.repository }, commits: [...pr.commits] };
+}
+
+function copyIssueLink(link: IssueLinkEvidence): IssueLinkEvidence {
+  return { ...link, repository: { ...link.repository } };
+}
+
+function copyMerge(merge: MergeEvidence): MergeEvidence {
+  return { ...merge, repository: { ...merge.repository } };
+}
+
 /**
- * The Mission aggregate root. Lifecycle state changes only through these methods;
- * there is no public constructor and no mutable status setter.
+ * The Mission aggregate root. Lifecycle and verification state change only through
+ * these methods; there is no public constructor and no mutable status setter.
  */
 export class Mission {
   private constructor(private readonly state: MissionState) {}
@@ -81,6 +108,10 @@ export class Mission {
         immutableBaseCommit: undefined,
         branch: undefined,
         evidence: createEvidenceCollection(),
+        submissionVerification: "NONE",
+        submittedPullRequest: undefined,
+        mergeEvidence: undefined,
+        issueLink: undefined,
       }),
     );
   }
@@ -137,6 +168,75 @@ export class Mission {
     return ok(new Mission({ ...this.state, status: "ABANDONED" }));
   }
 
+  recordSubmitted(pr: PullRequestEvidence): DomainResult<Mission> {
+    if (this.state.status === "ABANDONED") {
+      return err("DM_ILLEGAL_TRANSITION", "cannot record submission on an abandoned mission");
+    }
+    if (this.state.submissionVerification !== "NONE") {
+      const known = this.state.submittedPullRequest;
+      if (
+        known !== undefined &&
+        sameRepository(known.repository, pr.repository) &&
+        known.number === pr.number
+      ) {
+        return ok(this);
+      }
+      return err("DM_VERIFICATION_CONFLICT", "mission already has different submitted PR evidence");
+    }
+    return ok(
+      new Mission({
+        ...this.state,
+        submissionVerification: "SUBMITTED",
+        submittedPullRequest: copyPullRequest(pr),
+      }),
+    );
+  }
+
+  recordIssueLink(link: IssueLinkEvidence): DomainResult<Mission> {
+    if (this.state.status === "ABANDONED") {
+      return err("DM_ILLEGAL_TRANSITION", "cannot record issue link on an abandoned mission");
+    }
+    const known = this.state.issueLink;
+    if (known !== undefined) {
+      if (
+        sameRepository(known.repository, link.repository) &&
+        known.issueNumber === link.issueNumber &&
+        known.relationship === link.relationship
+      ) {
+        return ok(this);
+      }
+      return err("DM_VERIFICATION_CONFLICT", "mission already has different issue-link evidence");
+    }
+    return ok(new Mission({ ...this.state, issueLink: copyIssueLink(link) }));
+  }
+
+  recordMerged(merge: MergeEvidence): DomainResult<Mission> {
+    if (this.state.status === "ABANDONED") {
+      return err("DM_ILLEGAL_TRANSITION", "cannot record merge on an abandoned mission");
+    }
+    if (this.state.submissionVerification === "MERGED") {
+      const known = this.state.mergeEvidence;
+      if (
+        known !== undefined &&
+        known.pullRequestNumber === merge.pullRequestNumber &&
+        known.mergeSha === merge.mergeSha
+      ) {
+        return ok(this);
+      }
+      return err("DM_VERIFICATION_CONFLICT", "mission already has different merge evidence");
+    }
+    if (this.state.submissionVerification !== "SUBMITTED") {
+      return err("DM_ILLEGAL_TRANSITION", "cannot record a merge before a submitted PR");
+    }
+    return ok(
+      new Mission({
+        ...this.state,
+        submissionVerification: "MERGED",
+        mergeEvidence: copyMerge(merge),
+      }),
+    );
+  }
+
   get id(): MissionId {
     return this.state.id;
   }
@@ -171,5 +271,21 @@ export class Mission {
 
   get evidence(): EvidenceCollection {
     return this.state.evidence;
+  }
+
+  get submissionVerification(): SubmissionVerification {
+    return this.state.submissionVerification;
+  }
+
+  get submittedPullRequest(): PullRequestEvidence | undefined {
+    return this.state.submittedPullRequest;
+  }
+
+  get mergeEvidence(): MergeEvidence | undefined {
+    return this.state.mergeEvidence;
+  }
+
+  get issueLink(): IssueLinkEvidence | undefined {
+    return this.state.issueLink;
   }
 }
