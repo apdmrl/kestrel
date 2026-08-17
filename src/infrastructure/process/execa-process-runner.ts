@@ -8,12 +8,6 @@ import type {
 
 const MAX_OUTPUT_LENGTH = 64 * 1024;
 
-const SECRET_PATTERN = /\b(token|password|secret|authorization)\b\s*[:=]\s*[^\s]+/gi;
-
-function redactText(text: string): string {
-  return text.replace(SECRET_PATTERN, "$1=***");
-}
-
 function bound(text: string): string {
   if (text.length <= MAX_OUTPUT_LENGTH) {
     return text;
@@ -107,8 +101,8 @@ export class ExecaProcessRunner implements ProcessRunner {
     }
     return {
       exitCode: result.exitCode ?? 0,
-      stdout: redactText(bound(result.stdout)),
-      stderr: redactText(bound(result.stderr)),
+      stdout: bound(result.stdout),
+      stderr: bound(result.stderr),
     };
   }
 }

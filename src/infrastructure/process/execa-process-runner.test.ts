@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createKestrelError } from "../../application/errors/kestrel-error.js";
+import { createKestrelError, redactText } from "../../application/errors/kestrel-error.js";
 import { ExecaProcessRunner } from "./execa-process-runner.js";
 import { mapGitExitCode, mapGitProcessError } from "../git/git-error-mapper.js";
 
@@ -36,13 +36,16 @@ describe("ExecaProcessRunner", () => {
     await expect(pending).rejects.toMatchObject({ code: "DM_PROCESS_CANCELLED" });
   });
 
-  it("redacts secret-like values in captured stderr", async () => {
+  it("preserves raw machine output so credential adapters can parse it", async () => {
     const result = await runner.run({
       executable: "node",
-      args: ["-e", "console.error('token=abc123 password=hunter2')"],
+      args: ["-e", "console.log('username=octocat'); console.log('password=secret-token')"],
     });
-    expect(result.stderr).not.toContain("abc123");
-    expect(result.stderr).not.toContain("hunter2");
+    expect(result.stdout).toContain("password=secret-token");
+  });
+
+  it("redacts secret-shaped patterns at the error boundary", () => {
+    expect(redactText("password=abc123 token=def456")).toBe("password=*** token=***");
   });
 
   it("classifies a missing executable", async () => {

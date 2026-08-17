@@ -8,9 +8,22 @@ import type {
 import { isRecoverableCategory } from "./error-codes.js";
 
 const SECRET_KEY = /token|authorization|password|secret/i;
+const SECRET_VALUE = /\b(token|password|secret|authorization)\b\s*[:=]\s*[^\s]+/gi;
 
-/** Recursively replace values at secret-shaped keys with a redaction marker. */
+/** Redact "secret=value" and "secret: value" patterns inside a text string. */
+export function redactText(text: string): string {
+  return text.replace(SECRET_VALUE, "$1=***");
+}
+
+/**
+ * Recursively redact secrets: values at secret-shaped keys are replaced with a
+ * marker, and secret-shaped patterns inside string values are scrubbed. This is
+ * the single redaction boundary for diagnostics and error contexts.
+ */
 export function redactSecrets(value: unknown): unknown {
+  if (typeof value === "string") {
+    return redactText(value);
+  }
   if (Array.isArray(value)) {
     return value.map((item) => redactSecrets(item));
   }

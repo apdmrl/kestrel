@@ -152,7 +152,9 @@ export async function bootstrap(config: KestrelConfig): Promise<CommandHandlers>
   };
 
   const requireGithubToken = async (): Promise<string> => {
-    const cached = await credentialStore.get("github", "github").catch(() => undefined);
+    // GitCredentialStore raises USER_ACTION_REQUIRED when no credential helper is
+    // configured; propagate that instead of falling through to device flow.
+    const cached = await credentialStore.get("github", "github");
     if (cached !== undefined) {
       return cached.token;
     }
