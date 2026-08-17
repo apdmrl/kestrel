@@ -62,7 +62,8 @@ export async function completeMission(
   const decision = policy.evaluateEvidence({
     commitCount: evidence.commits.length,
     filesChanged: evidence.filesChanged,
-    hasTrackedChanges: evidence.workingTreeState === "DIRTY",
+    // Untracked-only changes never count as tracked engineering evidence.
+    hasTrackedChanges: evidence.commits.length > 0 || evidence.filesChanged.length > 0,
   });
   if (!decision.accepted) {
     throw evidenceBlockedError(decision.blockingReasons);

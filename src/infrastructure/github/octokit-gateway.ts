@@ -183,7 +183,11 @@ export class OctokitGateway implements GitHubGateway {
       if (match === null) {
         return undefined;
       }
-      return { issueNumber: Number(match[1]), relationship: "CLOSING_KEYWORD" };
+      return {
+        issueNumber: Number(match[1]),
+        repository,
+        relationship: "CLOSING_KEYWORD",
+      };
     } catch (error) {
       throw mapGitHubError(error);
     }

@@ -30,6 +30,7 @@ export interface PullRequestInfo {
 
 export interface IssueLinkResult {
   readonly issueNumber: number;
+  readonly repository: RepositoryIdentity;
   readonly relationship: "CLOSING_KEYWORD" | "CROSS_REFERENCE" | "PROVIDER_VERIFIED";
 }
 

@@ -40,6 +40,10 @@ function missionRepository(mission: Mission): RepositoryIdentity {
   return mission.challengeSnapshot.repository;
 }
 
+function sameRepository(a: RepositoryIdentity, b: RepositoryIdentity): boolean {
+  return a.provider === b.provider && a.owner === b.owner && a.name === b.name;
+}
+
 /** Verify an optional issue relationship for a submitted pull request. */
 export async function verifyIssueLink(
   deps: VerifyIssueLinkDeps,
@@ -51,6 +55,13 @@ export async function verifyIssueLink(
     input.token,
   );
   if (link === undefined) {
+    return { kind: "not-linked" };
+  }
+  // Never record linkage to an unrelated issue or repository.
+  if (link.issueNumber !== input.mission.challengeSnapshot.source.issueNumber) {
+    return { kind: "not-linked" };
+  }
+  if (!sameRepository(link.repository, missionRepository(input.mission))) {
     return { kind: "not-linked" };
   }
 

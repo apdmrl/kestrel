@@ -102,7 +102,11 @@ class FakeGateway implements GitHubGateway {
     commits: ["abc"],
     state: "OPEN",
   };
-  link: IssueLinkResult | undefined = { issueNumber: 42, relationship: "CLOSING_KEYWORD" };
+  link: IssueLinkResult | undefined = {
+    issueNumber: 42,
+    repository: { provider: "github", owner: "octocat", name: "hello-world" },
+    relationship: "CLOSING_KEYWORD",
+  };
   rateLimited = false;
 
   async beginDeviceFlow(): Promise<DeviceFlowAuthorization> {
@@ -334,5 +338,59 @@ describe("verifyIssueLink", () => {
       prNumber: 99,
     });
     expect(result.kind).toBe("not-linked");
+  });
+
+  it("rejects a link to an unrelated issue", async () => {
+    const gateway = new FakeGateway();
+    gateway.link = {
+      issueNumber: 999,
+      repository: { provider: "github", owner: "octocat", name: "hello-world" },
+      relationship: "CLOSING_KEYWORD",
+    };
+    const result = await verifyIssueLink(deps(gateway), {
+      mission: inProgressMission(),
+      sidecarPath: "/tmp/ws/m1/kestrel",
+      lockPath: "/tmp/ws/m1/kestrel/.lock",
+      expectedStateVersion: 0,
+      token: "token",
+      prNumber: 99,
+    });
+    expect(result.kind).toBe("not-linked");
+  });
+
+  it("rejects a link from a different repository", async () => {
+    const gateway = new FakeGateway();
+    gateway.link = {
+      issueNumber: 42,
+      repository: { provider: "github", owner: "other", name: "repo" },
+      relationship: "CLOSING_KEYWORD",
+    };
+    const result = await verifyIssueLink(deps(gateway), {
+      mission: inProgressMission(),
+      sidecarPath: "/tmp/ws/m1/kestrel",
+      lockPath: "/tmp/ws/m1/kestrel/.lock",
+      expectedStateVersion: 0,
+      token: "token",
+      prNumber: 99,
+    });
+    expect(result.kind).toBe("not-linked");
+  });
+
+  it("accepts provider-verified linkage to the mission issue", async () => {
+    const gateway = new FakeGateway();
+    gateway.link = {
+      issueNumber: 42,
+      repository: { provider: "github", owner: "octocat", name: "hello-world" },
+      relationship: "PROVIDER_VERIFIED",
+    };
+    const result = await verifyIssueLink(deps(gateway), {
+      mission: inProgressMission(),
+      sidecarPath: "/tmp/ws/m1/kestrel",
+      lockPath: "/tmp/ws/m1/kestrel/.lock",
+      expectedStateVersion: 0,
+      token: "token",
+      prNumber: 99,
+    });
+    expect(result.kind).toBe("linked");
   });
 });

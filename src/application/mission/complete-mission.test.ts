@@ -218,6 +218,45 @@ describe("completeMission", () => {
     ).rejects.toMatchObject({ code: "DM_EVIDENCE_BLOCKED" });
   });
 
+  it("rejects completion with untracked-only changes", async () => {
+    const git = new FakeGit();
+    git.changes = {
+      commits: [],
+      headSha: "head",
+      filesChanged: [],
+      insertions: 0,
+      deletions: 0,
+      workingTreeState: "DIRTY",
+    };
+    await expect(
+      completeMission(deps(git), {
+        mission: inProgressMission(),
+        sidecarPath: "/tmp/ws/m1/kestrel",
+        lockPath: "/tmp/ws/m1/kestrel/.lock",
+        expectedStateVersion: 0,
+      }),
+    ).rejects.toMatchObject({ code: "DM_EVIDENCE_BLOCKED" });
+  });
+
+  it("completes a mission with only tracked unstaged changes", async () => {
+    const git = new FakeGit();
+    git.changes = {
+      commits: [],
+      headSha: "head",
+      filesChanged: ["src/a.ts"],
+      insertions: 2,
+      deletions: 0,
+      workingTreeState: "DIRTY",
+    };
+    const mission = await completeMission(deps(git), {
+      mission: inProgressMission(),
+      sidecarPath: "/tmp/ws/m1/kestrel",
+      lockPath: "/tmp/ws/m1/kestrel/.lock",
+      expectedStateVersion: 0,
+    });
+    expect(mission.status).toBe("COMPLETED");
+  });
+
   it("completes a testing mission only with a test-file change", async () => {
     const git = new FakeGit();
     git.changes = {

@@ -97,6 +97,39 @@ describe("SystemGitClient", () => {
     expect(changes.workingTreeState).toBe("DIRTY");
   });
 
+  it("distinguishes tracked unstaged, staged-new, and untracked files", async () => {
+    const { working } = await setUpstreamWithFile("a.txt");
+    const client = new SystemGitClient(working, runner);
+    const baseSha = (await client.getHeadSha()).trim();
+
+    // tracked unstaged change
+    await writeFile(join(working, "a.txt"), "unstaged\n", "utf8");
+    // staged new file
+    await writeFile(join(working, "staged.txt"), "staged\n", "utf8");
+    await git(working, ["add", "staged.txt"]);
+    // untracked file
+    await writeFile(join(working, "untracked.txt"), "untracked\n", "utf8");
+
+    const changes = await client.collectChangesSince(baseSha);
+    expect(changes.filesChanged).toContain("a.txt");
+    expect(changes.filesChanged).toContain("staged.txt");
+    expect(changes.filesChanged).not.toContain("untracked.txt");
+    expect(changes.workingTreeState).toBe("DIRTY");
+  });
+
+  it("reports untracked-only changes as dirty with no tracked files", async () => {
+    const { working } = await setUpstreamWithFile("a.txt");
+    const client = new SystemGitClient(working, runner);
+    const baseSha = (await client.getHeadSha()).trim();
+
+    await writeFile(join(working, "untracked.txt"), "untracked\n", "utf8");
+
+    const changes = await client.collectChangesSince(baseSha);
+    expect(changes.commits).toHaveLength(0);
+    expect(changes.filesChanged).toEqual([]);
+    expect(changes.workingTreeState).toBe("DIRTY");
+  });
+
   it("reports a clean tree with no changes", async () => {
     const { working } = await setUpstreamWithFile("a.txt");
     const client = new SystemGitClient(working, runner);
