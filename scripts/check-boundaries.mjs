@@ -14,6 +14,9 @@ import { fileURLToPath } from "node:url";
 
 const LAYERS = ["domain", "application", "ports", "infrastructure", "cli", "bootstrap"];
 
+// The process entry point composes the application; it may import any layer.
+const ENTRY_POINT_FILES = new Set(["cli/main.ts"]);
+
 const ALLOWED_TARGETS = {
   domain: new Set(["domain"]),
   ports: new Set(["domain", "ports"]),
@@ -137,6 +140,9 @@ export function scan(root) {
   for (const file of listSourceFiles(absRoot)) {
     const layer = layerOf(file, absRoot);
     if (layer === null) {
+      continue;
+    }
+    if (ENTRY_POINT_FILES.has(relative(absRoot, file))) {
       continue;
     }
     const allowed = ALLOWED_TARGETS[layer];

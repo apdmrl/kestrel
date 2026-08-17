@@ -1,8 +1,9 @@
+import { bootstrap, createConfig } from "../bootstrap/index.js";
 import { createProgram } from "./create-program.js";
-import type { CommandHandlers } from "./command-handlers.js";
 
-// The composition root (bootstrap) supplies the concrete handlers.
-export async function main(handlers: CommandHandlers): Promise<void> {
+export async function main(): Promise<void> {
+  const config = createConfig(process.env as Record<string, string | undefined>);
+  const handlers = await bootstrap(config);
   const program = createProgram({ handlers });
   await program.parseAsync(process.argv);
 }
