@@ -19,6 +19,7 @@ import type { MissionStatus } from "../../domain/mission/mission-status.js";
 import { FileSystemMissionStore } from "./file-system-mission-store.js";
 import { FileSystemPreferencesStore } from "./file-system-preferences-store.js";
 import { FileSystemMissionIndexStore } from "./file-system-mission-index-store.js";
+import { recordAllPreparationCheckpoints } from "../../test-utils/prepare.js";
 
 const acceptedAt = "2026-08-15T10:00:00Z" as IsoDateTime;
 
@@ -81,7 +82,7 @@ function preparedMission(sidecarPath: string): Mission {
   });
   const preparing = accepted.ok ? accepted.value.startPreparation() : null;
   const inProgress = preparing?.ok
-    ? preparing.value.completePreparation({
+    ? recordAllPreparationCheckpoints(preparing.value).completePreparation({
         workspace,
         baseCommit: "base-sha",
         branch: "kestrel/1-fix-crash",

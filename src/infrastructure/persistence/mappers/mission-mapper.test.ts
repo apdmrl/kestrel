@@ -18,6 +18,7 @@ import {
   createMergeEvidence,
 } from "../../../domain/evidence/evidence.js";
 import { fromPersistedMission, toPersistedMission } from "./mission-mapper.js";
+import { recordAllPreparationCheckpoints } from "../../../test-utils/prepare.js";
 
 const acceptedAt = "2026-08-15T10:00:00Z" as IsoDateTime;
 
@@ -84,7 +85,7 @@ function buildMission(status: MissionStatus): Mission {
   if (status === "PREPARING") {
     return preparing.value;
   }
-  const inProgress = preparing.value.completePreparation({
+  const inProgress = recordAllPreparationCheckpoints(preparing.value).completePreparation({
     workspace,
     baseCommit: "base-sha",
     branch: "kestrel/1-fix-crash",

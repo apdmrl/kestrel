@@ -1,5 +1,6 @@
 import type { Challenge } from "../challenge/challenge.js";
 import { snapshotChallenge } from "../challenge/challenge.js";
+import type { RepositoryIdentity } from "../challenge/repository-identity.js";
 import { createEvidenceCollection } from "../evidence/evidence-collection.js";
 import type { EvidenceCollection } from "../evidence/evidence-collection.js";
 import type {
@@ -15,9 +16,13 @@ import type { MissionId } from "../shared/identifiers.js";
 import type { DomainResult } from "../shared/result.js";
 import { err, ok } from "../shared/result.js";
 import type { IsoDateTime } from "../shared/time.js";
-import type { RepositoryIdentity } from "../challenge/repository-identity.js";
 import type { MissionStatus } from "./mission-status.js";
 import type { SubmissionVerification } from "./submission-verification.js";
+import { PREPARATION_CHECKPOINTS } from "./preparation-checkpoint.js";
+import type {
+  PreparationCheckpoint,
+  PreparationCheckpointState,
+} from "./preparation-checkpoint.js";
 
 export interface AcceptanceContext {
   readonly mode: DeveloperMode;
@@ -46,6 +51,7 @@ interface MissionState {
   readonly submittedPullRequest: PullRequestEvidence | undefined;
   readonly mergeEvidence: MergeEvidence | undefined;
   readonly issueLink: IssueLinkEvidence | undefined;
+  readonly preparationCheckpoints: readonly PreparationCheckpointState[];
 }
 
 export interface AcceptMissionInput {
@@ -63,7 +69,6 @@ export interface CompletePreparationInput {
   readonly branch: string;
 }
 
-/** Full aggregate state, used only by validated rehydration (persistence mappers). */
 export interface MissionRehydrationState {
   readonly id: MissionId;
   readonly challengeSnapshot: Challenge;
@@ -78,6 +83,7 @@ export interface MissionRehydrationState {
   readonly submittedPullRequest: PullRequestEvidence | undefined;
   readonly mergeEvidence: MergeEvidence | undefined;
   readonly issueLink: IssueLinkEvidence | undefined;
+  readonly preparationCheckpoints: readonly PreparationCheckpointState[];
 }
 
 function sameRepository(a: RepositoryIdentity, b: RepositoryIdentity): boolean {
@@ -94,6 +100,26 @@ function copyIssueLink(link: IssueLinkEvidence): IssueLinkEvidence {
 
 function copyMerge(merge: MergeEvidence): MergeEvidence {
   return { ...merge, repository: { ...merge.repository } };
+}
+
+function deepEqualData(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) {
+    return true;
+  }
+  if (Array.isArray(a) && Array.isArray(b)) {
+    return a.length === b.length && a.every((item, index) => deepEqualData(item, b[index]));
+  }
+  if (a !== null && b !== null && typeof a === "object" && typeof b === "object") {
+    const aKeys = Object.keys(a as Record<string, unknown>);
+    const bKeys = Object.keys(b as Record<string, unknown>);
+    return (
+      aKeys.length === bKeys.length &&
+      aKeys.every((key) =>
+        deepEqualData((a as Record<string, unknown>)[key], (b as Record<string, unknown>)[key]),
+      )
+    );
+  }
+  return false;
 }
 
 /**
@@ -129,6 +155,7 @@ export class Mission {
         submittedPullRequest: undefined,
         mergeEvidence: undefined,
         issueLink: undefined,
+        preparationCheckpoints: [],
       }),
     );
   }
@@ -174,6 +201,11 @@ export class Mission {
     ) {
       return err("DM_INVALID_MISSION", "NONE verification must not have PR or merge evidence");
     }
+    for (let i = 0; i < state.preparationCheckpoints.length; i++) {
+      if (state.preparationCheckpoints[i]?.checkpoint !== PREPARATION_CHECKPOINTS[i]) {
+        return err("DM_INVALID_MISSION", "preparation checkpoints are out of order");
+      }
+    }
     return ok(
       new Mission({
         ...state,
@@ -185,14 +217,47 @@ export class Mission {
 
   startPreparation(): DomainResult<Mission> {
     if (this.state.status !== "ACCEPTED") {
-      return err("DM_ILLEGAL_TRANSITION", `cannot start preparation from ${this.state.status}`);
+      return err("DM_ILLEGAL_TRANSITION", "cannot start preparation from " + this.state.status);
     }
     return ok(new Mission({ ...this.state, status: "PREPARING" }));
   }
 
+  recordPreparationCheckpoint(
+    checkpoint: PreparationCheckpoint,
+    data: Readonly<Record<string, unknown>> = {},
+  ): DomainResult<Mission> {
+    if (this.state.status !== "PREPARING") {
+      return err(
+        "DM_ILLEGAL_TRANSITION",
+        "cannot record a preparation checkpoint outside PREPARING",
+      );
+    }
+    const recorded = this.state.preparationCheckpoints;
+    const existingIndex = recorded.findIndex((entry) => entry.checkpoint === checkpoint);
+    if (existingIndex !== -1) {
+      const existing = recorded[existingIndex];
+      if (existing !== undefined && deepEqualData(existing.data, data)) {
+        return ok(this);
+      }
+      return err(
+        "DM_CHECKPOINT_CONFLICT",
+        "checkpoint " + checkpoint + " already recorded with different data",
+      );
+    }
+    const targetIndex = PREPARATION_CHECKPOINTS.indexOf(checkpoint);
+    if (targetIndex !== recorded.length) {
+      return err("DM_ILLEGAL_TRANSITION", "cannot skip to checkpoint " + checkpoint);
+    }
+    const entry: PreparationCheckpointState = { checkpoint, data: { ...data } };
+    return ok(new Mission({ ...this.state, preparationCheckpoints: [...recorded, entry] }));
+  }
+
   completePreparation(input: CompletePreparationInput): DomainResult<Mission> {
     if (this.state.status !== "PREPARING") {
-      return err("DM_ILLEGAL_TRANSITION", `cannot complete preparation from ${this.state.status}`);
+      return err("DM_ILLEGAL_TRANSITION", "cannot complete preparation from " + this.state.status);
+    }
+    if (this.state.preparationCheckpoints.length !== PREPARATION_CHECKPOINTS.length) {
+      return err("DM_PREPARATION_INCOMPLETE", "all preparation checkpoints must be recorded");
     }
     if (input.baseCommit.trim().length === 0) {
       return err("DM_INVALID_MISSION", "baseCommit must not be empty");
@@ -213,7 +278,7 @@ export class Mission {
 
   complete(evidenceDecision: EvidenceDecision): DomainResult<Mission> {
     if (this.state.status !== "IN_PROGRESS") {
-      return err("DM_ILLEGAL_TRANSITION", `cannot complete from ${this.state.status}`);
+      return err("DM_ILLEGAL_TRANSITION", "cannot complete from " + this.state.status);
     }
     if (!evidenceDecision.accepted) {
       const reasons =
@@ -227,7 +292,7 @@ export class Mission {
 
   abandon(reason: string): DomainResult<Mission> {
     if (this.state.status === "COMPLETED" || this.state.status === "ABANDONED") {
-      return err("DM_ILLEGAL_TRANSITION", `cannot abandon from ${this.state.status}`);
+      return err("DM_ILLEGAL_TRANSITION", "cannot abandon from " + this.state.status);
     }
     if (reason.trim().length === 0) {
       return err("DM_INVALID_MISSION", "abandon reason must not be empty");
@@ -354,5 +419,9 @@ export class Mission {
 
   get issueLink(): IssueLinkEvidence | undefined {
     return this.state.issueLink;
+  }
+
+  get preparationCheckpoints(): readonly PreparationCheckpointState[] {
+    return this.state.preparationCheckpoints;
   }
 }

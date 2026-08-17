@@ -19,6 +19,7 @@ import type { WorkspaceInfo } from "../../domain/mission/mission.js";
 import { Mission } from "../../domain/mission/mission.js";
 import type { JourneyEvent } from "../../domain/journey/journey-event.js";
 import { FileTransactionJournal } from "./file-transaction-journal.js";
+import { recordAllPreparationCheckpoints } from "../../test-utils/prepare.js";
 
 const acceptedAt = "2026-08-15T10:00:00Z" as IsoDateTime;
 
@@ -81,7 +82,11 @@ function preparedMission(): Mission {
   });
   const preparing = accepted.ok ? accepted.value.startPreparation() : null;
   const inProgress = preparing?.ok
-    ? preparing.value.completePreparation({ workspace, baseCommit: "base", branch: "b" })
+    ? recordAllPreparationCheckpoints(preparing.value).completePreparation({
+        workspace,
+        baseCommit: "base",
+        branch: "b",
+      })
     : null;
   if (!inProgress?.ok) {
     throw new Error("expected ok");

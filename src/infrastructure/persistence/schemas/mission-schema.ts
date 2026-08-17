@@ -69,6 +69,19 @@ const evidenceCollectionSchema = z.object({
   items: z.array(evidenceSchema),
 });
 
+const preparationCheckpointStateSchema = z.object({
+  checkpoint: z.enum([
+    "WORKSPACE_CREATED",
+    "REPOSITORY_CLONED",
+    "BASE_RECORDED",
+    "BRANCH_CREATED",
+    "CONTEXT_COLLECTED",
+    "GUIDANCE_GENERATED",
+    "BRIEF_GENERATED",
+  ]),
+  data: z.record(z.string(), z.unknown()),
+});
+
 export const missionSchema = z.object({
   schemaVersion: z.literal(1),
   id: z.string().min(1),
@@ -84,6 +97,7 @@ export const missionSchema = z.object({
   submittedPullRequest: pullRequestEvidenceSchema.nullable(),
   mergeEvidence: mergeEvidenceSchema.nullable(),
   issueLink: issueLinkEvidenceSchema.nullable(),
+  preparationCheckpoints: z.array(preparationCheckpointStateSchema),
 });
 
 export type PersistedMission = z.infer<typeof missionSchema>;

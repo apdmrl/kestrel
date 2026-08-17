@@ -65,6 +65,10 @@ export function toPersistedMission(mission: Mission): PersistedMission {
     issueLink: mission.issueLink
       ? { ...mission.issueLink, repository: { ...mission.issueLink.repository } }
       : null,
+    preparationCheckpoints: mission.preparationCheckpoints.map((entry) => ({
+      checkpoint: entry.checkpoint,
+      data: { ...entry.data },
+    })),
   };
 }
 
@@ -390,5 +394,9 @@ function reconstructMission(data: PersistedMission): DomainResult<Mission> {
     submittedPullRequest,
     mergeEvidence,
     issueLink,
+    preparationCheckpoints: data.preparationCheckpoints.map((entry) => ({
+      checkpoint: entry.checkpoint,
+      data: { ...entry.data },
+    })),
   });
 }

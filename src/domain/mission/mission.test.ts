@@ -20,6 +20,7 @@ import type {
   MergeEvidence,
   PullRequestEvidence,
 } from "../evidence/evidence.js";
+import { recordAllPreparationCheckpoints } from "../../test-utils/prepare.js";
 
 const acceptedAt = "2026-08-15T10:00:00Z" as IsoDateTime;
 const accepted: EvidenceDecision = { accepted: true, blockingReasons: [], warnings: [] };
@@ -90,7 +91,7 @@ function preparedMission(): Mission {
   if (!preparing.ok) {
     throw new Error("expected ok");
   }
-  const inProgress = preparing.value.completePreparation({
+  const inProgress = recordAllPreparationCheckpoints(preparing.value).completePreparation({
     workspace,
     baseCommit: "base-sha",
     branch: "kestrel/1-fix-crash",
@@ -113,7 +114,11 @@ describe("Mission lifecycle", () => {
     }
 
     const inProgress = preparing.ok
-      ? preparing.value.completePreparation({ workspace, baseCommit: "base-sha", branch: "b" })
+      ? recordAllPreparationCheckpoints(preparing.value).completePreparation({
+          workspace,
+          baseCommit: "base-sha",
+          branch: "b",
+        })
       : null;
     expect(inProgress?.ok).toBe(true);
     if (inProgress?.ok) {
@@ -146,7 +151,7 @@ describe("Mission lifecycle", () => {
     }
     expect(preparing.value.startPreparation().ok).toBe(false);
 
-    const inProgress = preparing.value.completePreparation({
+    const inProgress = recordAllPreparationCheckpoints(preparing.value).completePreparation({
       workspace,
       baseCommit: "x",
       branch: "b",

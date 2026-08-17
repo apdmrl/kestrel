@@ -25,6 +25,7 @@ import type {
   TransactionPhase,
 } from "../../ports/transaction-journal.js";
 import { createKestrelError } from "../errors/kestrel-error.js";
+import { recordAllPreparationCheckpoints } from "../../test-utils/prepare.js";
 import { commitMissionChange, type MissionChange } from "./commit-mission-change.js";
 import { recoverTransactions } from "./recover-transactions.js";
 
@@ -80,7 +81,11 @@ function preparedMission(): Mission {
   });
   const preparing = accepted.ok ? accepted.value.startPreparation() : null;
   const inProgress = preparing?.ok
-    ? preparing.value.completePreparation({ workspace, baseCommit: "base", branch: "b" })
+    ? recordAllPreparationCheckpoints(preparing.value).completePreparation({
+        workspace,
+        baseCommit: "base",
+        branch: "b",
+      })
     : null;
   if (!inProgress?.ok) {
     throw new Error("expected ok");
