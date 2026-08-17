@@ -8,6 +8,7 @@ export interface TransactionIntent {
   readonly transactionId: TransactionId;
   readonly eventId: EventId;
   readonly missionId: MissionId;
+  readonly sidecarPath: string;
   readonly expectedStateVersion: number;
   readonly targetMission: Mission;
   readonly event: JourneyEvent;
@@ -18,6 +19,7 @@ export interface NewTransactionIntent {
   readonly transactionId: TransactionId;
   readonly eventId: EventId;
   readonly missionId: MissionId;
+  readonly sidecarPath: string;
   readonly expectedStateVersion: number;
   readonly targetMission: Mission;
   readonly event: JourneyEvent;

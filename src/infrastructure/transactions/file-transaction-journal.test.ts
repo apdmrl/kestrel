@@ -107,6 +107,7 @@ function intent(transactionId: string) {
     transactionId: transactionId as TransactionId,
     eventId: "e1" as EventId,
     missionId: "m1" as MissionId,
+    sidecarPath: join(dir, "m1", "kestrel"),
     expectedStateVersion: 1,
     targetMission: preparedMission(),
     event: journeyEvent(),
