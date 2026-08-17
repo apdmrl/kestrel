@@ -37,7 +37,7 @@ const signalResultSchema = z.object({
   reason: z.string().min(1),
 });
 
-const recommendationSnapshotSchema = z.object({
+export const recommendationSnapshotSchema = z.object({
   challenge: challengeSchema,
   mood: z.enum([
     "QUICK_WIN",

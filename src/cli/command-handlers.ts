@@ -3,7 +3,7 @@ import type { ViewModel } from "./presentation/view-models.js";
 /** Application boundaries the CLI commands call; composed in bootstrap. */
 export interface CommandHandlers {
   readonly find: (args: { mood: string; type?: string }) => Promise<ViewModel>;
-  readonly missionAccept: (args: Record<string, never>) => Promise<ViewModel>;
+  readonly missionAccept: (args: { recommendationId?: string }) => Promise<ViewModel>;
   readonly missionPrepare: (args: { missionId?: string }) => Promise<ViewModel>;
   readonly missionResume: (args: { missionId?: string }) => Promise<ViewModel>;
   readonly missionCurrent: (args?: { missionId?: string }) => Promise<ViewModel>;

@@ -8,6 +8,7 @@ describe("renderPlain", () => {
   it("renders a recommendation without ANSI", () => {
     const output = renderPlain({
       kind: "recommendation",
+      recommendationId: "c1",
       challengeId: "c1",
       title: "Fix crash",
       mood: "QUICK_WIN",
@@ -15,6 +16,7 @@ describe("renderPlain", () => {
       reasons: ["matches interests"],
     });
     expect(output).toContain("Fix crash");
+    expect(output).toContain("c1");
     expect(output).not.toMatch(ansi);
   });
 

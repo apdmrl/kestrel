@@ -11,6 +11,7 @@ const root = process.cwd();
 const cli = join(root, "dist", "cli", "main.js");
 
 let server: Server;
+let searchCount = 0;
 let serverUrl = "";
 let home = "";
 let workspace = "";
@@ -109,17 +110,21 @@ beforeAll(async () => {
     const url = req.url ?? "";
     res.setHeader("content-type", "application/json");
     if (url.startsWith("/search/issues")) {
+      searchCount += 1;
+      const first = searchCount === 1;
+      const issueNumber = first ? 42 : 99;
+      const title = first ? "Fix crash on startup" : "Add documentation";
       res.end(
         JSON.stringify({
           items: [
             {
-              id: 101,
-              number: 42,
-              title: "Fix crash on startup",
+              id: first ? 101 : 102,
+              number: issueNumber,
+              title,
               body: "The app crashes on startup.",
               state: "open",
               repository_url: "https://api.github.com/repos/octocat/hello-world",
-              html_url: "https://github.com/octocat/hello-world/issues/42",
+              html_url: "https://github.com/octocat/hello-world/issues/" + issueNumber,
               created_at: "2026-08-01T00:00:00Z",
               updated_at: "2026-08-02T00:00:00Z",
               labels: [{ name: "bug" }],
@@ -169,6 +174,9 @@ describe("kestrel end-to-end workflow", () => {
     const accept = await runCli(["mission", "accept"]);
     expect(accept.status).toBe(0);
     expect(accept.stdout).toContain("ACCEPTED");
+    // Acceptance must bind to the recommendation the user saw, not re-discover.
+    expect(accept.stdout).toContain("Fix crash on startup");
+    expect(accept.stdout).not.toContain("Add documentation");
 
     const prepare = await runCli(["mission", "prepare"]);
     expect(prepare.status).toBe(0);
@@ -185,6 +193,9 @@ describe("kestrel end-to-end workflow", () => {
   }, 60_000);
 
   it("records an immutable agent brief handoff", async () => {
+    const find = await runCli(["find", "--mood", "QUICK_WIN"]);
+    expect(find.status).toBe(0);
+
     const accept = await runCli(["mission", "accept"]);
     expect(accept.status).toBe(0);
 

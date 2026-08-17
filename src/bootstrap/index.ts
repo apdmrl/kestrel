@@ -5,6 +5,7 @@ import { createOAuthDeviceAuth } from "@octokit/auth-oauth-device";
 import { FileSystemMissionStore } from "../infrastructure/persistence/file-system-mission-store.js";
 import { FileSystemPreferencesStore } from "../infrastructure/persistence/file-system-preferences-store.js";
 import { FileSystemMissionIndexStore } from "../infrastructure/persistence/file-system-mission-index-store.js";
+import { FileSystemRecommendationStore } from "../infrastructure/persistence/file-system-recommendation-store.js";
 import { JsonlJourneyStore } from "../infrastructure/persistence/jsonl-journey-store.js";
 import { FileSystemAgentHandoffStore } from "../infrastructure/persistence/file-system-agent-handoff-store.js";
 import { FileMissionLock } from "../infrastructure/locking/file-mission-lock.js";
@@ -50,7 +51,8 @@ import {
 } from "../domain/preferences/preferences.js";
 import type { LearnedSignals } from "../domain/preferences/learned-signals.js";
 import { isMood, type Mood } from "../domain/recommendation/mood.js";
-import { parseMissionId } from "../domain/shared/identifiers.js";
+import { snapshotRecommendation } from "../domain/recommendation/recommendation.js";
+import { parseChallengeId, parseMissionId } from "../domain/shared/identifiers.js";
 import type { ChallengeType } from "../domain/challenge/challenge.js";
 import type { Mission } from "../domain/mission/mission.js";
 import type { CommandHandlers } from "../cli/command-handlers.js";
@@ -110,6 +112,18 @@ function noMission(message: string): ReturnType<typeof createKestrelError> {
   });
 }
 
+function recommendationNotFound(): ReturnType<typeof createKestrelError> {
+  return createKestrelError({
+    code: "DM_RECOMMENDATION_NOT_FOUND",
+    category: "USER_ACTION_REQUIRED",
+    userMessage: "No matching recommendation was found",
+    suggestedActions: ["Run 'kestrel find' first, then accept the recommendation it shows"],
+    retryability: "NO_RETRY",
+    recoveryStrategy: "USER_ACTION",
+    severity: "WARNING",
+  });
+}
+
 function missionView(mission: Mission): ViewModel {
   return {
     kind: "mission",
@@ -133,6 +147,9 @@ export async function bootstrap(
   const indexStore = new FileSystemMissionIndexStore(join(config.home, "index.json"));
   const handoffStore = new FileSystemAgentHandoffStore();
   const journeyStore = new JsonlJourneyStore(join(config.home, "journey", "events.jsonl"));
+  const recommendationStore = new FileSystemRecommendationStore(
+    join(config.home, "recommendation.json"),
+  );
   const lock = new FileMissionLock();
   const journal = new FileTransactionJournal(join(config.home, "transactions"));
   const runner = new ExecaProcessRunner();
@@ -228,6 +245,14 @@ export async function bootstrap(
     return parsed.value;
   };
 
+  const loadRecommendation = async (recommendationId: string) => {
+    const parsed = parseChallengeId(recommendationId);
+    if (!parsed.ok) {
+      throw invalidInput(parsed.error.message);
+    }
+    return recommendationStore.load(parsed.value);
+  };
+
   const discover = async (mood: string, type?: string) => {
     const moodValue: Mood = isMood(mood) ? mood : "QUICK_WIN";
     const typeValue = type !== undefined ? validateChallengeType(type) : undefined;
@@ -264,8 +289,12 @@ export async function bootstrap(
         return { kind: "verification", text: "No challenge found" };
       }
       const recommendation = result.recommendation;
+      // Persist the exact recommendation so a later accept binds to it instead
+      // of silently performing a replacement search.
+      await recommendationStore.save(snapshotRecommendation(recommendation));
       return {
         kind: "recommendation",
+        recommendationId: recommendation.challenge.id,
         challengeId: recommendation.challenge.id,
         title: recommendation.challenge.title,
         mood: recommendation.mood,
@@ -273,10 +302,13 @@ export async function bootstrap(
         reasons: recommendation.reasons,
       };
     },
-    missionAccept: async () => {
-      const recommendationResult = await discover("QUICK_WIN");
-      if (recommendationResult.kind === "empty") {
-        throw noMission("No challenge was available to accept");
+    missionAccept: async ({ recommendationId } = {}) => {
+      const recommendation =
+        recommendationId !== undefined
+          ? await loadRecommendation(recommendationId)
+          : await recommendationStore.loadLatest();
+      if (recommendation === undefined) {
+        throw recommendationNotFound();
       }
       const preferences = await loadPreferences();
       const workspaceRoot = preferences.explicit.workspaceRoot ?? config.workspaceRoot;
@@ -292,7 +324,7 @@ export async function bootstrap(
           clock,
         },
         {
-          recommendation: recommendationResult.recommendation,
+          recommendation,
           mode: preferences.explicit.defaultMode,
           workspaceRoot,
         },

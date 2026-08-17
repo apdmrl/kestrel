@@ -3,6 +3,7 @@ import { isKestrelError } from "../../application/errors/kestrel-error.js";
 
 export interface RecommendationViewModel {
   readonly kind: "recommendation";
+  readonly recommendationId: string;
   readonly challengeId: string;
   readonly title: string;
   readonly mood: string;

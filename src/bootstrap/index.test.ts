@@ -2,6 +2,10 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { createChallenge } from "../domain/challenge/challenge.js";
+import type { Challenge } from "../domain/challenge/challenge.js";
+import { createEvaluationContext } from "../domain/challenge/evaluation-context.js";
+import type { ChallengeId } from "../domain/shared/identifiers.js";
 import type { IsoDateTime } from "../domain/shared/time.js";
 import type { ChallengeSource } from "../ports/challenge-source.js";
 import type { Credential, CredentialStore } from "../ports/credential-store.js";
@@ -230,5 +234,132 @@ describe("bootstrap github authentication", () => {
     await handlers.find({ mood: "QUICK_WIN" });
     expect(seen).toEqual(["cached-token"]);
     expect(gateway.deviceFlowCalls).toBe(0);
+  });
+});
+
+function makeChallenge(issueNumber: number, title: string): Challenge {
+  const result = createChallenge({
+    id: ("challenge-" + issueNumber) as ChallengeId,
+    externalId: String(issueNumber),
+    repository: { provider: "github", owner: "octocat", name: "hello-world" },
+    issueNumber,
+    canonicalUrl: "https://github.com/octocat/hello-world/issues/" + issueNumber,
+    title,
+    description: "d",
+    type: "BUG_FIX",
+    labels: ["bug"],
+    createdAt: "2026-08-01T00:00:00Z" as IsoDateTime,
+    updatedAt: "2026-08-01T00:00:00Z" as IsoDateTime,
+  });
+  if (!result.ok) {
+    throw new Error("expected ok");
+  }
+  return result.value;
+}
+
+function evaluationContext() {
+  const result = createEvaluationContext({
+    observedAt: "2026-08-15T10:00:00Z" as IsoDateTime,
+    repositoryHealth: 0.8,
+    confidence: 0.6,
+  });
+  if (!result.ok) {
+    throw new Error("expected ok");
+  }
+  return result.value;
+}
+
+function sequencingSource(challenges: Challenge[]): {
+  source: ChallengeSource;
+  searches: () => number;
+} {
+  let calls = 0;
+  let count = 0;
+  const source: ChallengeSource = {
+    async search() {
+      count += 1;
+      const challenge = challenges[Math.min(calls, challenges.length - 1)];
+      calls += 1;
+      return challenge === undefined ? [] : [challenge];
+    },
+    async enrich() {
+      return evaluationContext();
+    },
+  };
+  return { source, searches: () => count };
+}
+
+describe("bootstrap recommendation binding", () => {
+  function authDeps() {
+    const store = new FakeCredentialStore();
+    store.credential = { service: "github", account: "octocat", token: "cached-token" };
+    return { store, gateway: new FakeGateway() };
+  }
+
+  it("binds mission accept to the recommendation shown by find", async () => {
+    const { store, gateway } = authDeps();
+    const challengeA = makeChallenge(42, "Fix crash on startup");
+    const challengeB = makeChallenge(99, "Add documentation");
+    const { source, searches } = sequencingSource([challengeA, challengeB]);
+
+    const handlers = await bootstrap(
+      createConfig({ KESTREL_HOME: dir, KESTREL_WORKSPACE: join(dir, "workspace") }),
+      {
+        credentialStore: store,
+        gateway,
+        challengeSourceFactory: () => source,
+      },
+    );
+
+    const find = await handlers.find({ mood: "QUICK_WIN" });
+    expect(find.kind).toBe("recommendation");
+    if (find.kind === "recommendation") {
+      expect(find.title).toBe("Fix crash on startup");
+      expect(find.recommendationId).toBe("challenge-42");
+    }
+
+    const accepted = await handlers.missionAccept({});
+    expect(accepted.kind).toBe("mission");
+    if (accepted.kind === "mission") {
+      expect(accepted.title).toBe("Fix crash on startup");
+    }
+    expect(searches()).toBe(1);
+  });
+
+  it("rejects a missing, unknown, malformed, or stale recommendation identifier", async () => {
+    const { store, gateway } = authDeps();
+    const challengeA = makeChallenge(42, "Fix crash on startup");
+    const challengeB = makeChallenge(99, "Add documentation");
+    const { source } = sequencingSource([challengeA, challengeB]);
+
+    const handlers = await bootstrap(createConfig({ KESTREL_HOME: dir }), {
+      credentialStore: store,
+      gateway,
+      challengeSourceFactory: () => source,
+    });
+
+    // No recommendation persisted yet.
+    await expect(handlers.missionAccept({})).rejects.toMatchObject({
+      code: "DM_RECOMMENDATION_NOT_FOUND",
+    });
+
+    const first = await handlers.find({ mood: "QUICK_WIN" });
+    expect(first.kind).toBe("recommendation");
+
+    // Unknown identifier.
+    await expect(
+      handlers.missionAccept({ recommendationId: "challenge-unknown" }),
+    ).rejects.toMatchObject({ code: "DM_RECOMMENDATION_NOT_FOUND" });
+
+    // Malformed identifier (empty).
+    await expect(handlers.missionAccept({ recommendationId: "  " })).rejects.toMatchObject({
+      code: "DM_ILLEGAL_TRANSITION",
+    });
+
+    // A later find supersedes the first recommendation, making it stale.
+    await handlers.find({ mood: "QUICK_WIN" });
+    await expect(
+      handlers.missionAccept({ recommendationId: "challenge-42" }),
+    ).rejects.toMatchObject({ code: "DM_RECOMMENDATION_NOT_FOUND" });
   });
 });

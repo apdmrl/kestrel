@@ -24,6 +24,7 @@ export function renderPlain(view: ViewModel): string {
     case "recommendation":
       return [
         "Recommendation: " + view.title,
+        "Recommendation ID: " + view.recommendationId,
         "Mood: " + view.mood,
         "Confidence: " + view.confidence.toFixed(2),
         "Reasons:",

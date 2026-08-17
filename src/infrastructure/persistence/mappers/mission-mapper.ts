@@ -103,7 +103,7 @@ function toPersistedChallenge(challenge: Challenge): PersistedChallenge {
   };
 }
 
-function toPersistedRecommendation(
+export function toPersistedRecommendation(
   recommendation: RecommendationSnapshot,
 ): PersistedRecommendationSnapshot {
   return {
@@ -221,6 +221,17 @@ function reconstructRecommendation(
     return recommendation;
   }
   return ok(snapshotRecommendation(recommendation.value));
+}
+
+/** Reconstruct a standalone recommendation snapshot from validated persisted data. */
+export function fromPersistedRecommendationSnapshot(
+  data: PersistedRecommendationSnapshot,
+): DomainResult<RecommendationSnapshot> {
+  const challenge = reconstructChallenge(data.challenge);
+  if (!challenge.ok) {
+    return challenge;
+  }
+  return reconstructRecommendation(data, challenge.value);
 }
 
 function reconstructEvidence(data: PersistedEvidence): DomainResult<Evidence> {

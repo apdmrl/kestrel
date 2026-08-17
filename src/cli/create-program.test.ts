@@ -86,6 +86,28 @@ describe("createProgram command routing", () => {
     expect(calls).toEqual([{ handler: "missionAccept", args: [{}] }]);
   });
 
+  it("routes mission accept with the recommendation identifier", async () => {
+    const { handlers: h, calls } = handlers();
+    await parse(h, ["mission", "accept", "--id", "challenge-42"]);
+    expect(calls).toEqual([
+      { handler: "missionAccept", args: [{ recommendationId: "challenge-42" }] },
+    ]);
+  });
+
+  it("documents the mission accept recommendation identifier", () => {
+    const program = createProgram({
+      handlers: handlers().handlers,
+      stdout: () => undefined,
+      stderr: () => undefined,
+    });
+    const mission = program.commands.find((c) => c.name() === "mission");
+    const accept = mission?.commands.find((c) => c.name() === "accept");
+    expect(accept).toBeDefined();
+    const help = accept?.helpInformation() ?? "";
+    expect(help).toContain("--id");
+    expect(help).toContain("recommendation");
+  });
+
   it("routes mission prepare, resume, current, and complete with --id", async () => {
     const { handlers: h, calls } = handlers();
     await parse(h, ["mission", "prepare", "--id", "m1"]);

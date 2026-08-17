@@ -70,8 +70,17 @@ export function createProgram(options: ProgramOptions): Command {
   const mission = program.command("mission").description("accept, prepare, and manage missions");
   mission
     .command("accept")
-    .description("accept a newly discovered challenge as a mission")
-    .action(() => run(() => options.handlers.missionAccept({}))());
+    .description(
+      "accept the recommendation shown by find (optionally bound to a recommendation --id)",
+    )
+    .option("--id <recommendationId>", "accept the recommendation with this identifier")
+    .action((opts: { id?: string }) =>
+      run(() =>
+        options.handlers.missionAccept({
+          ...(opts.id !== undefined ? { recommendationId: opts.id } : {}),
+        }),
+      )(),
+    );
   const withMissionId = (command: Command): Command =>
     command.option("--id <missionId>", "target mission id");
   withMissionId(
