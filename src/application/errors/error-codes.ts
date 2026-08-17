@@ -31,7 +31,8 @@ export type ErrorCode =
   | "DM_GIT_CONFLICT"
   | "DM_GIT_FATAL"
   | "DM_GIT_TIMEOUT"
-  | "DM_GIT_CANCELLED";
+  | "DM_GIT_CANCELLED"
+  | "DM_UNSAFE_PATH";
 
 export type Retryability = "NO_RETRY" | "RETRYABLE" | "RETRY_WITH_BACKOFF";
 
