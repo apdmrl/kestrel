@@ -4,22 +4,117 @@ import type { GitClient, LocalChanges } from "../../ports/git-client.js";
 import type { ProcessRunner } from "../../ports/process-runner.js";
 import { mapGitExitCode, mapGitProcessError } from "./git-error-mapper.js";
 
-const GITHUB_REMOTE = /github\.com[/:]([^/]+)\/([^/]+?)(?:\.git)?$/;
+const GITHUB_REPO_SEGMENT = /^[A-Za-z0-9._-]+$/;
 
-function parseGitHubIdentity(url: string): RepositoryIdentity {
-  const match = GITHUB_REMOTE.exec(url.trim());
-  if (match === null) {
-    throw createKestrelError({
-      code: "DM_GIT_FATAL",
-      category: "EXTERNAL_STATE_CHANGED",
-      userMessage: "The repository remote is not a GitHub URL",
-      suggestedActions: ["Verify the upstream remote URL"],
-      retryability: "NO_RETRY",
-      recoveryStrategy: "MANUAL_INTERVENTION",
-      severity: "ERROR",
-    });
+function githubRemoteError(): never {
+  throw createKestrelError({
+    code: "DM_GIT_FATAL",
+    category: "EXTERNAL_STATE_CHANGED",
+    userMessage: "The repository remote is not a supported GitHub URL",
+    suggestedActions: ["Verify the upstream remote URL"],
+    retryability: "NO_RETRY",
+    recoveryStrategy: "MANUAL_INTERVENTION",
+    severity: "ERROR",
+  });
+}
+
+function isRepoSegment(value: string): boolean {
+  return GITHUB_REPO_SEGMENT.test(value) && !value.includes("..") && !value.startsWith(".");
+}
+
+function stripGitSuffix(name: string): string {
+  return name.endsWith(".git") ? name.slice(0, -".git".length) : name;
+}
+
+/**
+ * Parse a GitHub repository remote structurally. HTTPS and SSH URL forms are
+ * parsed with the URL parser and require the exact hostname github.com; the
+ * SCP-like git@github.com:owner/name form is validated separately against an
+ * anchored prefix. The .git suffix is normalized only after the host has been
+ * validated, and credentials, ports, queries, fragments, and encoded segments
+ * are all rejected.
+ */
+export function parseGitHubIdentity(url: string): RepositoryIdentity {
+  const trimmed = url.trim();
+  let owner: string | undefined;
+  let name: string | undefined;
+
+  if (trimmed.startsWith("https://") || trimmed.startsWith("http://")) {
+    let parsed: URL;
+    try {
+      parsed = new URL(trimmed);
+    } catch {
+      githubRemoteError();
+    }
+    if (parsed.protocol !== "https:") {
+      githubRemoteError();
+    }
+    if (parsed.hostname !== "github.com") {
+      githubRemoteError();
+    }
+    if (parsed.username !== "" || parsed.password !== "") {
+      githubRemoteError();
+    }
+    if (parsed.port !== "") {
+      githubRemoteError();
+    }
+    if (parsed.search !== "" || parsed.hash !== "") {
+      githubRemoteError();
+    }
+    const parts = parsed.pathname.split("/").filter((part) => part.length > 0);
+    if (parts.length !== 2) {
+      githubRemoteError();
+    }
+    owner = parts[0];
+    name = parts[1];
+  } else if (trimmed.startsWith("ssh://")) {
+    let parsed: URL;
+    try {
+      parsed = new URL(trimmed);
+    } catch {
+      githubRemoteError();
+    }
+    if (parsed.protocol !== "ssh:") {
+      githubRemoteError();
+    }
+    if (parsed.hostname !== "github.com") {
+      githubRemoteError();
+    }
+    if (parsed.username !== "git" || parsed.password !== "") {
+      githubRemoteError();
+    }
+    if (parsed.port !== "") {
+      githubRemoteError();
+    }
+    if (parsed.search !== "" || parsed.hash !== "") {
+      githubRemoteError();
+    }
+    const parts = parsed.pathname.split("/").filter((part) => part.length > 0);
+    if (parts.length !== 2) {
+      githubRemoteError();
+    }
+    owner = parts[0];
+    name = parts[1];
+  } else {
+    const match = /^git@github\.com:([^/]+)\/([^/]+)$/.exec(trimmed);
+    if (match === null) {
+      githubRemoteError();
+    }
+    owner = match[1];
+    name = match[2];
   }
-  return { provider: "github", owner: match[1] as string, name: match[2] as string };
+
+  if (owner === undefined || name === undefined) {
+    githubRemoteError();
+  }
+  if (owner.includes("%") || name.includes("%") || !isRepoSegment(owner)) {
+    githubRemoteError();
+  }
+  name = stripGitSuffix(name);
+  if (name.length === 0 || !isRepoSegment(name)) {
+    githubRemoteError();
+  }
+  return { provider: "github", owner, name };
 }
 
 export class SystemGitClient implements GitClient {

@@ -26,7 +26,7 @@ export const genericPromptRenderer: PromptRenderer = {
 
     lines.push("## Challenge (untrusted data from the source issue)");
     lines.push("");
-    lines.push("> Title: " + brief.challengeTitle);
+    lines.push(blockquote("Title: " + brief.challengeTitle));
     lines.push(">");
     lines.push(blockquote(brief.challengeDescription));
     lines.push("");
