@@ -63,6 +63,23 @@ export interface CompletePreparationInput {
   readonly branch: string;
 }
 
+/** Full aggregate state, used only by validated rehydration (persistence mappers). */
+export interface MissionRehydrationState {
+  readonly id: MissionId;
+  readonly challengeSnapshot: Challenge;
+  readonly recommendationSnapshot: RecommendationSnapshot;
+  readonly acceptanceContext: AcceptanceContext;
+  readonly status: MissionStatus;
+  readonly workspace: WorkspaceInfo | undefined;
+  readonly immutableBaseCommit: string | undefined;
+  readonly branch: string | undefined;
+  readonly evidence: EvidenceCollection;
+  readonly submissionVerification: SubmissionVerification;
+  readonly submittedPullRequest: PullRequestEvidence | undefined;
+  readonly mergeEvidence: MergeEvidence | undefined;
+  readonly issueLink: IssueLinkEvidence | undefined;
+}
+
 function sameRepository(a: RepositoryIdentity, b: RepositoryIdentity): boolean {
   return a.owner === b.owner && a.name === b.name && a.provider === b.provider;
 }
@@ -112,6 +129,56 @@ export class Mission {
         submittedPullRequest: undefined,
         mergeEvidence: undefined,
         issueLink: undefined,
+      }),
+    );
+  }
+
+  static rehydrate(state: MissionRehydrationState): DomainResult<Mission> {
+    if (state.id.trim().length === 0) {
+      return err("DM_INVALID_MISSION", "mission id must not be empty");
+    }
+    const hasWorkspace = state.workspace !== undefined;
+    const hasBase = state.immutableBaseCommit !== undefined;
+    const hasBranch = state.branch !== undefined;
+    if (state.status === "ACCEPTED" || state.status === "PREPARING") {
+      if (hasWorkspace || hasBase || hasBranch) {
+        return err(
+          "DM_INVALID_MISSION",
+          "pre-preparation mission must not have workspace, base commit, or branch",
+        );
+      }
+    } else if (state.status === "IN_PROGRESS" || state.status === "COMPLETED") {
+      if (!hasWorkspace || !hasBase || !hasBranch) {
+        return err("DM_INVALID_MISSION", "this status requires workspace, base commit, and branch");
+      }
+    } else {
+      if ((hasWorkspace || hasBase || hasBranch) && !(hasWorkspace && hasBase && hasBranch)) {
+        return err(
+          "DM_INVALID_MISSION",
+          "workspace, base commit, and branch must be all present or absent",
+        );
+      }
+    }
+    if (state.submissionVerification === "SUBMITTED" && state.submittedPullRequest === undefined) {
+      return err("DM_INVALID_MISSION", "SUBMITTED requires submitted PR evidence");
+    }
+    if (
+      state.submissionVerification === "MERGED" &&
+      (state.mergeEvidence === undefined || state.submittedPullRequest === undefined)
+    ) {
+      return err("DM_INVALID_MISSION", "MERGED requires submitted PR and merge evidence");
+    }
+    if (
+      state.submissionVerification === "NONE" &&
+      (state.submittedPullRequest !== undefined || state.mergeEvidence !== undefined)
+    ) {
+      return err("DM_INVALID_MISSION", "NONE verification must not have PR or merge evidence");
+    }
+    return ok(
+      new Mission({
+        ...state,
+        challengeSnapshot: snapshotChallenge(state.challengeSnapshot),
+        recommendationSnapshot: snapshotRecommendation(state.recommendationSnapshot),
       }),
     );
   }
