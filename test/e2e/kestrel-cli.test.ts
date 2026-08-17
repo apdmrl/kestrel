@@ -25,7 +25,7 @@ function run(args: string[]): CliResult {
 }
 
 beforeAll(() => {
-  spawnSync("npx", ["tsc", "-p", "tsconfig.json"], { cwd: root });
+  spawnSync("npm", ["run", "build"], { cwd: root });
 });
 
 afterAll(async () => {
