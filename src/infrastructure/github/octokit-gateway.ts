@@ -20,7 +20,7 @@ export interface OctokitLike {
   ): Promise<{
     status: number;
     data: unknown;
-    headers: Record<string, string>;
+    headers: Record<string, string | number | undefined>;
   }>;
 }
 

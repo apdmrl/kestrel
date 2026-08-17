@@ -71,7 +71,7 @@ export function mapGitHubError(error: unknown): KestrelError {
       code: "DM_GITHUB_AUTH_EXPIRED",
       category: "USER_ACTION_REQUIRED",
       userMessage: "GitHub authentication has expired",
-      suggestedActions: ["Run kestrel auth to re-authenticate"],
+      suggestedActions: ["Re-run the command to re-authenticate"],
       retryability: "NO_RETRY",
       recoveryStrategy: "REAUTHENTICATE",
       severity: "ERROR",

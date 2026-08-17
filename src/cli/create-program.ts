@@ -53,56 +53,142 @@ export function createProgram(options: ProgramOptions): Command {
     .description("discover one recommended challenge")
     .option("--mood <mood>", "mood to use")
     .option("--type <type>", "mission type override")
-    .action((opts: { mood?: string; type?: string }) => {
-      void run(() =>
+    .action((opts: { mood?: string; type?: string }) =>
+      run(() =>
         options.handlers.find({
           mood: opts.mood ?? "QUICK_WIN",
           ...(opts.type !== undefined ? { type: opts.type } : {}),
         }),
-      )();
-    });
+      )(),
+    );
 
   program
     .command("current")
     .description("show the current mission")
-    .action(() => {
-      void run(() => options.handlers.missionCurrent())();
-    });
+    .action(() => run(() => options.handlers.missionCurrent({}))());
+
+  const mission = program.command("mission").description("accept, prepare, and manage missions");
+  mission
+    .command("accept")
+    .description("accept a newly discovered challenge as a mission")
+    .action(() => run(() => options.handlers.missionAccept({}))());
+  const withMissionId = (command: Command): Command =>
+    command.option("--id <missionId>", "target mission id");
+  withMissionId(
+    mission
+      .command("prepare")
+      .description("prepare the mission workspace and guidance (resumable)"),
+  ).action((opts: { id?: string }) =>
+    run(() =>
+      options.handlers.missionPrepare({ ...(opts.id !== undefined ? { missionId: opts.id } : {}) }),
+    )(),
+  );
+  withMissionId(
+    mission.command("resume").description("resume an interrupted mission preparation"),
+  ).action((opts: { id?: string }) =>
+    run(() =>
+      options.handlers.missionResume({ ...(opts.id !== undefined ? { missionId: opts.id } : {}) }),
+    )(),
+  );
+  withMissionId(mission.command("current").description("show the current mission")).action(
+    (opts: { id?: string }) =>
+      run(() =>
+        options.handlers.missionCurrent({
+          ...(opts.id !== undefined ? { missionId: opts.id } : {}),
+        }),
+      )(),
+  );
+  withMissionId(
+    mission.command("complete").description("complete the mission with local evidence"),
+  ).action((opts: { id?: string }) =>
+    run(() =>
+      options.handlers.missionComplete({
+        ...(opts.id !== undefined ? { missionId: opts.id } : {}),
+      }),
+    )(),
+  );
+  withMissionId(mission.command("abandon").description("abandon the mission"))
+    .option("--reason <reason>", "abandon reason")
+    .action((opts: { id?: string; reason?: string }) =>
+      run(() =>
+        options.handlers.missionAbandon({
+          ...(opts.id !== undefined ? { missionId: opts.id } : {}),
+          reason: opts.reason ?? "",
+        }),
+      )(),
+    );
+
+  const agent = program.command("agent").description("generate agent guidance");
+  withMissionId(agent.command("brief").description("record an immutable agent brief handoff"))
+    .option("--hypothesis <text>", "developer hypothesis")
+    .action((opts: { id?: string; hypothesis?: string }) =>
+      run(() =>
+        options.handlers.agentBrief({
+          ...(opts.id !== undefined ? { missionId: opts.id } : {}),
+          ...(opts.hypothesis !== undefined ? { hypothesis: opts.hypothesis } : {}),
+        }),
+      )(),
+    );
+
+  const verify = program.command("verify").description("verify GitHub submission evidence");
+  const prOption = (command: Command): Command =>
+    withMissionId(command).option("--pr <number>", "pull request number");
+  prOption(verify.command("submission").description("verify a submitted pull request")).action(
+    (opts: { id?: string; pr: string }) =>
+      run(() =>
+        options.handlers.verifySubmission({
+          ...(opts.id !== undefined ? { missionId: opts.id } : {}),
+          prNumber: Number(opts.pr),
+        }),
+      )(),
+  );
+  prOption(verify.command("link").description("verify an issue link for a pull request")).action(
+    (opts: { id?: string; pr: string }) =>
+      run(() =>
+        options.handlers.verifyLink({
+          ...(opts.id !== undefined ? { missionId: opts.id } : {}),
+          prNumber: Number(opts.pr),
+        }),
+      )(),
+  );
+  prOption(verify.command("merge").description("verify a merged pull request")).action(
+    (opts: { id?: string; pr: string }) =>
+      run(() =>
+        options.handlers.verifyMerge({
+          ...(opts.id !== undefined ? { missionId: opts.id } : {}),
+          prNumber: Number(opts.pr),
+        }),
+      )(),
+  );
 
   program
     .command("journey")
     .description("show the engineering journey")
-    .action(() => {
-      void run(() => options.handlers.journey())();
-    });
+    .action(() => run(() => options.handlers.journey())());
 
   program
     .command("progress")
     .description("show journey progress counts")
-    .action(() => {
-      void run(() => options.handlers.progress())();
-    });
+    .action(() => run(() => options.handlers.progress())());
 
   const preferences = program.command("preferences").description("manage preferences");
   preferences
     .command("get")
     .description("show preferences")
-    .action(() => {
-      void run(() => options.handlers.preferencesGet())();
-    });
+    .action(() => run(() => options.handlers.preferencesGet())());
   preferences
     .command("set")
     .description("update preferences")
     .option("--language <language>", "preferred language")
     .option("--mode <mode>", "default mode")
-    .action((opts: { language?: string; mode?: string }) => {
-      void run(() =>
+    .action((opts: { language?: string; mode?: string }) =>
+      run(() =>
         options.handlers.preferencesSet({
           ...(opts.language !== undefined ? { language: opts.language } : {}),
           ...(opts.mode !== undefined ? { mode: opts.mode } : {}),
         }),
-      )();
-    });
+      )(),
+    );
 
   return program;
 }

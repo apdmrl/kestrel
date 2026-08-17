@@ -15,11 +15,34 @@ export interface MissionViewModel {
   readonly id: string;
   readonly status: string;
   readonly title: string;
+  readonly verification?: string;
+  readonly repository?: string;
+  readonly branch?: string;
 }
 
 export interface ProgressViewModel {
   readonly kind: "progress";
   readonly counts: ProgressCounts;
+}
+
+export interface JourneyEntryViewModel {
+  readonly type: string;
+  readonly missionId: string;
+  readonly occurredAt: string;
+}
+
+export interface JourneyViewModel {
+  readonly kind: "journey";
+  readonly entries: readonly JourneyEntryViewModel[];
+}
+
+export interface PreferencesViewModel {
+  readonly kind: "preferences";
+  readonly version: number;
+  readonly preferredLanguages: readonly string[];
+  readonly preferredDifficulty: string | null;
+  readonly defaultMode: string;
+  readonly workspaceRoot: string | null;
 }
 
 export interface HandoffViewModel {
@@ -44,6 +67,8 @@ export type ViewModel =
   | RecommendationViewModel
   | MissionViewModel
   | ProgressViewModel
+  | JourneyViewModel
+  | PreferencesViewModel
   | HandoffViewModel
   | VerificationViewModel
   | ErrorViewModel;

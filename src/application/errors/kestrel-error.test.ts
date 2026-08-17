@@ -85,7 +85,7 @@ describe("KestrelError", () => {
       code: "DM_GITHUB_AUTH_EXPIRED",
       category: "USER_ACTION_REQUIRED",
       userMessage: "Re-authenticate",
-      suggestedActions: ["Run kestrel auth"],
+      suggestedActions: ["Re-run the command to re-authenticate"],
       retryability: "NO_RETRY",
       recoveryStrategy: "REAUTHENTICATE",
       severity: "ERROR",

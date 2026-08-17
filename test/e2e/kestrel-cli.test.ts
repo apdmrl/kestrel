@@ -47,9 +47,23 @@ describe("kestrel CLI", () => {
     expect(result.status).toBe(0);
     const parsed = JSON.parse(result.stdout) as {
       ok: boolean;
-      data: { counts: { accepted: number } };
+      data: { kind: string; entries: unknown[] };
     };
     expect(parsed.ok).toBe(true);
+    expect(parsed.data.kind).toBe("journey");
+    expect(parsed.data.entries).toEqual([]);
+  });
+
+  it("prints zero progress counts as JSON without credentials", async () => {
+    home = await mkdtemp(join(tmpdir(), "kestrel-e2e-"));
+    const result = run(["--json", "progress"]);
+    expect(result.status).toBe(0);
+    const parsed = JSON.parse(result.stdout) as {
+      ok: boolean;
+      data: { kind: string; counts: { accepted: number } };
+    };
+    expect(parsed.ok).toBe(true);
+    expect(parsed.data.kind).toBe("progress");
     expect(parsed.data.counts.accepted).toBe(0);
   });
 

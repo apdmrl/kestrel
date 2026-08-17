@@ -8,12 +8,21 @@ const root = process.cwd();
 
 function noopHandlers(): CommandHandlers {
   const view = async () => ({
-    kind: "progress" as const,
-    counts: { accepted: 0, completed: 0, submitted: 0, linked: 0, merged: 0, abandoned: 0 },
+    kind: "verification" as const,
+    text: "ok",
   });
   return {
-    find: async () => ({ kind: "verification", text: "found" }),
+    find: view,
+    missionAccept: view,
+    missionPrepare: view,
+    missionResume: view,
     missionCurrent: view,
+    missionComplete: view,
+    missionAbandon: view,
+    agentBrief: view,
+    verifySubmission: view,
+    verifyLink: view,
+    verifyMerge: view,
     journey: view,
     progress: view,
     preferencesGet: view,

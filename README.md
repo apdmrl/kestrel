@@ -8,7 +8,16 @@ Kestrel prepares the work. The developer owns the work.
 
 ```
 kestrel find                      # discover one recommended challenge
-kestrel current                   # show the current mission
+kestrel mission accept            # accept a discovered challenge as a mission
+kestrel mission prepare           # prepare the mission workspace (resumable)
+kestrel mission resume            # resume an interrupted preparation
+kestrel mission current           # show the current mission
+kestrel mission complete          # complete the mission with local evidence
+kestrel mission abandon           # abandon the mission
+kestrel agent brief               # record an immutable agent brief handoff
+kestrel verify submission         # verify a submitted pull request
+kestrel verify link               # verify an issue link for a pull request
+kestrel verify merge              # verify a merged pull request
 kestrel journey                   # show the engineering journey
 kestrel progress                  # show journey progress counts
 kestrel preferences get           # show preferences

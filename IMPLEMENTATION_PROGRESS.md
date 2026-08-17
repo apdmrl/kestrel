@@ -1,19 +1,33 @@
 # Kestrel v0.1 Implementation Progress
 
-Current milestone: 18 (complete)
-Current task: 18.3 (complete)
-Last green commit: pending final commit
-Last verification: final gate — boundaries, lint, format, typecheck, test (356), build, pack all green
+> This file now tracks the **review-fix** pass (starting from commit `a4f59db`) described in
+> `docs/kestrel/deepseek-review-fix-prompt.md`. The previous "v0.1 complete" claim is
+> **retracted** until every required workflow and the final verification gate is green again.
+
+Current phase: 1 (Make the production CLI functional)
+Current verification: not green (work in progress)
+Last green commit: none yet (working tree has uncommitted Phase 1 changes)
+
+## Review-fix phases
+
+- [x] Phase 1 — Make the production CLI functional
+- [ ] Phase 2 — Repair mission preparation and recovery
+- [ ] Phase 3 — Maintain the Mission index
+- [ ] Phase 4 — Repair credential handling
+- [ ] Phase 5 — Secure submission verification
+- [ ] Phase 6 — Bind merge verification to the submitted PR
+- [ ] Phase 7 — Fix evidence and issue-link integrity
+- [ ] Phase 8 — Harden filesystem and locking safety
+- [ ] Phase 9 — Make ledger and handoff writes durable
+- [ ] Phase 10 — Add real end-to-end coverage
 
 ## Decisions
 
-- 2026-08-17: Implementation started from the approved architecture and implementation plan.
-- 2026-08-17: `EvidenceDecision` (`src/domain/policy/evidence-decision.ts`) was created in Task 4.2 because `Mission.complete(evidenceDecision)` needs it before Task 5.1; Task 5.1 layers the policy contract on top.
-- 2026-08-17: `Mission.abandon()` is allowed from any non-terminal active state (ACCEPTED, PREPARING, IN_PROGRESS) per Task 12.3's "nonterminal active states", reconciling the Global Constraint diagram (IN_PROGRESS → ABANDONED) with the recoverable-preparation "Abandon" recovery action.
-- 2026-08-17: `TransactionIntent` additionally stores `sidecarPath` (in Task 7.3) because recovery must locate the mission state file independently of the mission aggregate.
-- 2026-08-17: The CLI entry point (`src/cli/main.ts`) is an allowed composition seam that imports bootstrap; the boundary scanner exempts it explicitly.
-- 2026-08-17: The npm cache is configured at a writable workspace path via `npm_config_cache` in tests/packaging because the default `~/.npm` cache is read-only in this environment.
-- 2026-08-17: `vitest` runs test files sequentially (`fileParallelism: false`) so the e2e build and package-pack tests do not race on `dist/`.
+- 2026-08-17: Original implementation started from the approved architecture and implementation plan.
+- Retracted: the prior "v0.1 complete" acceptance claim. The code-review pass found verified
+  defects (placeholder CLI handlers, non-durable preparation, missing index writer, credential
+  redaction bug, trust-bearing verification inputs, and more) that must be fixed before v0.1 is
+  genuinely usable from the packaged CLI.
 
 ## Blockers
 

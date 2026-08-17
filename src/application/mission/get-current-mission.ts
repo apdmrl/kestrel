@@ -15,7 +15,12 @@ export interface GetCurrentMissionInput {
 }
 
 export type GetCurrentMissionResult =
-  | { readonly kind: "mission"; readonly mission: Mission }
+  | {
+      readonly kind: "mission";
+      readonly mission: Mission;
+      readonly sidecarPath: string;
+      readonly version: number;
+    }
   | { readonly kind: "none" }
   | { readonly kind: "ambiguous"; readonly missionIds: readonly MissionId[] };
 
@@ -43,7 +48,12 @@ async function loadMission(
   if (stored === undefined) {
     return { kind: "none" };
   }
-  return { kind: "mission", mission: stored.mission };
+  return {
+    kind: "mission",
+    mission: stored.mission,
+    sidecarPath: entry.sidecarPath,
+    version: stored.version,
+  };
 }
 
 /** Resolve the current mission without acquiring a mutation lock. */
