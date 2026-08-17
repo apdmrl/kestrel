@@ -62,8 +62,17 @@ function corruptError(message: string) {
 
 /**
  * Atomically replace the target path with a JSON serialization of the value,
- * validated against the given schema. A failure never truncates or replaces a
- * previously valid primary file.
+ * validated against the given schema. A failure before the rename never
+ * truncates or replaces a previously valid primary file.
+ *
+ * A failure of the post-rename directory fsync is modeled as durability
+ * uncertainty, not as a failed write: the rename has already made the intended
+ * value the visible state, so the function reconciles by reading the target
+ * back. When the intended value is verifiably installed, the write is reported
+ * as successful (a retry would be idempotent and could not create a different
+ * mission, recommendation, index entry, transaction intent, or checkpoint).
+ * Only when reconciliation cannot confirm installation does the function
+ * report an ordinary DM_STATE_WRITE_FAILED.
  */
 export async function writeJsonAtomically<T>(
   path: string,
@@ -75,21 +84,30 @@ export async function writeJsonAtomically<T>(
   if (!parsed.success) {
     throw corruptError("Refusing to write state that fails schema validation");
   }
+  const serialized = JSON.stringify(parsed.data, null, 2) + "\n";
   const tempPath = path + "." + randomUUID() + ".tmp";
   let handle;
+  let renameCommitted = false;
   try {
     handle = await open(tempPath, "w");
-    await handle.writeFile(JSON.stringify(parsed.data, null, 2) + "\n", "utf8");
+    await handle.writeFile(serialized, "utf8");
     await handle.sync();
     await handle.close();
     handle = undefined;
     await rename(tempPath, path);
+    renameCommitted = true;
     await fsyncParentDirectory(dirname(path), options);
   } catch (error) {
     if (handle !== undefined) {
       await handle.close().catch(() => undefined);
     }
     await unlink(tempPath).catch(() => undefined);
+    if (renameCommitted && (await reconcileInstalled(path, serialized))) {
+      // The rename committed before the directory fsync failed and the
+      // intended value is verifiably installed: the write is committed, even
+      // though the directory entry's power-loss durability is best-effort.
+      return;
+    }
     throw createKestrelError({
       code: "DM_STATE_WRITE_FAILED",
       category: "TRANSIENT",
@@ -100,6 +118,15 @@ export async function writeJsonAtomically<T>(
       severity: "ERROR",
       cause: error,
     });
+  }
+}
+
+/** Prove whether the intended serialized value is the visible target content. */
+async function reconcileInstalled(path: string, expected: string): Promise<boolean> {
+  try {
+    return (await readFile(path, "utf8")) === expected;
+  } catch {
+    return false;
   }
 }
 

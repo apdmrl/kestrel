@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -80,17 +80,63 @@ describe("atomic-json-file", () => {
     expect(await readValidatedJson(path, schema)).toEqual({ value: 1 });
   });
 
-  it("surfaces a directory fsync failure without corrupting the primary file", async () => {
+  it("treats a committed rename with a failed directory fsync as installed", async () => {
     const path = join(dir, "state.json");
     await writeJsonAtomically(path, { value: 1 }, schema);
+    // The directory fsync fails after the rename committed. The API must not
+    // report an ordinary write failure while the new value is already the
+    // visible state: it reconciles by reading the target back and, because the
+    // intended value is verifiably installed, returns success so callers never
+    // retry as though nothing changed.
+    await writeJsonAtomically(path, { value: 2 }, schema, {
+      fsyncDirectory: async () => {
+        throw new Error("injected fsync failure");
+      },
+    });
+    expect(await readValidatedJson(path, schema)).toEqual({ value: 2 });
+  });
+
+  it("keeps the previous target intact when the failure happens before the rename", async () => {
+    const path = join(dir, "state.json");
+    await mkdir(path); // The rename target is an existing directory: rename fails.
+    await expect(
+      writeJsonAtomically(path, { value: 1 }, schema),
+    ).rejects.toMatchObject({ code: "DM_STATE_WRITE_FAILED" });
+    // The pre-rename failure preserves the previous target and leaves no temp
+    // residue; it remains an ordinary write failure.
+    const entries = await readdir(dir);
+    expect(entries).toEqual(["state.json"]);
+    expect((await stat(path)).isDirectory()).toBe(true);
+  });
+
+  it("reports a committed rename whose reconciliation cannot confirm installation", async () => {
+    const path = join(dir, "state.json");
+    await writeJsonAtomically(path, { value: 1 }, schema);
+    // The fsync hook deletes the target and then fails: the rename committed,
+    // but reconciliation proves the intended value is NOT installed.
     await expect(
       writeJsonAtomically(path, { value: 2 }, schema, {
         fsyncDirectory: async () => {
+          await rm(path, { force: true });
           throw new Error("injected fsync failure");
         },
       }),
     ).rejects.toMatchObject({ code: "DM_STATE_WRITE_FAILED" });
-    // The rename already committed; the primary file remains valid, not truncated.
+    expect(await readValidatedJson(path, schema)).toBeUndefined();
+  });
+
+  it("retries idempotently after a reconciled install", async () => {
+    const path = join(dir, "state.json");
+    await writeJsonAtomically(path, { value: 2 }, schema);
+    // Retry the identical write under a failing directory fsync: the reconciled
+    // install is idempotent and the value stays the same.
+    await writeJsonAtomically(path, { value: 2 }, schema, {
+      fsyncDirectory: async () => {
+        throw new Error("injected fsync failure");
+      },
+    });
+    await writeJsonAtomically(path, { value: 2 }, schema);
     expect(await readValidatedJson(path, schema)).toEqual({ value: 2 });
+    expect(await readdir(dir)).toEqual(["state.json"]);
   });
 });
