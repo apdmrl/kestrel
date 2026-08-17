@@ -81,6 +81,7 @@ export class ExecaProcessRunner implements ProcessRunner {
         shell: false,
         reject: false,
         ...(options.env !== undefined ? { env: options.env } : {}),
+        ...(options.input !== undefined ? { input: options.input } : {}),
         maxBuffer: MAX_OUTPUT_LENGTH,
       });
     } catch (error) {

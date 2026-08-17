@@ -11,6 +11,7 @@ export interface RunProcessOptions {
   readonly timeoutMs?: number;
   readonly signal?: AbortSignal;
   readonly env?: Readonly<Record<string, string>>;
+  readonly input?: string;
 }
 
 /**

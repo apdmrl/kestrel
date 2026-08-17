@@ -32,7 +32,8 @@ export type ErrorCode =
   | "DM_GIT_FATAL"
   | "DM_GIT_TIMEOUT"
   | "DM_GIT_CANCELLED"
-  | "DM_UNSAFE_PATH";
+  | "DM_UNSAFE_PATH"
+  | "DM_GITHUB_AUTH_CANCELLED";
 
 export type Retryability = "NO_RETRY" | "RETRYABLE" | "RETRY_WITH_BACKOFF";
 
