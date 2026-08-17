@@ -1,9 +1,10 @@
 import type { Challenge } from "../challenge/challenge.js";
 import { snapshotChallenge } from "../challenge/challenge.js";
 import type { RepositoryIdentity } from "../challenge/repository-identity.js";
-import { createEvidenceCollection } from "../evidence/evidence-collection.js";
+import { addEvidence, createEvidenceCollection } from "../evidence/evidence-collection.js";
 import type { EvidenceCollection } from "../evidence/evidence-collection.js";
 import type {
+  Evidence,
   IssueLinkEvidence,
   MergeEvidence,
   PullRequestEvidence,
@@ -298,6 +299,14 @@ export class Mission {
       return err("DM_INVALID_MISSION", "abandon reason must not be empty");
     }
     return ok(new Mission({ ...this.state, status: "ABANDONED" }));
+  }
+
+  addEvidence(evidence: Evidence): DomainResult<Mission> {
+    const result = addEvidence(this.state.evidence, evidence);
+    if (!result.ok) {
+      return result;
+    }
+    return ok(new Mission({ ...this.state, evidence: result.value }));
   }
 
   recordSubmitted(pr: PullRequestEvidence): DomainResult<Mission> {

@@ -40,7 +40,8 @@ export type ErrorCode =
   | "DM_GITHUB_NOT_FOUND"
   | "DM_GITHUB_FATAL"
   | "DM_REPOSITORY_MISMATCH"
-  | "DM_BASE_SHA_MISSING";
+  | "DM_BASE_SHA_MISSING"
+  | "DM_EVIDENCE_BLOCKED";
 
 export type Retryability = "NO_RETRY" | "RETRYABLE" | "RETRY_WITH_BACKOFF";
 
