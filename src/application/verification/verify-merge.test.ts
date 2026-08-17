@@ -222,4 +222,41 @@ describe("verifyMerge", () => {
     });
     expect(result.kind).toBe("not-merged");
   });
+
+  it("rejects an unrelated merged pull request", async () => {
+    await expect(
+      verifyMerge(deps(new FakeGateway()), {
+        mission: submittedMission(),
+        sidecarPath: "/tmp/ws/m1/kestrel",
+        lockPath: "/tmp/ws/m1/kestrel/.lock",
+        expectedStateVersion: 0,
+        token: "token",
+        prNumber: 100,
+      }),
+    ).rejects.toMatchObject({ code: "DM_VERIFICATION_CONFLICT" });
+  });
+
+  it("replays an already-merged mission without duplicating the event", async () => {
+    const journey = new FakeJourneyStore();
+    const first = await verifyMerge(deps(new FakeGateway(), journey), {
+      mission: submittedMission(),
+      sidecarPath: "/tmp/ws/m1/kestrel",
+      lockPath: "/tmp/ws/m1/kestrel/.lock",
+      expectedStateVersion: 0,
+      token: "token",
+      prNumber: 99,
+    });
+    expect(first.kind).toBe("merged");
+    const merged = first.kind === "merged" ? first.mission : submittedMission();
+    const second = await verifyMerge(deps(new FakeGateway(), journey), {
+      mission: merged,
+      sidecarPath: "/tmp/ws/m1/kestrel",
+      lockPath: "/tmp/ws/m1/kestrel/.lock",
+      expectedStateVersion: 0,
+      token: "token",
+      prNumber: 99,
+    });
+    expect(second.kind).toBe("merged");
+    expect(journey.events.filter((e) => e.type === "PullRequestMerged")).toHaveLength(1);
+  });
 });

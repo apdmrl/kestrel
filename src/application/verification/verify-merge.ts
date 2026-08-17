@@ -45,9 +45,32 @@ export async function verifyMerge(
   deps: VerifyMergeDeps,
   input: VerifyMergeInput,
 ): Promise<VerifyMergeResult> {
+  const submitted = input.mission.submittedPullRequest;
+  if (submitted === undefined) {
+    throw createKestrelError({
+      code: "DM_ILLEGAL_TRANSITION",
+      category: "INVALID_INPUT",
+      userMessage: "A merge requires prior verified submission evidence",
+      suggestedActions: ["Verify the submission before verifying the merge"],
+      retryability: "NO_RETRY",
+      recoveryStrategy: "USER_ACTION",
+      severity: "ERROR",
+    });
+  }
+  if (input.prNumber !== submitted.number) {
+    throw createKestrelError({
+      code: "DM_VERIFICATION_CONFLICT",
+      category: "CONFLICT",
+      userMessage: "The supplied pull request does not match the submitted pull request",
+      suggestedActions: ["Verify the merge for the submitted pull request"],
+      retryability: "NO_RETRY",
+      recoveryStrategy: "USER_ACTION",
+      severity: "ERROR",
+    });
+  }
   const mergeInfo = await deps.gateway.getMergeInfo(
     missionRepository(input.mission),
-    input.prNumber,
+    submitted.number,
     input.token,
   );
   if (!mergeInfo.merged) {
@@ -72,7 +95,7 @@ export async function verifyMerge(
     id: deps.idGenerator.newEvidenceId(),
     missionId: input.mission.id,
     observedAt: deps.clock.now(),
-    pullRequestNumber: input.prNumber,
+    pullRequestNumber: submitted.number,
     repository: missionRepository(input.mission),
     mergeSha: mergeInfo.mergeSha ?? "",
     mergedAt: mergeInfo.mergedAt ?? deps.clock.now(),
@@ -106,7 +129,7 @@ export async function verifyMerge(
     missionId: input.mission.id,
     type: "PullRequestMerged",
     occurredAt: deps.clock.now(),
-    payload: { pullRequestNumber: input.prNumber, mergeSha: mergeInfo.mergeSha ?? "" },
+    payload: { pullRequestNumber: submitted.number, mergeSha: mergeInfo.mergeSha ?? "" },
   });
   if (!event.ok) {
     throw createKestrelError({

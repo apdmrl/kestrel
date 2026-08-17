@@ -206,6 +206,17 @@ export class Mission {
     ) {
       return err("DM_INVALID_MISSION", "NONE verification must not have PR or merge evidence");
     }
+    if (state.submittedPullRequest !== undefined && state.mergeEvidence !== undefined) {
+      if (
+        state.submittedPullRequest.number !== state.mergeEvidence.pullRequestNumber ||
+        !sameRepository(state.submittedPullRequest.repository, state.mergeEvidence.repository)
+      ) {
+        return err(
+          "DM_INVALID_MISSION",
+          "merge evidence must reference the submitted pull request and repository",
+        );
+      }
+    }
     for (let i = 0; i < state.preparationCheckpoints.length; i++) {
       if (state.preparationCheckpoints[i]?.checkpoint !== PREPARATION_CHECKPOINTS[i]) {
         return err("DM_INVALID_MISSION", "preparation checkpoints are out of order");
@@ -383,6 +394,19 @@ export class Mission {
     }
     if (this.state.submissionVerification !== "SUBMITTED") {
       return err("DM_ILLEGAL_TRANSITION", "cannot record a merge before a submitted PR");
+    }
+    const submitted = this.state.submittedPullRequest;
+    if (submitted === undefined) {
+      return err("DM_ILLEGAL_TRANSITION", "cannot record a merge without submitted PR evidence");
+    }
+    if (
+      submitted.number !== merge.pullRequestNumber ||
+      !sameRepository(submitted.repository, merge.repository)
+    ) {
+      return err(
+        "DM_VERIFICATION_CONFLICT",
+        "merge evidence must reference the submitted pull request and repository",
+      );
     }
     return ok(
       new Mission({

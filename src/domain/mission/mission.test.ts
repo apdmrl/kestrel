@@ -323,6 +323,26 @@ describe("Mission submission verification", () => {
     expect(result.ok).toBe(false);
   });
 
+  it("rejects a merge that references a different pull request", () => {
+    const submitted = preparedMission().recordSubmitted(prEvidence(99));
+    if (!submitted.ok) {
+      throw new Error("expected ok");
+    }
+    expect(submitted.value.recordMerged(mergeEvidence(100)).ok).toBe(false);
+  });
+
+  it("rejects a merge that references a different repository", () => {
+    const submitted = preparedMission().recordSubmitted(prEvidence(99));
+    if (!submitted.ok) {
+      throw new Error("expected ok");
+    }
+    const wrongRepo = {
+      ...mergeEvidence(99),
+      repository: { provider: "github" as const, owner: "other", name: "repo" },
+    };
+    expect(submitted.value.recordMerged(wrongRepo).ok).toBe(false);
+  });
+
   it("allows issue linkage before merge", () => {
     const submitted = preparedMission().recordSubmitted(prEvidence(99));
     if (!submitted.ok) {

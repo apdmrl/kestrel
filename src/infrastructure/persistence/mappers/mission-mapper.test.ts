@@ -169,6 +169,43 @@ describe("mission mapper", () => {
     }
   });
 
+  it("rejects rehydration with mismatched merge and submitted pull requests", () => {
+    const mission = buildMission("IN_PROGRESS");
+    const pr = createPullRequestEvidence({
+      id: "pr-1" as EvidenceId,
+      missionId: "m1" as MissionId,
+      observedAt: acceptedAt,
+      number: 99,
+      url: "https://github.com/o/n/pull/99",
+      repository: { provider: "github", owner: "o", name: "n" },
+      author: "dev",
+      commits: ["abc"],
+      state: "OPEN",
+    });
+    const submitted = mission.recordSubmitted(pr.ok ? pr.value : ({} as never));
+    const merge = createMergeEvidence({
+      id: "merge-1" as EvidenceId,
+      missionId: "m1" as MissionId,
+      observedAt: acceptedAt,
+      pullRequestNumber: 99,
+      repository: { provider: "github", owner: "o", name: "n" },
+      mergeSha: "merge-sha",
+      mergedAt: acceptedAt,
+    });
+    const merged = submitted.ok
+      ? submitted.value.recordMerged(merge.ok ? merge.value : ({} as never))
+      : null;
+    if (!merged?.ok) {
+      throw new Error("expected ok");
+    }
+    const persisted = toPersistedMission(merged.value);
+    const mismatched = {
+      ...persisted,
+      mergeEvidence: { ...persisted.mergeEvidence, pullRequestNumber: 100 },
+    };
+    expect(fromPersistedMission(mismatched).ok).toBe(false);
+  });
+
   it("rejects an unknown future schema version", () => {
     const persisted = toPersistedMission(buildMission("ACCEPTED"));
     const result = fromPersistedMission({ ...persisted, schemaVersion: 2 });
