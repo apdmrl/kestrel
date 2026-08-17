@@ -80,10 +80,26 @@ describe("createProgram command routing", () => {
     expect(calls).toEqual([{ handler: "find", args: [{ mood: "QUICK_WIN", type: "BUG_FIX" }] }]);
   });
 
-  it("routes mission accept", async () => {
+  it("routes mission accept with a required recommendation id", async () => {
     const { handlers: h, calls } = handlers();
-    await parse(h, ["mission", "accept"]);
-    expect(calls).toEqual([{ handler: "missionAccept", args: [{}] }]);
+    await parse(h, ["mission", "accept", "--id", "challenge-42"]);
+    expect(calls).toEqual([
+      { handler: "missionAccept", args: [{ recommendationId: "challenge-42" }] },
+    ]);
+  });
+
+  it("rejects mission accept without a recommendation id before running the handler", async () => {
+    const { handlers: h, calls } = handlers();
+    const c = capture();
+    const program = createProgram({ handlers: h, stdout: c.stdout, stderr: c.stderr });
+    program.exitOverride();
+    await expect(program.parseAsync(["node", "kestrel", "mission", "accept"])).rejects.toMatchObject(
+      { code: "commander.missingMandatoryOptionValue" },
+    );
+    // The handler must never run for a bare accept.
+    expect(calls).toEqual([]);
+    expect(c.getErr()).toContain("--id");
+    expect(c.getErr()).toContain("recommendation");
   });
 
   it("routes mission accept with the recommendation identifier", async () => {

@@ -8,7 +8,15 @@ export async function main(): Promise<void> {
   const interactive = !process.argv.includes("--no-interactive");
   const handlers = await bootstrap(config, { interactive });
   const program = createProgram({ handlers });
-  await program.parseAsync(process.argv);
+  try {
+    await program.parseAsync(process.argv);
+  } catch (error) {
+    // createProgram enables exitOverride, so Commander never calls
+    // process.exit directly: it has already written the message and help to
+    // stderr through the configured channel. Propagate its exit code.
+    const exitCode = (error as { exitCode?: unknown }).exitCode;
+    process.exitCode = typeof exitCode === "number" ? exitCode : 1;
+  }
 }
 
 // main.ts is only the process entry point, never imported by other modules.

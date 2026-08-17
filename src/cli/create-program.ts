@@ -35,6 +35,13 @@ export function createProgram(options: ProgramOptions): Command {
   const program = new Command();
   const out = options.stdout ?? ((text) => process.stdout.write(text));
   const err = options.stderr ?? ((text) => process.stderr.write(text));
+  // Route Commander's own help and validation errors through the same injected
+  // channels so the CLI output contract is testable and single-sourced.
+  program.configureOutput({ writeOut: out, writeErr: err });
+  // Turn process.exit() into a thrown CommanderError so callers (tests and the
+  // composition root) control exit codes instead of the process. Must be set
+  // before subcommands are created; they inherit this callback.
+  program.exitOverride();
 
   program
     .name("kestrel")
@@ -70,16 +77,10 @@ export function createProgram(options: ProgramOptions): Command {
   const mission = program.command("mission").description("accept, prepare, and manage missions");
   mission
     .command("accept")
-    .description(
-      "accept the recommendation shown by find (optionally bound to a recommendation --id)",
-    )
-    .option("--id <recommendationId>", "accept the recommendation with this identifier")
-    .action((opts: { id?: string }) =>
-      run(() =>
-        options.handlers.missionAccept({
-          ...(opts.id !== undefined ? { recommendationId: opts.id } : {}),
-        }),
-      )(),
+    .description("accept the exact recommendation shown by find, bound by its immutable --id")
+    .requiredOption("--id <recommendationId>", "accept the recommendation with this identifier")
+    .action((opts: { id: string }) =>
+      run(() => options.handlers.missionAccept({ recommendationId: opts.id }))(),
     );
   const withMissionId = (command: Command): Command =>
     command.option("--id <missionId>", "target mission id");

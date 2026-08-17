@@ -318,7 +318,7 @@ describe("bootstrap recommendation binding", () => {
       expect(find.recommendationId).toBe("challenge-42");
     }
 
-    const accepted = await handlers.missionAccept({});
+    const accepted = await handlers.missionAccept({ recommendationId: "challenge-42" });
     expect(accepted.kind).toBe("mission");
     if (accepted.kind === "mission") {
       expect(accepted.title).toBe("Fix crash on startup");
@@ -326,22 +326,25 @@ describe("bootstrap recommendation binding", () => {
     expect(searches()).toBe(1);
   });
 
-  it("rejects a missing, unknown, malformed, or stale recommendation identifier", async () => {
+  it("rejects a missing, unknown, or malformed recommendation identifier", async () => {
     const { store, gateway } = authDeps();
     const challengeA = makeChallenge(42, "Fix crash on startup");
     const challengeB = makeChallenge(99, "Add documentation");
     const { source } = sequencingSource([challengeA, challengeB]);
 
-    const handlers = await bootstrap(createConfig({ KESTREL_HOME: dir }), {
-      credentialStore: store,
-      gateway,
-      challengeSourceFactory: () => source,
-    });
+    const handlers = await bootstrap(
+      createConfig({ KESTREL_HOME: dir, KESTREL_WORKSPACE: join(dir, "workspace") }),
+      {
+        credentialStore: store,
+        gateway,
+        challengeSourceFactory: () => source,
+      },
+    );
 
     // No recommendation persisted yet.
-    await expect(handlers.missionAccept({})).rejects.toMatchObject({
-      code: "DM_RECOMMENDATION_NOT_FOUND",
-    });
+    await expect(
+      handlers.missionAccept({ recommendationId: "challenge-42" }),
+    ).rejects.toMatchObject({ code: "DM_RECOMMENDATION_NOT_FOUND" });
 
     const first = await handlers.find({ mood: "QUICK_WIN" });
     expect(first.kind).toBe("recommendation");
@@ -356,10 +359,13 @@ describe("bootstrap recommendation binding", () => {
       code: "DM_ILLEGAL_TRANSITION",
     });
 
-    // A later find supersedes the first recommendation, making it stale.
+    // A later find writes an immutable separate snapshot: it never supersedes
+    // the first recommendation, so the earlier id stays valid.
     await handlers.find({ mood: "QUICK_WIN" });
-    await expect(
-      handlers.missionAccept({ recommendationId: "challenge-42" }),
-    ).rejects.toMatchObject({ code: "DM_RECOMMENDATION_NOT_FOUND" });
+    const accepted = await handlers.missionAccept({ recommendationId: "challenge-42" });
+    expect(accepted.kind).toBe("mission");
+    if (accepted.kind === "mission") {
+      expect(accepted.title).toBe("Fix crash on startup");
+    }
   });
 });

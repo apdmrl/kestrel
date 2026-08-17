@@ -55,6 +55,31 @@ async function runGit(cwd: string, args: string[]): Promise<void> {
   await execFileAsync("git", args, { cwd, encoding: "utf8" });
 }
 
+/** Extract the recommendation title from plain find output. */
+function extractRecommendationTitle(stdout: string): string {
+  const match = /^Recommendation: (.+)$/m.exec(stdout);
+  if (match === null) {
+    throw new Error("find output did not expose a Recommendation title:\n" + stdout);
+  }
+  return match[1] as string;
+}
+
+/** Extract the stable recommendation id from plain find output. */
+function extractRecommendationId(stdout: string): string {
+  const match = /Recommendation ID: (\S+)/.exec(stdout);
+  if (match === null) {
+    throw new Error("find output did not expose a Recommendation ID:\n" + stdout);
+  }
+  return match[1] as string;
+}
+
+/** Run find and return the stable recommendation id shown to the user. */
+async function findRecommendationId(): Promise<string> {
+  const find = await runCli(["find", "--mood", "QUICK_WIN"]);
+  expect(find.status).toBe(0);
+  return extractRecommendationId(find.stdout);
+}
+
 async function findRepo(): Promise<string> {
   const entries = await readdir(workspace);
   for (const entry of entries) {
@@ -207,8 +232,9 @@ describe("kestrel end-to-end workflow", () => {
     const find = await runCli(["find", "--mood", "QUICK_WIN"]);
     expect(find.status).toBe(0);
     expect(find.stdout).toContain("Fix crash on startup");
+    const recommendationId = extractRecommendationId(find.stdout);
 
-    const accept = await runCli(["mission", "accept"]);
+    const accept = await runCli(["mission", "accept", "--id", recommendationId]);
     expect(accept.status).toBe(0);
     expect(accept.stdout).toContain("ACCEPTED");
     // Acceptance must bind to the recommendation the user saw, not re-discover.
@@ -230,10 +256,9 @@ describe("kestrel end-to-end workflow", () => {
   }, 60_000);
 
   it("records an immutable agent brief handoff", async () => {
-    const find = await runCli(["find", "--mood", "QUICK_WIN"]);
-    expect(find.status).toBe(0);
+    const recommendationId = await findRecommendationId();
 
-    const accept = await runCli(["mission", "accept"]);
+    const accept = await runCli(["mission", "accept", "--id", recommendationId]);
     expect(accept.status).toBe(0);
 
     const brief = await runCli(["agent", "brief", "--hypothesis", "a null deref"]);
@@ -260,9 +285,8 @@ describe("kestrel end-to-end workflow", () => {
   }, 30_000);
 
   it("rejects a submission whose pull request author does not match", async () => {
-    const find = await runCli(["find", "--mood", "QUICK_WIN"]);
-    expect(find.status).toBe(0);
-    const accept = await runCli(["mission", "accept"]);
+    const recommendationId = await findRecommendationId();
+    const accept = await runCli(["mission", "accept", "--id", recommendationId]);
     expect(accept.status).toBe(0);
     const prepare = await runCli(["mission", "prepare"]);
     expect(prepare.status).toBe(0);
@@ -271,6 +295,40 @@ describe("kestrel end-to-end workflow", () => {
     expect(verify.status).toBe(0);
     expect(verify.stdout).toContain("Not submitted");
     expect(verify.stdout).toContain("authenticated author");
+  }, 60_000);
+
+  it("accepts exactly the recommendation bound by --id across two terminals", async () => {
+    // Reset the shared fake-server counter so this test deterministically sees
+    // a distinct issue per find (issue 42, then issue 99).
+    searchCount = 0;
+
+    // Terminal A discovers a recommendation and captures its stable id.
+    const findA = await runCli(["find", "--mood", "QUICK_WIN"]);
+    expect(findA.status).toBe(0);
+    const idA = extractRecommendationId(findA.stdout);
+    const titleA = extractRecommendationTitle(findA.stdout);
+
+    // Terminal B later discovers a different recommendation; it must never
+    // replace or shadow the snapshot terminal A is looking at.
+    const findB = await runCli(["find", "--mood", "QUICK_WIN"]);
+    expect(findB.status).toBe(0);
+    const idB = extractRecommendationId(findB.stdout);
+    const titleB = extractRecommendationTitle(findB.stdout);
+    expect(idB).not.toBe(idA);
+    expect(titleB).not.toBe(titleA);
+
+    // Accepting terminal A's id must create mission A, never mission B.
+    const acceptA = await runCli(["mission", "accept", "--id", idA]);
+    expect(acceptA.status).toBe(0);
+    expect(acceptA.stdout).toContain(titleA);
+    expect(acceptA.stdout).not.toContain(titleB);
+
+    // The other terminal's id remains acceptably loadable as a separate,
+    // immutable snapshot: accepting it binds to recommendation B.
+    const acceptB = await runCli(["mission", "accept", "--id", idB]);
+    expect(acceptB.status).toBe(0);
+    expect(acceptB.stdout).toContain(titleB);
+    expect(acceptB.stdout).not.toContain(titleA);
   }, 60_000);
 
   it("classifies a corrupt journey ledger without crashing", async () => {

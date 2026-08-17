@@ -153,7 +153,7 @@ export async function bootstrap(
   const handoffStore = new FileSystemAgentHandoffStore();
   const journeyStore = new JsonlJourneyStore(join(config.home, "journey", "events.jsonl"));
   const recommendationStore = new FileSystemRecommendationStore(
-    join(config.home, "recommendation.json"),
+    join(config.home, "recommendations"),
   );
   const journal = new FileTransactionJournal(join(config.home, "transactions"));
   const runner = new ExecaProcessRunner();
@@ -306,11 +306,8 @@ export async function bootstrap(
         reasons: recommendation.reasons,
       };
     },
-    missionAccept: async ({ recommendationId } = {}) => {
-      const recommendation =
-        recommendationId !== undefined
-          ? await loadRecommendation(recommendationId)
-          : await recommendationStore.loadLatest();
+    missionAccept: async ({ recommendationId }) => {
+      const recommendation = await loadRecommendation(recommendationId);
       if (recommendation === undefined) {
         throw recommendationNotFound();
       }
