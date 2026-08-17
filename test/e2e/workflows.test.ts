@@ -16,6 +16,7 @@ let serverUrl = "";
 let home = "";
 let workspace = "";
 let fakeGitDir = "";
+let noCredGitDir = "";
 let fixture = "";
 
 interface CliResult {
@@ -106,6 +107,25 @@ beforeAll(async () => {
   );
   await chmod(join(fakeGitDir, "git"), 0o755);
 
+  noCredGitDir = await mkdtemp(join(tmpdir(), "kestrel-e2e-nocred-"));
+  await writeFile(
+    join(noCredGitDir, "git"),
+    [
+      "#!/usr/bin/env bash",
+      'if [ "$1" = "credential" ] && [ "$2" = "fill" ]; then',
+      "  exit 0",
+      "fi",
+      'if [ "$1" = "config" ] && [ "$2" = "--get" ] && [ "$3" = "credential.helper" ]; then',
+      "  printf 'fake-helper\n'",
+      "  exit 0",
+      "fi",
+      'exec /usr/bin/git "$@"',
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  await chmod(join(noCredGitDir, "git"), 0o755);
+
   server = createServer((req, res) => {
     const url = req.url ?? "";
     res.setHeader("content-type", "application/json");
@@ -130,6 +150,22 @@ beforeAll(async () => {
               labels: [{ name: "bug" }],
             },
           ],
+        }),
+      );
+      return;
+    }
+    if (url.startsWith("/repos/octocat/hello-world/pulls/")) {
+      if (url.includes("/commits")) {
+        res.end(JSON.stringify([]));
+        return;
+      }
+      res.end(
+        JSON.stringify({
+          number: 999,
+          html_url: "https://github.com/octocat/hello-world/pull/999",
+          user: { login: "someone-else" },
+          state: "open",
+          body: "closes #42",
         }),
       );
       return;
@@ -162,6 +198,7 @@ afterAll(async () => {
   if (home !== "") await rm(home, { recursive: true, force: true });
   if (workspace !== "") await rm(workspace, { recursive: true, force: true });
   if (fakeGitDir !== "") await rm(fakeGitDir, { recursive: true, force: true });
+  if (noCredGitDir !== "") await rm(noCredGitDir, { recursive: true, force: true });
   if (fixture !== "") await rm(join(fixture, ".."), { recursive: true, force: true });
 });
 
@@ -202,6 +239,9 @@ describe("kestrel end-to-end workflow", () => {
     const brief = await runCli(["agent", "brief", "--hypothesis", "a null deref"]);
     expect(brief.status).toBe(0);
     expect(brief.stdout).toContain("Handoff");
+
+    const abandon = await runCli(["mission", "abandon", "--reason", "done testing"]);
+    expect(abandon.status).toBe(0);
   }, 60_000);
 
   it("never renders a credential token in command output", async () => {
@@ -209,6 +249,29 @@ describe("kestrel end-to-end workflow", () => {
     expect(result.status).toBe(0);
     expect(result.stdout + result.stderr).not.toContain("FAKE_TOKEN_XYZ");
   }, 30_000);
+
+  it("fails non-interactive authentication immediately without a cached credential", async () => {
+    const result = await runCli(["--no-interactive", "find", "--mood", "QUICK_WIN"], {
+      PATH: noCredGitDir + ":" + process.env.PATH,
+    });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("DM_GITHUB_AUTH_REQUIRED");
+    expect(result.stdout + result.stderr).not.toContain("login/device");
+  }, 30_000);
+
+  it("rejects a submission whose pull request author does not match", async () => {
+    const find = await runCli(["find", "--mood", "QUICK_WIN"]);
+    expect(find.status).toBe(0);
+    const accept = await runCli(["mission", "accept"]);
+    expect(accept.status).toBe(0);
+    const prepare = await runCli(["mission", "prepare"]);
+    expect(prepare.status).toBe(0);
+
+    const verify = await runCli(["verify", "submission", "--pr", "999"]);
+    expect(verify.status).toBe(0);
+    expect(verify.stdout).toContain("Not submitted");
+    expect(verify.stdout).toContain("authenticated author");
+  }, 60_000);
 
   it("classifies a corrupt journey ledger without crashing", async () => {
     await mkdir(join(home, "journey"), { recursive: true });

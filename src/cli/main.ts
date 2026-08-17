@@ -4,7 +4,9 @@ import { createProgram } from "./create-program.js";
 
 export async function main(): Promise<void> {
   const config = createConfig(process.env as Record<string, string | undefined>);
-  const handlers = await bootstrap(config);
+  // Wire the commander --no-interactive flag into bootstrap before handlers run.
+  const interactive = !process.argv.includes("--no-interactive");
+  const handlers = await bootstrap(config, { interactive });
   const program = createProgram({ handlers });
   await program.parseAsync(process.argv);
 }
