@@ -38,7 +38,9 @@ export type ErrorCode =
   | "DM_GITHUB_ABUSE_LIMIT"
   | "DM_GITHUB_VALIDATION"
   | "DM_GITHUB_NOT_FOUND"
-  | "DM_GITHUB_FATAL";
+  | "DM_GITHUB_FATAL"
+  | "DM_REPOSITORY_MISMATCH"
+  | "DM_BASE_SHA_MISSING";
 
 export type Retryability = "NO_RETRY" | "RETRYABLE" | "RETRY_WITH_BACKOFF";
 

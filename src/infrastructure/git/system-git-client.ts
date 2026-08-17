@@ -66,6 +66,15 @@ export class SystemGitClient implements GitClient {
     return result.stdout.trim();
   }
 
+  async commitExists(sha: string): Promise<boolean> {
+    try {
+      await this.runGit(["cat-file", "-e", sha + "^{commit}"]);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   async collectChangesSince(baseSha: string): Promise<LocalChanges> {
     const headSha = await this.getHeadSha();
 

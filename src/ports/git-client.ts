@@ -19,4 +19,5 @@ export interface GitClient {
   getRepositoryIdentity(): Promise<RepositoryIdentity>;
   collectChangesSince(baseSha: string): Promise<LocalChanges>;
   getCurrentBranch(): Promise<string>;
+  commitExists(sha: string): Promise<boolean>;
 }

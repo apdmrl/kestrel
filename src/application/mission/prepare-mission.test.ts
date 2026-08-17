@@ -115,6 +115,9 @@ class FakeGit implements GitClient {
   async getCurrentBranch() {
     return "main";
   }
+  async commitExists(_sha: string): Promise<boolean> {
+    return true;
+  }
 }
 
 class FakeMissionStore implements MissionStore {
