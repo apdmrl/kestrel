@@ -59,6 +59,26 @@ function dedupe(values: readonly string[] | undefined): readonly string[] {
   return output;
 }
 
+/** Return a deep immutable copy of a challenge for snapshot storage. */
+export function snapshotChallenge(challenge: Challenge): Challenge {
+  return {
+    id: challenge.id,
+    source: {
+      ...challenge.source,
+      repository: { ...challenge.source.repository },
+    },
+    repository: { ...challenge.repository },
+    title: challenge.title,
+    description: challenge.description,
+    type: challenge.type,
+    labels: [...challenge.labels],
+    language: challenge.language,
+    topics: [...challenge.topics],
+    createdAt: challenge.createdAt,
+    updatedAt: challenge.updatedAt,
+  };
+}
+
 export function createChallenge(input: CreateChallengeInput): DomainResult<Challenge> {
   if (input.title.trim().length === 0) {
     return err("DM_INVALID_CHALLENGE", "Challenge title must not be empty");

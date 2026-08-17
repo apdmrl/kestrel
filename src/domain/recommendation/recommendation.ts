@@ -1,3 +1,4 @@
+import { snapshotChallenge } from "../challenge/challenge.js";
 import type { Challenge } from "../challenge/challenge.js";
 import type { DomainResult } from "../shared/result.js";
 import { err, ok } from "../shared/result.js";
@@ -38,22 +39,7 @@ function isUnit(value: number): boolean {
 }
 
 function copyChallenge(challenge: Challenge): Challenge {
-  return {
-    id: challenge.id,
-    source: {
-      ...challenge.source,
-      repository: { ...challenge.source.repository },
-    },
-    repository: { ...challenge.repository },
-    title: challenge.title,
-    description: challenge.description,
-    type: challenge.type,
-    labels: [...challenge.labels],
-    language: challenge.language,
-    topics: [...challenge.topics],
-    createdAt: challenge.createdAt,
-    updatedAt: challenge.updatedAt,
-  };
+  return snapshotChallenge(challenge);
 }
 
 function copySignalResults(signalResults: readonly SignalResult[]): SignalResult[] {
