@@ -1,12 +1,13 @@
 # Kestrel v0.1 Implementation Progress
 
-> This file now tracks the **review-fix** pass (starting from commit `a4f59db`) described in
-> `docs/kestrel/deepseek-review-fix-prompt.md`. The previous "v0.1 complete" claim is
-> **retracted** until every required workflow and the final verification gate is green again.
+> This file tracks the **review-fix** pass (starting from commit `a4f59db`) described in
+> `docs/kestrel/deepseek-review-fix-prompt.md`. All ten phases are complete and the final
+> verification gate is green again.
 
-Current phase: 10 (Add real end-to-end coverage)
-Current verification: not green (final gate pending)
-Last green commit: eed97c1 (Phase 9)
+Current phase: 10 (Add real end-to-end coverage) — complete
+Current verification: green — `npm ci`, boundaries, lint, format:check, typecheck,
+test (407 tests), build, and `npm pack --dry-run` all pass
+Last green commit: f28c47c (Phase 10)
 
 ## Review-fix phases
 
@@ -24,10 +25,10 @@ Last green commit: eed97c1 (Phase 9)
 ## Decisions
 
 - 2026-08-17: Original implementation started from the approved architecture and implementation plan.
-- Retracted: the prior "v0.1 complete" acceptance claim. The code-review pass found verified
-  defects (placeholder CLI handlers, non-durable preparation, missing index writer, credential
-  redaction bug, trust-bearing verification inputs, and more) that must be fixed before v0.1 is
-  genuinely usable from the packaged CLI.
+- Review-fix pass: the prior "v0.1 complete" acceptance claim was retracted after a code review
+  found verified defects (placeholder CLI handlers, non-durable preparation, missing index
+  writer, credential redaction bug, trust-bearing verification inputs, and more). All ten
+  review-fix phases are now complete and re-verified green.
 
 ## Blockers
 
