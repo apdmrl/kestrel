@@ -3,6 +3,7 @@ import { createPullRequestEvidence } from "../../domain/evidence/evidence.js";
 import type { Mission } from "../../domain/mission/mission.js";
 import type { RepositoryIdentity } from "../../domain/challenge/repository-identity.js";
 import type { Clock } from "../../ports/clock.js";
+import type { GitClient } from "../../ports/git-client.js";
 import type { GitHubGateway } from "../../ports/github-gateway.js";
 import type { IdGenerator } from "../../ports/id-generator.js";
 import type { JourneyStore } from "../../ports/journey-store.js";
@@ -21,6 +22,7 @@ export interface VerifySubmissionDeps {
   readonly journeyStore: JourneyStore;
   readonly indexStore: MissionIndexStore;
   readonly gateway: GitHubGateway;
+  readonly git: GitClient;
   readonly idGenerator: IdGenerator;
   readonly clock: Clock;
 }
@@ -31,9 +33,7 @@ export interface VerifySubmissionInput {
   readonly lockPath: string;
   readonly expectedStateVersion: number;
   readonly token: string;
-  readonly expectedAuthor: string;
   readonly prNumber: number;
-  readonly missionCommits: readonly string[];
 }
 
 export type VerifySubmissionResult =
@@ -44,12 +44,33 @@ function missionRepository(mission: Mission): RepositoryIdentity {
   return mission.challengeSnapshot.repository;
 }
 
+/** Derive the authenticated author from the gateway, never from caller input. */
+async function authenticatedAuthor(deps: VerifySubmissionDeps, token: string): Promise<string> {
+  const viewer = await deps.gateway.getViewer(token);
+  return viewer.login;
+}
+
+/** Derive mission commits from the verified local repository, never from caller input. */
+async function missionCommits(
+  deps: VerifySubmissionDeps,
+  mission: Mission,
+): Promise<readonly string[]> {
+  const base = mission.immutableBaseCommit;
+  if (base === undefined) {
+    return [];
+  }
+  const changes = await deps.git.collectChangesSince(base);
+  return changes.commits;
+}
+
 /** Verify a GitHub pull request as evidence of the mission's submission. */
 export async function verifySubmission(
   deps: VerifySubmissionDeps,
   input: VerifySubmissionInput,
 ): Promise<VerifySubmissionResult> {
   const repository = missionRepository(input.mission);
+  const author = await authenticatedAuthor(deps, input.token);
+  const commits = await missionCommits(deps, input.mission);
   const pr = await deps.gateway.getPullRequest(repository, input.prNumber, input.token);
 
   const existing = input.mission.submittedPullRequest;
@@ -60,9 +81,9 @@ export async function verifySubmission(
   const match = matchPullRequest({
     repository,
     prRepository: pr.repository,
-    expectedAuthor: input.expectedAuthor,
+    expectedAuthor: author,
     prAuthor: pr.author,
-    missionCommits: input.missionCommits,
+    missionCommits: commits,
     prCommits: pr.commits,
     ...(input.mission.branch !== undefined ? { missionBranch: input.mission.branch } : {}),
   });

@@ -24,6 +24,7 @@ import type {
   MergeInfo,
 } from "../../ports/github-gateway.js";
 import type { RepositoryIdentity } from "../../domain/challenge/repository-identity.js";
+import type { GitClient, LocalChanges } from "../../ports/git-client.js";
 import type { JourneyStore } from "../../ports/journey-store.js";
 import type { MissionLock } from "../../ports/mission-lock.js";
 import type { MissionStore, StoredMission } from "../../ports/mission-store.js";
@@ -143,6 +144,39 @@ class FakeMissionStore implements MissionStore {
     return { mission, version: v + 1 };
   }
 }
+class FakeGit implements GitClient {
+  commits: string[] = ["abc"];
+  async isAvailable() {
+    return true;
+  }
+  async clone(): Promise<void> {}
+  async getDefaultBranch() {
+    return "main";
+  }
+  async getHeadSha() {
+    return "head";
+  }
+  async createBranch(): Promise<void> {}
+  async getRepositoryIdentity(): Promise<RepositoryIdentity> {
+    return { provider: "github", owner: "octocat", name: "hello-world" };
+  }
+  async collectChangesSince(): Promise<LocalChanges> {
+    return {
+      commits: [...this.commits],
+      headSha: "head",
+      filesChanged: [],
+      insertions: 0,
+      deletions: 0,
+      workingTreeState: "CLEAN",
+    };
+  }
+  async getCurrentBranch() {
+    return "main";
+  }
+  async commitExists() {
+    return true;
+  }
+}
 class FakeJourneyStore implements JourneyStore {
   events: JourneyEvent[] = [];
   async append(e: JourneyEvent): Promise<void> {
@@ -187,7 +221,11 @@ const idGenerator = {
   newEvidenceId: () => ("ev" + ++counter) as EvidenceId,
 };
 
-function deps(gateway: FakeGateway, journeyStore: JourneyStore = new FakeJourneyStore()) {
+function deps(
+  gateway: FakeGateway,
+  journeyStore: JourneyStore = new FakeJourneyStore(),
+  git: GitClient = new FakeGit(),
+) {
   return {
     lock: new NoopLock(),
     journal: new FakeJournal(),
@@ -195,6 +233,7 @@ function deps(gateway: FakeGateway, journeyStore: JourneyStore = new FakeJourney
     journeyStore,
     indexStore: new FakeIndexStore(),
     gateway,
+    git,
     idGenerator,
     clock: { now: () => now },
   };
@@ -207,9 +246,7 @@ function input(mission: Mission, overrides: Record<string, unknown> = {}) {
     lockPath: "/tmp/ws/m1/kestrel/.lock",
     expectedStateVersion: 0,
     token: "token",
-    expectedAuthor: "octocat",
     prNumber: 99,
-    missionCommits: ["abc"],
     ...overrides,
   };
 }
@@ -231,6 +268,27 @@ describe("verifySubmission", () => {
   it("returns not-submitted for a wrong author", async () => {
     const gateway = new FakeGateway();
     gateway.pr = { ...gateway.pr, author: "someone-else" };
+    const result = await verifySubmission(deps(gateway), input(inProgressMission()));
+    expect(result.kind).toBe("not-submitted");
+  });
+
+  it("rejects caller-uncontrolled commits that do not match the mission work", async () => {
+    const gateway = new FakeGateway();
+    const git = new FakeGit();
+    git.commits = ["unrelated-sha"]; // mission's actual local commits differ from the PR
+    const result = await verifySubmission(
+      deps(gateway, new FakeJourneyStore(), git),
+      input(inProgressMission()),
+    );
+    expect(result.kind).toBe("not-submitted");
+  });
+
+  it("rejects a pull request from a different repository", async () => {
+    const gateway = new FakeGateway();
+    gateway.pr = {
+      ...gateway.pr,
+      repository: { provider: "github", owner: "other", name: "repo" },
+    };
     const result = await verifySubmission(deps(gateway), input(inProgressMission()));
     expect(result.kind).toBe("not-submitted");
   });

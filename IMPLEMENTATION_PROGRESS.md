@@ -4,9 +4,9 @@
 > `docs/kestrel/deepseek-review-fix-prompt.md`. The previous "v0.1 complete" claim is
 > **retracted** until every required workflow and the final verification gate is green again.
 
-Current phase: 4 (Repair credential handling)
+Current phase: 5 (Secure submission verification)
 Current verification: not green (work in progress)
-Last green commit: 0797b41 (Phase 3)
+Last green commit: fb1a62c (Phase 4)
 
 ## Review-fix phases
 
@@ -14,7 +14,7 @@ Last green commit: 0797b41 (Phase 3)
 - [x] Phase 2 — Repair mission preparation and recovery
 - [x] Phase 3 — Maintain the Mission index
 - [x] Phase 4 — Repair credential handling
-- [ ] Phase 5 — Secure submission verification
+- [x] Phase 5 — Secure submission verification
 - [ ] Phase 6 — Bind merge verification to the submitted PR
 - [ ] Phase 7 — Fix evidence and issue-link integrity
 - [ ] Phase 8 — Harden filesystem and locking safety

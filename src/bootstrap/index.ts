@@ -222,17 +222,6 @@ export async function bootstrap(config: KestrelConfig): Promise<CommandHandlers>
     );
   };
 
-  const collectMissionCommits = async (mission: Mission): Promise<readonly string[]> => {
-    const repoPath = mission.workspace?.repositoryPath;
-    const base = mission.immutableBaseCommit;
-    if (repoPath === undefined || base === undefined) {
-      return [];
-    }
-    const git = gitFactory(repoPath);
-    const changes = await git.collectChangesSince(base);
-    return changes.commits;
-  };
-
   return {
     find: async ({ mood, type }) => {
       const result = await discover(mood, type);
@@ -393,8 +382,7 @@ export async function bootstrap(config: KestrelConfig): Promise<CommandHandlers>
       validatePrNumber(prNumber);
       const resolved = await resolveMission(missionId);
       const token = await requireGithubToken();
-      const viewer = await gateway.getViewer(token);
-      const commits = await collectMissionCommits(resolved.mission);
+      const repositoryPath = resolved.mission.workspace?.repositoryPath ?? "";
       const result = await verifySubmission(
         {
           lock,
@@ -403,6 +391,7 @@ export async function bootstrap(config: KestrelConfig): Promise<CommandHandlers>
           journeyStore,
           indexStore,
           gateway,
+          git: gitFactory(repositoryPath),
           idGenerator,
           clock,
         },
@@ -412,9 +401,7 @@ export async function bootstrap(config: KestrelConfig): Promise<CommandHandlers>
           lockPath: resolved.lockPath,
           expectedStateVersion: resolved.version,
           token,
-          expectedAuthor: viewer.login,
           prNumber,
-          missionCommits: commits,
         },
       );
       if (result.kind === "submitted") {
