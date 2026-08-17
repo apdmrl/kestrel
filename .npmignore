@@ -1,0 +1,14 @@
+src/
+scripts/
+test/
+docs/
+.eslintrc*
+eslint.config.js
+.prettierrc.json
+tsconfig.json
+vitest.config.ts
+IMPLEMENTATION_PROGRESS.md
+node_modules/
+coverage/
+*.log
+.env
