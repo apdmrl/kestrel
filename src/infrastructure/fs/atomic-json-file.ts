@@ -1,7 +1,52 @@
 import { randomUUID } from "node:crypto";
 import { open, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { dirname } from "node:path";
 import type { ZodType } from "zod";
 import { createKestrelError } from "../../application/errors/kestrel-error.js";
+
+export interface AtomicWriteOptions {
+  /**
+   * Override the directory fsync performed after the rename. Used by tests and
+   * platforms that must control durability explicitly.
+   */
+  readonly fsyncDirectory?: (directoryPath: string) => Promise<void>;
+}
+
+const UNSUPPORTED_DIRECTORY_SYNC_CODES = new Set(["EINVAL", "EPERM", "ENOTSUP", "EISDIR", "EBADF"]);
+
+function isUnsupportedDirectorySync(error: unknown): boolean {
+  const code = (error as { code?: string }).code;
+  return code !== undefined && UNSUPPORTED_DIRECTORY_SYNC_CODES.has(code);
+}
+
+/**
+ * Fsync the directory that contains a just-renamed file so the rename itself is
+ * durable. Some platforms/filesystems do not support fsync on a directory;
+ * those failures are treated as a documented safe fallback (no error).
+ */
+async function fsyncParentDirectory(
+  directoryPath: string,
+  options?: AtomicWriteOptions,
+): Promise<void> {
+  if (options?.fsyncDirectory !== undefined) {
+    await options.fsyncDirectory(directoryPath);
+    return;
+  }
+  let handle;
+  try {
+    handle = await open(directoryPath, "r");
+    await handle.sync();
+  } catch (error) {
+    if (isUnsupportedDirectorySync(error)) {
+      return;
+    }
+    throw error;
+  } finally {
+    if (handle !== undefined) {
+      await handle.close().catch(() => undefined);
+    }
+  }
+}
 
 function corruptError(message: string) {
   return createKestrelError({
@@ -24,6 +69,7 @@ export async function writeJsonAtomically<T>(
   path: string,
   value: unknown,
   schema: ZodType<T>,
+  options?: AtomicWriteOptions,
 ): Promise<void> {
   const parsed = schema.safeParse(value);
   if (!parsed.success) {
@@ -38,6 +84,7 @@ export async function writeJsonAtomically<T>(
     await handle.close();
     handle = undefined;
     await rename(tempPath, path);
+    await fsyncParentDirectory(dirname(path), options);
   } catch (error) {
     if (handle !== undefined) {
       await handle.close().catch(() => undefined);

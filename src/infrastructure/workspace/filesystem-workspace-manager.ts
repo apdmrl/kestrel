@@ -1,5 +1,5 @@
-import { lstat, mkdir, realpath } from "node:fs/promises";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { lstat, mkdir, realpath, rmdir } from "node:fs/promises";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createKestrelError } from "../../application/errors/kestrel-error.js";
 import type { RepositoryIdentity } from "../../domain/challenge/repository-identity.js";
 import type { MissionId } from "../../domain/shared/identifiers.js";
@@ -65,7 +65,14 @@ async function assertNoSymlinkComponents(root: string, target: string): Promise<
   }
 }
 
+export interface FilesystemWorkspaceManagerHooks {
+  /** Test seam: invoked just before creating a missing directory component. */
+  readonly beforeCreateDirectory?: (path: string) => Promise<void> | void;
+}
+
 export class FilesystemWorkspaceManager implements WorkspaceManager {
+  constructor(private readonly hooks: FilesystemWorkspaceManagerHooks = {}) {}
+
   planWorkspace(
     root: string,
     missionId: MissionId,
@@ -108,19 +115,70 @@ export class FilesystemWorkspaceManager implements WorkspaceManager {
   async createSidecar(plan: WorkspacePlan): Promise<void> {
     this.assertSafePath(plan);
 
-    const rootReal = await realpath(plan.root).catch(() => undefined);
-    if (rootReal !== undefined) {
-      await assertNoSymlinkComponents(rootReal, resolve(plan.missionDirectory));
-    }
+    const root = resolve(plan.root);
+    await mkdir(root, { recursive: true });
+    const rootReal = await realpath(root);
 
-    await mkdir(join(plan.sidecarPath, "handoffs"), { recursive: true });
+    const missionDirectory = this.canonicalTarget(root, rootReal, plan.missionDirectory);
+    const sidecarPath = this.canonicalTarget(root, rootReal, plan.sidecarPath);
+    const handoffsPath = this.canonicalTarget(root, rootReal, join(plan.sidecarPath, "handoffs"));
 
-    // Verify real paths after creation stay within the workspace root.
-    const verifiedRoot = await realpath(plan.root);
-    const sidecarReal = await realpath(plan.sidecarPath);
-    if (!isWithin(verifiedRoot, sidecarReal)) {
-      throw unsafePathError(plan.sidecarPath);
+    await this.createDirectoryWithinRoot(rootReal, missionDirectory);
+    await this.createDirectoryWithinRoot(rootReal, sidecarPath);
+    await this.createDirectoryWithinRoot(rootReal, handoffsPath);
+  }
+
+  /** Map a plan path (resolved against the configured root) onto the canonical root. */
+  private canonicalTarget(root: string, rootReal: string, target: string): string {
+    const rel = relative(root, resolve(target));
+    if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) {
+      throw unsafePathError(target);
     }
-    await assertNoSymlinkComponents(verifiedRoot, resolve(plan.sidecarPath));
+    return join(rootReal, rel);
+  }
+
+  private async createDirectoryWithinRoot(rootReal: string, target: string): Promise<void> {
+    const rel = relative(rootReal, target);
+    if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) {
+      throw unsafePathError(target);
+    }
+    const parts = rel.split(sep).filter((part) => part.length > 0);
+    let current = rootReal;
+    for (const part of parts) {
+      current = join(current, part);
+      await this.ensureDirectoryComponent(rootReal, current);
+    }
+  }
+
+  private async ensureDirectoryComponent(rootReal: string, path: string): Promise<void> {
+    let existing;
+    try {
+      existing = await lstat(path);
+    } catch (error) {
+      if (!isEnoent(error)) {
+        throw error;
+      }
+    }
+    if (existing !== undefined) {
+      if (existing.isSymbolicLink() || !existing.isDirectory()) {
+        throw unsafePathError(path);
+      }
+      return;
+    }
+    // Test seam between the no-follow check and the directory creation.
+    if (this.hooks.beforeCreateDirectory !== undefined) {
+      await this.hooks.beforeCreateDirectory(path);
+    }
+    // Re-verify the parent chain has no symlink before creating the component.
+    const parent = dirname(path);
+    if (parent !== rootReal) {
+      await assertNoSymlinkComponents(rootReal, parent);
+    }
+    await mkdir(path, { recursive: false });
+    const createdReal = await realpath(path);
+    if (!isWithin(rootReal, createdReal)) {
+      await rmdir(path).catch(() => undefined);
+      throw unsafePathError(path);
+    }
   }
 }

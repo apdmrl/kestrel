@@ -67,4 +67,30 @@ describe("atomic-json-file", () => {
     const path = join(dir, "missing.json");
     await expect(readValidatedJson(path, schema)).resolves.toBeUndefined();
   });
+
+  it("fsyncs the parent directory after the rename", async () => {
+    const path = join(dir, "state.json");
+    const fsynced: string[] = [];
+    await writeJsonAtomically(path, { value: 1 }, schema, {
+      fsyncDirectory: async (directoryPath) => {
+        fsynced.push(directoryPath);
+      },
+    });
+    expect(fsynced).toEqual([dir]);
+    expect(await readValidatedJson(path, schema)).toEqual({ value: 1 });
+  });
+
+  it("surfaces a directory fsync failure without corrupting the primary file", async () => {
+    const path = join(dir, "state.json");
+    await writeJsonAtomically(path, { value: 1 }, schema);
+    await expect(
+      writeJsonAtomically(path, { value: 2 }, schema, {
+        fsyncDirectory: async () => {
+          throw new Error("injected fsync failure");
+        },
+      }),
+    ).rejects.toMatchObject({ code: "DM_STATE_WRITE_FAILED" });
+    // The rename already committed; the primary file remains valid, not truncated.
+    expect(await readValidatedJson(path, schema)).toEqual({ value: 2 });
+  });
 });

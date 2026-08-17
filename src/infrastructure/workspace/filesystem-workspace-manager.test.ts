@@ -114,4 +114,31 @@ describe("FilesystemWorkspaceManager", () => {
     expect(plan.sidecarPath.startsWith(plan.repositoryPath)).toBe(false);
     expect(plan.repositoryPath.startsWith(plan.sidecarPath)).toBe(false);
   });
+
+  it("rejects a component swapped to a symlink before creation without creating outside", async () => {
+    const outside = await mkdtemp(join(tmpdir(), "kestrel-outside-"));
+    const plan = manager.planWorkspace(dir, missionId, repository, 42);
+    const hookManager = new FilesystemWorkspaceManager({
+      beforeCreateDirectory: async (path) => {
+        if (path === join(plan.sidecarPath, "handoffs")) {
+          // Swap the sidecar for a symlink to the outside before handoffs is created.
+          await rm(plan.sidecarPath, { recursive: true, force: true });
+          await symlink(outside, plan.sidecarPath);
+        }
+      },
+    });
+    await expect(hookManager.createSidecar(plan)).rejects.toMatchObject({ code: "DM_UNSAFE_PATH" });
+    // No handoffs directory was created outside the workspace.
+    const { readdir } = await import("node:fs/promises");
+    expect(await readdir(outside)).toEqual([]);
+    await rm(outside, { recursive: true, force: true });
+  });
+
+  it("continues to create legitimate existing directories", async () => {
+    const plan = manager.planWorkspace(dir, missionId, repository, 42);
+    await mkdir(plan.missionDirectory, { recursive: true });
+    await manager.createSidecar(plan);
+    const { stat } = await import("node:fs/promises");
+    expect((await stat(join(plan.sidecarPath, "handoffs"))).isDirectory()).toBe(true);
+  });
 });
