@@ -1,4 +1,4 @@
-import { lstat, mkdir, realpath, rmdir } from "node:fs/promises";
+import { lstat, mkdir, realpath } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createKestrelError } from "../../application/errors/kestrel-error.js";
 import type { RepositoryIdentity } from "../../domain/challenge/repository-identity.js";
@@ -68,6 +68,12 @@ async function assertNoSymlinkComponents(root: string, target: string): Promise<
 export interface FilesystemWorkspaceManagerHooks {
   /** Test seam: invoked just before creating a missing directory component. */
   readonly beforeCreateDirectory?: (path: string) => Promise<void> | void;
+  /**
+   * Test seam: invoked after the parent chain has been validated but
+   * immediately before the component is created. This is exactly the final
+   * check-to-create window that no portable Node API can close atomically.
+   */
+  readonly beforeDirectoryCreation?: (path: string) => Promise<void> | void;
 }
 
 export class FilesystemWorkspaceManager implements WorkspaceManager {
@@ -150,6 +156,28 @@ export class FilesystemWorkspaceManager implements WorkspaceManager {
     }
   }
 
+  /**
+   * Create one directory component, or verify an existing one, staying inside
+   * the canonical root.
+   *
+   * Node.js on all supported platforms exposes no directory-handle-relative,
+   * no-follow creation primitive (no mkdirat/openat) that could make the final
+   * check-to-create step atomic, so containment cannot be guaranteed against a
+   * concurrent local attacker racing that window. The threat model is therefore
+   * constrained and enforced as follows:
+   *
+   * - every pre-existing symbolic link / reparse point in the path is rejected
+   *   (lstat walk plus a final parent re-check);
+   * - every component's canonical path is verified after each operation
+   *   (realpath), including components that already existed;
+   * - a raced mkdir (EEXIST) is re-verified canonically and classified;
+   * - cleanup NEVER follows a replaced parent: an escaped artifact is left for
+   *   the operator rather than deleted through a symlink.
+   *
+   * The residual limitation — a concurrent local attacker who replaces a parent
+   * in the final window can redirect creation — is documented in
+   * docs/security.md and is inherent to the runtime.
+   */
   private async ensureDirectoryComponent(rootReal: string, path: string): Promise<void> {
     let existing;
     try {
@@ -163,6 +191,12 @@ export class FilesystemWorkspaceManager implements WorkspaceManager {
       if (existing.isSymbolicLink() || !existing.isDirectory()) {
         throw unsafePathError(path);
       }
+      // Canonically verify an existing component never resolves outside the
+      // root through a parent that was replaced since the walk.
+      const existingReal = await realpath(path);
+      if (!isWithin(rootReal, existingReal)) {
+        throw unsafePathError(path);
+      }
       return;
     }
     // Test seam between the no-follow check and the directory creation.
@@ -174,10 +208,30 @@ export class FilesystemWorkspaceManager implements WorkspaceManager {
     if (parent !== rootReal) {
       await assertNoSymlinkComponents(rootReal, parent);
     }
-    await mkdir(path, { recursive: false });
+    // Test seam AFTER the final parent validation, immediately before creation:
+    // the exact window no portable Node API can make atomic.
+    if (this.hooks.beforeDirectoryCreation !== undefined) {
+      await this.hooks.beforeDirectoryCreation(path);
+    }
+    try {
+      await mkdir(path, { recursive: false });
+    } catch (error) {
+      if ((error as { code?: string }).code === "EEXIST") {
+        // A concurrent actor created the component between our lstat and mkdir.
+        // Verify it canonically; never treat a path that resolves outside the
+        // root as acceptable.
+        const raced = await realpath(path).catch(() => undefined);
+        if (raced === undefined || !isWithin(rootReal, raced)) {
+          throw unsafePathError(path);
+        }
+        return;
+      }
+      throw error;
+    }
     const createdReal = await realpath(path);
     if (!isWithin(rootReal, createdReal)) {
-      await rmdir(path).catch(() => undefined);
+      // The parent was replaced during creation. Never run cleanup through the
+      // replaced parent: the escaped empty artifact is left for the operator.
       throw unsafePathError(path);
     }
   }

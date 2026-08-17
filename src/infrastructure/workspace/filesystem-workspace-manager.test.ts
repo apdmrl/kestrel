@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, sep } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -131,6 +131,57 @@ describe("FilesystemWorkspaceManager", () => {
     // No handoffs directory was created outside the workspace.
     const { readdir } = await import("node:fs/promises");
     expect(await readdir(outside)).toEqual([]);
+    await rm(outside, { recursive: true, force: true });
+  });
+
+  it("never creates or cleans up through a parent swapped after validation", async () => {
+    const outside = await mkdtemp(join(tmpdir(), "kestrel-outside-"));
+    const plan = manager.planWorkspace(dir, missionId, repository, 42);
+    let swapped = false;
+    const hookManager = new FilesystemWorkspaceManager({
+      beforeDirectoryCreation: async (path) => {
+        // Fire AFTER the parent chain was validated, immediately before the
+        // mkdir that this hook precedes: the exact race window.
+        if (!swapped && path === plan.sidecarPath) {
+          swapped = true;
+          await rm(plan.missionDirectory, { recursive: true, force: true });
+          await symlink(outside, plan.missionDirectory);
+        }
+      },
+    });
+    await expect(hookManager.createSidecar(plan)).rejects.toMatchObject({
+      code: "DM_UNSAFE_PATH",
+    });
+    // Cleanup never followed the replaced parent: the escaped empty artifact
+    // is left for the operator instead of being deleted through the symlink.
+    expect(await stat(join(outside, "kestrel")).catch(() => undefined)).toBeDefined();
+    expect(await readdir(outside)).toEqual(["kestrel"]);
+    await rm(outside, { recursive: true, force: true });
+  });
+
+  it("rejects a pre-existing external directory reached through a swapped parent", async () => {
+    const outside = await mkdtemp(join(tmpdir(), "kestrel-outside-"));
+    // The attacker's target already exists outside, with user content.
+    await mkdir(join(outside, "kestrel"), { recursive: true });
+    await writeFile(join(outside, "kestrel", "sentinel.txt"), "keep me", "utf8");
+
+    const plan = manager.planWorkspace(dir, missionId, repository, 42);
+    const hookManager = new FilesystemWorkspaceManager({
+      beforeDirectoryCreation: async (path) => {
+        if (path === plan.sidecarPath) {
+          await rm(plan.missionDirectory, { recursive: true, force: true });
+          await symlink(outside, plan.missionDirectory);
+        }
+      },
+    });
+    // The mkdir collides with the pre-existing external directory: the race
+    // must surface as a classified containment failure, never a raw EEXIST.
+    await expect(hookManager.createSidecar(plan)).rejects.toMatchObject({
+      code: "DM_UNSAFE_PATH",
+    });
+    // No directory or cleanup operation touched the external target.
+    expect(await readdir(outside)).toEqual(["kestrel"]);
+    expect(await readFile(join(outside, "kestrel", "sentinel.txt"), "utf8")).toBe("keep me");
     await rm(outside, { recursive: true, force: true });
   });
 
