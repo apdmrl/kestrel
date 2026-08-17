@@ -15,6 +15,8 @@ import type { IsoDateTime } from "../../domain/shared/time.js";
 import type { RecommendationSnapshot } from "../../domain/recommendation/recommendation.js";
 import type { WorkspaceInfo } from "../../domain/mission/mission.js";
 import { Mission } from "../../domain/mission/mission.js";
+import type { AgentHandoff } from "../../domain/agent/agent-handoff.js";
+import type { AgentHandoffStore } from "../../ports/agent-handoff-store.js";
 import type { JourneyStore } from "../../ports/journey-store.js";
 import type { MissionLock } from "../../ports/mission-lock.js";
 import type { MissionStore, StoredMission } from "../../ports/mission-store.js";
@@ -182,6 +184,13 @@ class FakeJourneyStore implements JourneyStore {
   }
 }
 
+class FakeHandoffStore implements AgentHandoffStore {
+  readonly saves: AgentHandoff[] = [];
+  async save(handoff: AgentHandoff): Promise<void> {
+    this.saves.push(handoff);
+  }
+}
+
 interface MutableIntent {
   transactionId: TransactionId;
   eventId: EventId;
@@ -296,6 +305,23 @@ describe("commitMissionChange", () => {
     await recoverTransactions(d);
     expect(d.missionStore.saveCount).toBe(1);
     expect(d.journeyStore.appendCount).toBe(1);
+    expect(await d.journal.listPending()).toHaveLength(0);
+  });
+
+  it("recovers a handoff save idempotently after a crash", async () => {
+    const d = deps();
+    const handoffStore = new FakeHandoffStore();
+    const handoff = { handoffId: "h1", missionId: "m1" } as unknown as AgentHandoff;
+    const c = { ...change(), handoff };
+
+    d.journeyStore.failNextAppend = true;
+    await expect(commitMissionChange({ ...d, handoffStore }, c)).rejects.toThrow();
+    expect(handoffStore.saves).toHaveLength(1);
+    expect(await d.journal.listPending()).toHaveLength(1);
+
+    await recoverTransactions({ ...d, handoffStore });
+    expect(handoffStore.saves).toHaveLength(2); // replayed, same handoff id
+    expect(d.journeyStore.appendCount).toBe(2);
     expect(await d.journal.listPending()).toHaveLength(0);
   });
 });

@@ -1,4 +1,4 @@
-import { appendFile, mkdir, readFile } from "node:fs/promises";
+import { mkdir, open, readFile, stat } from "node:fs/promises";
 import { dirname } from "node:path";
 import { createKestrelError } from "../../application/errors/kestrel-error.js";
 import type { JourneyEvent } from "../../domain/journey/journey-event.js";
@@ -21,6 +21,18 @@ function corruptError(message: string): ReturnType<typeof createKestrelError> {
   });
 }
 
+async function exists(path: string): Promise<boolean> {
+  try {
+    await stat(path);
+    return true;
+  } catch (error) {
+    if ((error as { code?: string }).code === "ENOENT") {
+      return false;
+    }
+    throw error;
+  }
+}
+
 export class JsonlJourneyStore implements JourneyStore {
   constructor(private readonly filePath: string) {}
 
@@ -28,9 +40,30 @@ export class JsonlJourneyStore implements JourneyStore {
     if (await this.contains(event.eventId)) {
       return;
     }
-    await mkdir(dirname(this.filePath), { recursive: true });
+    const directory = dirname(this.filePath);
+    await mkdir(directory, { recursive: true });
+    const wasNew = !(await exists(this.filePath));
     const line = JSON.stringify(toPersistedJourneyEvent(event)) + "\n";
-    await appendFile(this.filePath, line, "utf8");
+
+    const handle = await open(this.filePath, "a");
+    try {
+      await handle.writeFile(line, "utf8");
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+
+    if (wasNew) {
+      // Make the ledger file's directory entry durable as well.
+      const dirHandle = await open(directory, "r");
+      try {
+        await dirHandle.sync();
+      } catch {
+        // Directory fsync is best-effort on filesystems that reject it.
+      } finally {
+        await dirHandle.close();
+      }
+    }
   }
 
   async contains(eventId: EventId): Promise<boolean> {

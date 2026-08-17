@@ -1,12 +1,12 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { mkdir, writeFile } from "node:fs/promises";
 import { Octokit } from "octokit";
 import { createOAuthDeviceAuth } from "@octokit/auth-oauth-device";
 import { FileSystemMissionStore } from "../infrastructure/persistence/file-system-mission-store.js";
 import { FileSystemPreferencesStore } from "../infrastructure/persistence/file-system-preferences-store.js";
 import { FileSystemMissionIndexStore } from "../infrastructure/persistence/file-system-mission-index-store.js";
 import { JsonlJourneyStore } from "../infrastructure/persistence/jsonl-journey-store.js";
+import { FileSystemAgentHandoffStore } from "../infrastructure/persistence/file-system-agent-handoff-store.js";
 import { FileMissionLock } from "../infrastructure/locking/file-mission-lock.js";
 import { FileTransactionJournal } from "../infrastructure/transactions/file-transaction-journal.js";
 import { ExecaProcessRunner } from "../infrastructure/process/execa-process-runner.js";
@@ -50,7 +50,6 @@ import { isMood, type Mood } from "../domain/recommendation/mood.js";
 import { parseMissionId } from "../domain/shared/identifiers.js";
 import type { ChallengeType } from "../domain/challenge/challenge.js";
 import type { Mission } from "../domain/mission/mission.js";
-import type { AgentHandoff } from "../domain/agent/agent-handoff.js";
 import type { CommandHandlers } from "../cli/command-handlers.js";
 import type { ViewModel } from "../cli/presentation/view-models.js";
 
@@ -125,6 +124,7 @@ export async function bootstrap(config: KestrelConfig): Promise<CommandHandlers>
   const missionStore = new FileSystemMissionStore();
   const preferencesStore = new FileSystemPreferencesStore(join(config.home, "preferences.json"));
   const indexStore = new FileSystemMissionIndexStore(join(config.home, "index.json"));
+  const handoffStore = new FileSystemAgentHandoffStore();
   const journeyStore = new JsonlJourneyStore(join(config.home, "journey", "events.jsonl"));
   const lock = new FileMissionLock();
   const journal = new FileTransactionJournal(join(config.home, "transactions"));
@@ -140,7 +140,14 @@ export async function bootstrap(config: KestrelConfig): Promise<CommandHandlers>
     createOAuthDeviceAuth,
   );
 
-  await recoverTransactions({ lock, journal, missionStore, journeyStore, indexStore });
+  await recoverTransactions({
+    lock,
+    journal,
+    missionStore,
+    journeyStore,
+    indexStore,
+    handoffStore,
+  });
 
   const loadPreferences = async (): Promise<{
     explicit: ExplicitPreferences;
@@ -362,7 +369,7 @@ export async function bootstrap(config: KestrelConfig): Promise<CommandHandlers>
           idGenerator,
           clock,
           renderer: genericPromptRenderer,
-          saveHandoff: saveHandoffSidecar,
+          handoffStore,
         },
         {
           mission: resolved.mission,
@@ -526,14 +533,4 @@ function validatePrNumber(prNumber: number): void {
   if (!Number.isInteger(prNumber) || prNumber <= 0) {
     throw invalidInput("--pr must be a positive integer");
   }
-}
-
-async function saveHandoffSidecar(handoff: AgentHandoff, sidecarPath: string): Promise<void> {
-  const directory = join(sidecarPath, "handoffs");
-  await mkdir(directory, { recursive: true });
-  await writeFile(
-    join(directory, handoff.handoffId + ".json"),
-    JSON.stringify(handoff, null, 2) + "\n",
-    "utf8",
-  );
 }

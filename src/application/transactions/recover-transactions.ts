@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import type { AgentHandoffStore } from "../../ports/agent-handoff-store.js";
 import type { JourneyStore } from "../../ports/journey-store.js";
 import type { MissionIndexStore } from "../../ports/mission-index-store.js";
 import type { MissionLock } from "../../ports/mission-lock.js";
@@ -12,6 +13,7 @@ export interface RecoverDeps {
   readonly missionStore: MissionStore;
   readonly journeyStore: JourneyStore;
   readonly indexStore: MissionIndexStore;
+  readonly handoffStore?: AgentHandoffStore;
 }
 
 /**
@@ -36,6 +38,9 @@ export async function recoverTransactions(deps: RecoverDeps): Promise<void> {
         deps.indexStore,
         missionIndexEntry(intent.targetMission, intent.sidecarPath, intent.event.occurredAt),
       );
+      if (intent.handoff !== undefined) {
+        await deps.handoffStore?.save(intent.handoff, intent.sidecarPath);
+      }
       if (!(await deps.journeyStore.contains(intent.eventId))) {
         await deps.journeyStore.append(intent.event);
       }

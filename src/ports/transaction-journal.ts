@@ -1,3 +1,4 @@
+import type { AgentHandoff } from "../domain/agent/agent-handoff.js";
 import type { JourneyEvent } from "../domain/journey/journey-event.js";
 import type { Mission } from "../domain/mission/mission.js";
 import type { EventId, MissionId, TransactionId } from "../domain/shared/identifiers.js";
@@ -12,6 +13,7 @@ export interface TransactionIntent {
   readonly expectedStateVersion: number;
   readonly targetMission: Mission;
   readonly event: JourneyEvent;
+  readonly handoff?: AgentHandoff;
   readonly phase: TransactionPhase;
 }
 
@@ -23,6 +25,7 @@ export interface NewTransactionIntent {
   readonly expectedStateVersion: number;
   readonly targetMission: Mission;
   readonly event: JourneyEvent;
+  readonly handoff?: AgentHandoff;
 }
 
 /**

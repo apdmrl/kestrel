@@ -3,6 +3,8 @@ import type { JourneyEvent } from "../../domain/journey/journey-event.js";
 import type { Mission } from "../../domain/mission/mission.js";
 import type { MissionId, TransactionId } from "../../domain/shared/identifiers.js";
 import { createKestrelError, isKestrelError } from "../errors/kestrel-error.js";
+import type { AgentHandoff } from "../../domain/agent/agent-handoff.js";
+import type { AgentHandoffStore } from "../../ports/agent-handoff-store.js";
 import type { JourneyStore } from "../../ports/journey-store.js";
 import type { MissionIndexStore } from "../../ports/mission-index-store.js";
 import type { MissionLock } from "../../ports/mission-lock.js";
@@ -16,6 +18,7 @@ export interface CommitMissionDeps {
   readonly missionStore: MissionStore;
   readonly journeyStore: JourneyStore;
   readonly indexStore: MissionIndexStore;
+  readonly handoffStore?: AgentHandoffStore;
 }
 
 export interface MissionChange {
@@ -26,6 +29,7 @@ export interface MissionChange {
   readonly expectedStateVersion: number;
   readonly targetMission: Mission;
   readonly event: JourneyEvent;
+  readonly handoff?: AgentHandoff;
 }
 
 /**
@@ -47,6 +51,7 @@ export async function commitMissionChangeUnderLock(
       expectedStateVersion: change.expectedStateVersion,
       targetMission: change.targetMission,
       event: change.event,
+      ...(change.handoff !== undefined ? { handoff: change.handoff } : {}),
     });
     await deps.missionStore.save(
       change.sidecarPath,
@@ -57,6 +62,20 @@ export async function commitMissionChangeUnderLock(
       deps.indexStore,
       missionIndexEntry(change.targetMission, change.sidecarPath, change.event.occurredAt),
     );
+    if (change.handoff !== undefined) {
+      if (deps.handoffStore === undefined) {
+        throw createKestrelError({
+          code: "DM_STATE_CORRUPTED",
+          category: "FATAL",
+          userMessage: "No handoff store is configured for this transaction",
+          suggestedActions: [],
+          retryability: "NO_RETRY",
+          recoveryStrategy: "MANUAL_INTERVENTION",
+          severity: "FATAL",
+        });
+      }
+      await deps.handoffStore.save(change.handoff, change.sidecarPath);
+    }
     await deps.journal.advancePhase(change.transactionId, "STATE_WRITTEN");
     await deps.journeyStore.append(change.event);
     await deps.journal.advancePhase(change.transactionId, "EVENT_APPENDED");

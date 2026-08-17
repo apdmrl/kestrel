@@ -6,6 +6,7 @@ import type { Mission } from "../../domain/mission/mission.js";
 import { policyFor } from "../../domain/policy/policies.js";
 import type { Clock } from "../../ports/clock.js";
 import type { IdGenerator } from "../../ports/id-generator.js";
+import type { AgentHandoffStore } from "../../ports/agent-handoff-store.js";
 import type { JourneyStore } from "../../ports/journey-store.js";
 import type { MissionIndexStore } from "../../ports/mission-index-store.js";
 import type { MissionLock } from "../../ports/mission-lock.js";
@@ -25,7 +26,7 @@ export interface RecordAgentHandoffDeps {
   readonly idGenerator: IdGenerator;
   readonly clock: Clock;
   readonly renderer: PromptRenderer;
-  readonly saveHandoff: (handoff: AgentHandoff, sidecarPath: string) => Promise<void>;
+  readonly handoffStore: AgentHandoffStore;
 }
 
 export interface RecordAgentHandoffInput {
@@ -73,8 +74,6 @@ export async function recordAgentHandoff(
     });
   }
 
-  await deps.saveHandoff(handoff.value, input.sidecarPath);
-
   const event = createJourneyEvent({
     eventId: deps.idGenerator.newEventId(),
     missionId: input.mission.id,
@@ -100,6 +99,7 @@ export async function recordAgentHandoff(
       missionStore: deps.missionStore,
       journeyStore: deps.journeyStore,
       indexStore: deps.indexStore,
+      handoffStore: deps.handoffStore,
     },
     {
       transactionId: deps.idGenerator.newTransactionId(),
@@ -109,6 +109,7 @@ export async function recordAgentHandoff(
       expectedStateVersion: input.expectedStateVersion,
       targetMission: input.mission,
       event: event.value,
+      handoff: handoff.value,
     },
   );
   return handoff.value;

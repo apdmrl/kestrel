@@ -133,8 +133,10 @@ function deps(saved: AgentHandoff[]) {
     idGenerator,
     clock: { now: () => now },
     renderer: genericPromptRenderer,
-    saveHandoff: async (handoff: AgentHandoff) => {
-      saved.push(handoff);
+    handoffStore: {
+      save: async (handoff: AgentHandoff) => {
+        saved.push(handoff);
+      },
     },
   };
 }

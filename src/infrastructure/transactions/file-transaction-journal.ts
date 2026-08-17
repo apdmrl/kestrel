@@ -2,6 +2,7 @@ import { mkdir, readdir, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
 import { createKestrelError } from "../../application/errors/kestrel-error.js";
+import type { AgentHandoff } from "../../domain/agent/agent-handoff.js";
 import type { EventId, MissionId, TransactionId } from "../../domain/shared/identifiers.js";
 import type {
   NewTransactionIntent,
@@ -27,6 +28,7 @@ const transactionIntentSchema = z.object({
   expectedStateVersion: z.number().int().min(0),
   targetMission: missionSchema,
   event: journeyEventSchema,
+  handoff: z.unknown().optional(),
   phase: z.enum(["PREPARED", "STATE_WRITTEN", "EVENT_APPENDED"]),
 });
 
@@ -95,6 +97,7 @@ export class FileTransactionJournal implements TransactionJournal {
       expectedStateVersion: intent.expectedStateVersion,
       targetMission: toPersistedMission(intent.targetMission),
       event: toPersistedJourneyEvent(intent.event),
+      ...(intent.handoff !== undefined ? { handoff: intent.handoff } : {}),
       phase: "PREPARED",
     };
     await writeJsonAtomically(
@@ -186,6 +189,7 @@ export class FileTransactionJournal implements TransactionJournal {
       expectedStateVersion: persisted.expectedStateVersion,
       targetMission: mission.value,
       event: event.value,
+      ...(persisted.handoff !== undefined ? { handoff: persisted.handoff as AgentHandoff } : {}),
       phase: persisted.phase,
     };
   }
