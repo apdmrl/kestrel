@@ -1,45 +1,56 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { createChallenge } from "../../domain/challenge/challenge.js";
-import type { JourneyEvent } from "../../domain/journey/journey-event.js";
+import type { Challenge } from "../../domain/challenge/challenge.js";
+import type { RepositoryIdentity } from "../../domain/challenge/repository-identity.js";
+import type { EvidenceId } from "../../domain/evidence/evidence.js";
+import { Mission } from "../../domain/mission/mission.js";
 import {
   createRecommendation,
   snapshotRecommendation,
 } from "../../domain/recommendation/recommendation.js";
-import type { Challenge } from "../../domain/challenge/challenge.js";
-import type { ChallengeId } from "../../domain/shared/identifiers.js";
-import type { EventId } from "../../domain/shared/identifiers.js";
-import type { EvidenceId } from "../../domain/evidence/evidence.js";
-import type { HandoffId, MissionId, TransactionId } from "../../domain/shared/identifiers.js";
-import type { IsoDateTime } from "../../domain/shared/time.js";
 import type { RecommendationSnapshot } from "../../domain/recommendation/recommendation.js";
-import { Mission } from "../../domain/mission/mission.js";
+import type {
+  ChallengeId,
+  EventId,
+  HandoffId,
+  MissionId,
+  TransactionId,
+} from "../../domain/shared/identifiers.js";
+import type { IsoDateTime } from "../../domain/shared/time.js";
+import { createKestrelError } from "../errors/kestrel-error.js";
 import type { GitClient, LocalChanges } from "../../ports/git-client.js";
-import type { RepositoryIdentity } from "../../domain/challenge/repository-identity.js";
-import type { JourneyStore } from "../../ports/journey-store.js";
-import type { MissionLock } from "../../ports/mission-lock.js";
 import type { MissionStore, StoredMission } from "../../ports/mission-store.js";
-import type { TransactionJournal, TransactionIntent } from "../../ports/transaction-journal.js";
-import { confirmRestart, prepareMission } from "./prepare-mission.js";
+import { FileMissionLock } from "../../infrastructure/locking/file-mission-lock.js";
+import { FileSystemMissionStore } from "../../infrastructure/persistence/file-system-mission-store.js";
+import { JsonlJourneyStore } from "../../infrastructure/persistence/jsonl-journey-store.js";
+import { FileTransactionJournal } from "../../infrastructure/transactions/file-transaction-journal.js";
+import { FilesystemWorkspaceManager } from "../../infrastructure/workspace/filesystem-workspace-manager.js";
+import {
+  prepareMission,
+  restartConfirmationToken,
+  restartMissionPreparation,
+  resumeMissionPreparation,
+} from "./prepare-mission.js";
 
 const now = "2026-08-15T10:00:00Z" as IsoDateTime;
-
-const plan = {
-  root: "/tmp/ws",
-  missionDirectory: "/tmp/ws/m1",
-  repositoryPath: "/tmp/ws/m1/repo",
-  sidecarPath: "/tmp/ws/m1/kestrel",
-  branchName: "kestrel/42-hello-world",
+const repository: RepositoryIdentity = {
+  provider: "github",
+  owner: "octocat",
+  name: "hello-world",
 };
 
 function makeChallenge(): Challenge {
   const result = createChallenge({
     id: "c1" as ChallengeId,
     externalId: "1",
-    repository: { provider: "github", owner: "octocat", name: "hello-world" },
+    repository,
     issueNumber: 42,
     canonicalUrl: "https://github.com/octocat/hello-world/issues/42",
     title: "Fix crash",
-    description: "d",
+    description: "desc",
     type: "BUG_FIX",
     createdAt: "2026-08-01T00:00:00Z" as IsoDateTime,
     updatedAt: "2026-08-01T00:00:00Z" as IsoDateTime,
@@ -64,108 +75,6 @@ function makeRecommendation(challenge: Challenge): RecommendationSnapshot {
   return snapshotRecommendation(result.value);
 }
 
-function preparingMission(): Mission {
-  const accepted = Mission.accept({
-    id: "m1" as MissionId,
-    challengeSnapshot: makeChallenge(),
-    recommendationSnapshot: makeRecommendation(makeChallenge()),
-    mode: "GUIDED",
-    acceptedAt: now,
-  });
-  const preparing = accepted.ok ? accepted.value.startPreparation() : null;
-  if (!preparing?.ok) {
-    throw new Error("expected ok");
-  }
-  return preparing.value;
-}
-
-class FakeGit implements GitClient {
-  cloneCalls = 0;
-  failNextClone = false;
-  async isAvailable() {
-    return true;
-  }
-  async clone(_url: string, _target: string): Promise<void> {
-    this.cloneCalls += 1;
-    if (this.failNextClone) {
-      this.failNextClone = false;
-      throw new Error("clone failed");
-    }
-  }
-  async getDefaultBranch() {
-    return "main";
-  }
-  async getHeadSha() {
-    return "base-sha";
-  }
-  async createBranch(_name: string): Promise<void> {}
-  async getRepositoryIdentity(): Promise<RepositoryIdentity> {
-    return { provider: "github", owner: "o", name: "n" };
-  }
-  async collectChangesSince(_base: string): Promise<LocalChanges> {
-    return {
-      commits: [],
-      headSha: "base-sha",
-      filesChanged: [],
-      insertions: 0,
-      deletions: 0,
-      workingTreeState: "CLEAN",
-    };
-  }
-  async getCurrentBranch() {
-    return "main";
-  }
-  async commitExists(_sha: string): Promise<boolean> {
-    return true;
-  }
-}
-
-class FakeMissionStore implements MissionStore {
-  async get(): Promise<StoredMission | undefined> {
-    return undefined;
-  }
-  async save(_p: string, mission: Mission, expectedVersion: number): Promise<StoredMission> {
-    return { mission, version: expectedVersion + 1 };
-  }
-}
-
-class FakeJourneyStore implements JourneyStore {
-  events: JourneyEvent[] = [];
-  async append(event: JourneyEvent): Promise<void> {
-    this.events.push(event);
-  }
-  async contains(_id: EventId): Promise<boolean> {
-    return false;
-  }
-  async readAll(): Promise<JourneyEvent[]> {
-    return [...this.events];
-  }
-}
-
-class FakeJournal implements TransactionJournal {
-  async create(): Promise<void> {}
-  async advancePhase(): Promise<void> {}
-  async get(): Promise<TransactionIntent | undefined> {
-    return undefined;
-  }
-  async listPending(): Promise<TransactionIntent[]> {
-    return [];
-  }
-  async remove(): Promise<void> {}
-}
-
-class NoopLock implements MissionLock {
-  async withMissionLock<T>(
-    _p: string,
-    _m: MissionId,
-    _o: string,
-    action: () => Promise<T>,
-  ): Promise<T> {
-    return action();
-  }
-  async breakStaleLock(_p: string): Promise<void> {}
-}
-
 let counter = 0;
 const idGenerator = {
   newMissionId: () => ("m" + ++counter) as MissionId,
@@ -176,74 +85,332 @@ const idGenerator = {
   newEvidenceId: () => ("ev" + ++counter) as EvidenceId,
 };
 
-const workspaceManager = {
-  planWorkspace: () => plan,
-  assertSafePath: () => undefined,
-  createSidecar: async () => undefined,
-};
-
-function deps(git: FakeGit) {
-  return {
-    lock: new NoopLock(),
-    journal: new FakeJournal(),
-    missionStore: new FakeMissionStore(),
-    journeyStore: new FakeJourneyStore(),
-    workspaceManager,
-    idGenerator,
-    clock: { now: () => now },
-    gitFactory: () => git,
-  };
-}
-
-function input(mission: Mission) {
-  return {
-    mission,
-    sidecarPath: plan.sidecarPath,
-    lockPath: plan.sidecarPath + "/.lock",
-    plan,
-    upstreamUrl: "https://github.com/octocat/hello-world.git",
-    expectedStateVersion: 0,
-  };
-}
-
-describe("prepareMission", () => {
-  it("runs every checkpoint and reaches IN_PROGRESS", async () => {
-    const git = new FakeGit();
-    const journey = new FakeJourneyStore();
-    const d = { ...deps(git), journeyStore: journey };
-    const mission = await prepareMission(d, input(preparingMission()));
-    expect(mission.status).toBe("IN_PROGRESS");
-    expect(mission.preparationCheckpoints).toHaveLength(7);
-    expect(git.cloneCalls).toBe(1);
-    expect(journey.events.some((e) => e.type === "MissionPreparationCompleted")).toBe(true);
+function gitFatal(): ReturnType<typeof createKestrelError> {
+  return createKestrelError({
+    code: "DM_GIT_FATAL",
+    category: "EXTERNAL_STATE_CHANGED",
+    userMessage: "not a git repository",
+    suggestedActions: ["inspect"],
+    retryability: "NO_RETRY",
+    recoveryStrategy: "MANUAL_INTERVENTION",
+    severity: "ERROR",
   });
+}
 
-  it("skips already-recorded checkpoints on resume", async () => {
-    const git = new FakeGit();
-    const mission = preparingMission();
-    const first = mission.recordPreparationCheckpoint("WORKSPACE_CREATED", {});
-    const second = first.ok
-      ? first.value.recordPreparationCheckpoint("REPOSITORY_CLONED", {})
-      : null;
-    if (!second?.ok) {
+class FakeGit implements GitClient {
+  cloneCalls = 0;
+  createBranchCalls = 0;
+  cloned = false;
+  branch = "main";
+  baseSha = "base-sha";
+  identity: RepositoryIdentity = { ...repository };
+  failOn: string | undefined = undefined;
+
+  private failIf(op: string): void {
+    if (this.failOn === op) {
+      this.failOn = undefined;
+      throw new Error("injected failure: " + op);
+    }
+  }
+
+  async isAvailable(): Promise<boolean> {
+    return true;
+  }
+  async clone(_url: string, _target: string): Promise<void> {
+    this.cloneCalls += 1;
+    this.failIf("clone");
+    this.cloned = true;
+  }
+  async getDefaultBranch(): Promise<string> {
+    this.failIf("getDefaultBranch");
+    return "main";
+  }
+  async getHeadSha(): Promise<string> {
+    this.failIf("getHeadSha");
+    return this.baseSha;
+  }
+  async createBranch(name: string): Promise<void> {
+    this.createBranchCalls += 1;
+    this.failIf("createBranch");
+    this.branch = name;
+  }
+  async getRepositoryIdentity(): Promise<RepositoryIdentity> {
+    this.failIf("getRepositoryIdentity");
+    if (!this.cloned) {
+      throw gitFatal();
+    }
+    return this.identity;
+  }
+  async collectChangesSince(_base: string): Promise<LocalChanges> {
+    return {
+      commits: [],
+      headSha: this.baseSha,
+      filesChanged: [],
+      insertions: 0,
+      deletions: 0,
+      workingTreeState: "CLEAN",
+    };
+  }
+  async getCurrentBranch(): Promise<string> {
+    this.failIf("getCurrentBranch");
+    return this.branch;
+  }
+  async commitExists(sha: string): Promise<boolean> {
+    return sha === this.baseSha;
+  }
+}
+
+class FaultySaveStore implements MissionStore {
+  constructor(
+    private readonly inner: MissionStore,
+    private readonly failWhenCheckpoint?: string,
+  ) {}
+
+  async get(path: string): Promise<StoredMission | undefined> {
+    return this.inner.get(path);
+  }
+
+  async save(path: string, mission: Mission, version: number): Promise<StoredMission> {
+    if (
+      this.failWhenCheckpoint !== undefined &&
+      mission.preparationCheckpoints.some((c) => c.checkpoint === this.failWhenCheckpoint)
+    ) {
+      throw new Error("injected save failure at " + this.failWhenCheckpoint);
+    }
+    return this.inner.save(path, mission, version);
+  }
+}
+
+async function makeHarness() {
+  const dir = await mkdtemp(join(tmpdir(), "kestrel-prep-"));
+  const workspaceRoot = join(dir, "ws");
+  const missionStore = new FileSystemMissionStore();
+  const journeyStore = new JsonlJourneyStore(join(dir, "journey", "events.jsonl"));
+  const journal = new FileTransactionJournal(join(dir, "transactions"));
+  const lock = new FileMissionLock();
+  const workspaceManager = new FilesystemWorkspaceManager();
+
+  async function seed(missionId: MissionId) {
+    const accepted = Mission.accept({
+      id: missionId,
+      challengeSnapshot: makeChallenge(),
+      recommendationSnapshot: makeRecommendation(makeChallenge()),
+      mode: "GUIDED",
+      workspaceRoot,
+      acceptedAt: now,
+    });
+    if (!accepted.ok) {
       throw new Error("expected ok");
     }
-    const prepared = await prepareMission(deps(git), input(second.value));
-    expect(prepared.status).toBe("IN_PROGRESS");
-    expect(git.cloneCalls).toBe(0);
+    const plan = workspaceManager.planWorkspace(workspaceRoot, missionId, repository, 42);
+    await missionStore.save(plan.sidecarPath, accepted.value, 0);
+    return { sidecarPath: plan.sidecarPath, plan };
+  }
+
+  function deps(git: FakeGit, overrides: { missionStore?: MissionStore } = {}) {
+    return {
+      lock,
+      journal,
+      missionStore: overrides.missionStore ?? missionStore,
+      journeyStore,
+      workspaceManager,
+      idGenerator,
+      clock: { now: () => now },
+      gitFactory: () => git,
+    };
+  }
+
+  async function cleanup(): Promise<void> {
+    await rm(dir, { recursive: true, force: true });
+  }
+
+  return { missionStore, journeyStore, workspaceManager, seed, deps, cleanup };
+}
+
+describe("prepareMission (durable, resumable)", () => {
+  it("prepares a persisted ACCEPTED mission to IN_PROGRESS with real adapters", async () => {
+    const h = await makeHarness();
+    try {
+      const { sidecarPath } = await h.seed("m1" as MissionId);
+      const git = new FakeGit();
+      const mission = await prepareMission(h.deps(git), {
+        missionId: "m1" as MissionId,
+        sidecarPath,
+      });
+      expect(mission.status).toBe("IN_PROGRESS");
+      expect(mission.preparationCheckpoints).toHaveLength(7);
+      expect(git.cloneCalls).toBe(1);
+      expect(git.createBranchCalls).toBe(1);
+      const events = await h.journeyStore.readAll();
+      expect(events.some((e) => e.type === "MissionPreparationStarted")).toBe(true);
+      expect(events.some((e) => e.type === "MissionPreparationCompleted")).toBe(true);
+    } finally {
+      await h.cleanup();
+    }
   });
 
-  it("maps a clone failure to a resumable interruption", async () => {
-    const git = new FakeGit();
-    git.failNextClone = true;
-    await expect(prepareMission(deps(git), input(preparingMission()))).rejects.toMatchObject({
-      code: "DM_MISSION_PREPARATION_INTERRUPTED",
-    });
+  it("resumes after a clone interruption, reusing persisted checkpoints", async () => {
+    const h = await makeHarness();
+    try {
+      const missionId = "m1" as MissionId;
+      const { sidecarPath } = await h.seed(missionId);
+      const git = new FakeGit();
+      git.failOn = "clone";
+      await expect(prepareMission(h.deps(git), { missionId, sidecarPath })).rejects.toMatchObject({
+        code: "DM_MISSION_PREPARATION_INTERRUPTED",
+      });
+
+      const stored = await h.missionStore.get(sidecarPath);
+      expect(stored?.mission.status).toBe("PREPARING");
+      expect(stored?.mission.preparationCheckpoints.map((c) => c.checkpoint)).toEqual([
+        "WORKSPACE_CREATED",
+      ]);
+
+      const resumed = await resumeMissionPreparation(h.deps(git), { missionId, sidecarPath });
+      expect(resumed.status).toBe("IN_PROGRESS");
+      expect(git.cloneCalls).toBe(2); // one failed attempt, one successful resume
+    } finally {
+      await h.cleanup();
+    }
   });
 
-  it("derives and verifies a restart confirmation token", () => {
-    const token = "m1::/tmp/ws/m1/kestrel";
-    expect(confirmRestart("m1" as MissionId, "/tmp/ws/m1/kestrel", token)).toBe(true);
-    expect(confirmRestart("m1" as MissionId, "/tmp/ws/m1/kestrel", "wrong")).toBe(false);
+  it("does not re-clone when resuming after the clone checkpoint", async () => {
+    const h = await makeHarness();
+    try {
+      const missionId = "m1" as MissionId;
+      const { sidecarPath } = await h.seed(missionId);
+      const git = new FakeGit();
+      git.failOn = "getHeadSha"; // clone succeeds, then base recording fails
+      await expect(prepareMission(h.deps(git), { missionId, sidecarPath })).rejects.toMatchObject({
+        code: "DM_MISSION_PREPARATION_INTERRUPTED",
+      });
+      expect(git.cloneCalls).toBe(1);
+
+      const resumed = await resumeMissionPreparation(h.deps(git), { missionId, sidecarPath });
+      expect(resumed.status).toBe("IN_PROGRESS");
+      expect(git.cloneCalls).toBe(1); // clone verified and skipped, never re-cloned
+    } finally {
+      await h.cleanup();
+    }
+  });
+
+  it("rejects restart without a matching confirmation", async () => {
+    const h = await makeHarness();
+    try {
+      const missionId = "m1" as MissionId;
+      const { sidecarPath } = await h.seed(missionId);
+      const git = new FakeGit();
+      git.failOn = "getHeadSha";
+      await expect(prepareMission(h.deps(git), { missionId, sidecarPath })).rejects.toMatchObject({
+        code: "DM_MISSION_PREPARATION_INTERRUPTED",
+      });
+      await expect(
+        restartMissionPreparation(h.deps(git), { missionId, sidecarPath, confirmation: "wrong" }),
+      ).rejects.toMatchObject({ code: "DM_ILLEGAL_TRANSITION" });
+    } finally {
+      await h.cleanup();
+    }
+  });
+
+  it("restart resets checkpoints and reuses the existing clone", async () => {
+    const h = await makeHarness();
+    try {
+      const missionId = "m1" as MissionId;
+      const { sidecarPath } = await h.seed(missionId);
+      const git = new FakeGit();
+      git.failOn = "getHeadSha";
+      await expect(prepareMission(h.deps(git), { missionId, sidecarPath })).rejects.toMatchObject({
+        code: "DM_MISSION_PREPARATION_INTERRUPTED",
+      });
+
+      const token = restartConfirmationToken(missionId, sidecarPath);
+      const reset = await restartMissionPreparation(h.deps(git), {
+        missionId,
+        sidecarPath,
+        confirmation: token,
+      });
+      expect(reset.status).toBe("PREPARING");
+      expect(reset.preparationCheckpoints).toHaveLength(0);
+
+      const again = await resumeMissionPreparation(h.deps(git), { missionId, sidecarPath });
+      expect(again.status).toBe("IN_PROGRESS");
+      expect(git.cloneCalls).toBe(1); // the clone was never deleted or rewritten
+    } finally {
+      await h.cleanup();
+    }
+  });
+
+  it("never clones over an existing unrelated repository", async () => {
+    const h = await makeHarness();
+    try {
+      const missionId = "m1" as MissionId;
+      const { sidecarPath } = await h.seed(missionId);
+      const git = new FakeGit();
+      git.cloned = true;
+      git.identity = { provider: "github", owner: "someone", name: "else" };
+      await expect(prepareMission(h.deps(git), { missionId, sidecarPath })).rejects.toMatchObject({
+        code: "DM_REPOSITORY_MISMATCH",
+      });
+      expect(git.cloneCalls).toBe(0);
+    } finally {
+      await h.cleanup();
+    }
+  });
+
+  it("propagates illegal transitions instead of silently discarding them", async () => {
+    const h = await makeHarness();
+    try {
+      const missionId = "m1" as MissionId;
+      const { sidecarPath } = await h.seed(missionId);
+      const git = new FakeGit();
+      await prepareMission(h.deps(git), { missionId, sidecarPath });
+      await expect(prepareMission(h.deps(git), { missionId, sidecarPath })).rejects.toMatchObject({
+        code: "DM_ILLEGAL_TRANSITION",
+      });
+    } finally {
+      await h.cleanup();
+    }
+  });
+
+  it("converges after interruption at every external checkpoint", async () => {
+    for (const failOn of ["clone", "getHeadSha", "createBranch"]) {
+      const h = await makeHarness();
+      try {
+        const missionId = "m1" as MissionId;
+        const { sidecarPath } = await h.seed(missionId);
+        const git = new FakeGit();
+        git.failOn = failOn;
+        await expect(prepareMission(h.deps(git), { missionId, sidecarPath })).rejects.toMatchObject(
+          {
+            code: "DM_MISSION_PREPARATION_INTERRUPTED",
+          },
+        );
+        const resumed = await resumeMissionPreparation(h.deps(git), { missionId, sidecarPath });
+        expect(resumed.status).toBe("IN_PROGRESS");
+        expect(resumed.preparationCheckpoints).toHaveLength(7);
+      } finally {
+        await h.cleanup();
+      }
+    }
+  });
+
+  it("does not duplicate the clone when a save fails right after it", async () => {
+    const h = await makeHarness();
+    try {
+      const missionId = "m1" as MissionId;
+      const { sidecarPath } = await h.seed(missionId);
+      const git = new FakeGit();
+      const faulty = new FaultySaveStore(h.missionStore, "REPOSITORY_CLONED");
+      await expect(
+        prepareMission(h.deps(git, { missionStore: faulty }), { missionId, sidecarPath }),
+      ).rejects.toMatchObject({ code: "DM_MISSION_PREPARATION_INTERRUPTED" });
+      expect(git.cloneCalls).toBe(1);
+
+      const resumed = await resumeMissionPreparation(h.deps(git), { missionId, sidecarPath });
+      expect(resumed.status).toBe("IN_PROGRESS");
+      expect(git.cloneCalls).toBe(1); // the already-cloned repository was reused
+    } finally {
+      await h.cleanup();
+    }
   });
 });

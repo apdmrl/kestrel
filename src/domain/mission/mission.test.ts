@@ -164,6 +164,30 @@ describe("Mission lifecycle", () => {
     ).toBe(false);
   });
 
+  it("resets preparation checkpoints from PREPARING", () => {
+    const preparing = acceptedMission().startPreparation();
+    if (!preparing.ok) {
+      throw new Error("expected ok");
+    }
+    const withCheckpoint = preparing.value.recordPreparationCheckpoint("WORKSPACE_CREATED", {});
+    if (!withCheckpoint.ok) {
+      throw new Error("expected ok");
+    }
+    expect(withCheckpoint.value.preparationCheckpoints).toHaveLength(1);
+
+    const reset = withCheckpoint.value.resetPreparation();
+    expect(reset.ok).toBe(true);
+    if (reset.ok) {
+      expect(reset.value.status).toBe("PREPARING");
+      expect(reset.value.preparationCheckpoints).toHaveLength(0);
+    }
+  });
+
+  it("rejects preparation reset outside PREPARING", () => {
+    expect(acceptedMission().resetPreparation().ok).toBe(false);
+    expect(preparedMission().resetPreparation().ok).toBe(false);
+  });
+
   it("makes abandonment terminal", () => {
     const inProgress = preparedMission();
     const abandoned = inProgress.abandon("no longer interested");

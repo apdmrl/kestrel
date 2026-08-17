@@ -227,6 +227,13 @@ export class Mission {
     return ok(new Mission({ ...this.state, status: "PREPARING" }));
   }
 
+  resetPreparation(): DomainResult<Mission> {
+    if (this.state.status !== "PREPARING") {
+      return err("DM_ILLEGAL_TRANSITION", "cannot reset preparation from " + this.state.status);
+    }
+    return ok(new Mission({ ...this.state, preparationCheckpoints: [] }));
+  }
+
   recordPreparationCheckpoint(
     checkpoint: PreparationCheckpoint,
     data: Readonly<Record<string, unknown>> = {},

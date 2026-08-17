@@ -26,35 +26,34 @@ export interface MissionChange {
 }
 
 /**
- * Persist a Mission state change and its Journey event as one recoverable unit:
- * lock → intent → state → event → complete.
+ * Persist a Mission state change and its Journey event as one recoverable unit
+ * WITHOUT acquiring the mission lock. The caller must already hold the lock.
+ * This is the single internal mutation primitive for nested workflows such as
+ * mission preparation, which acquires the lock exactly once.
  */
-export async function commitMissionChange(
+export async function commitMissionChangeUnderLock(
   deps: CommitMissionDeps,
   change: MissionChange,
 ): Promise<void> {
-  const lockPath = join(change.sidecarPath, ".lock");
   try {
-    await deps.lock.withMissionLock(lockPath, change.missionId, change.operation, async () => {
-      await deps.journal.create({
-        transactionId: change.transactionId,
-        eventId: change.event.eventId,
-        missionId: change.missionId,
-        sidecarPath: change.sidecarPath,
-        expectedStateVersion: change.expectedStateVersion,
-        targetMission: change.targetMission,
-        event: change.event,
-      });
-      await deps.missionStore.save(
-        change.sidecarPath,
-        change.targetMission,
-        change.expectedStateVersion,
-      );
-      await deps.journal.advancePhase(change.transactionId, "STATE_WRITTEN");
-      await deps.journeyStore.append(change.event);
-      await deps.journal.advancePhase(change.transactionId, "EVENT_APPENDED");
-      await deps.journal.remove(change.transactionId);
+    await deps.journal.create({
+      transactionId: change.transactionId,
+      eventId: change.event.eventId,
+      missionId: change.missionId,
+      sidecarPath: change.sidecarPath,
+      expectedStateVersion: change.expectedStateVersion,
+      targetMission: change.targetMission,
+      event: change.event,
     });
+    await deps.missionStore.save(
+      change.sidecarPath,
+      change.targetMission,
+      change.expectedStateVersion,
+    );
+    await deps.journal.advancePhase(change.transactionId, "STATE_WRITTEN");
+    await deps.journeyStore.append(change.event);
+    await deps.journal.advancePhase(change.transactionId, "EVENT_APPENDED");
+    await deps.journal.remove(change.transactionId);
   } catch (error) {
     if (isKestrelError(error)) {
       throw error;
@@ -71,4 +70,18 @@ export async function commitMissionChange(
       debugContext: { transactionId: change.transactionId },
     });
   }
+}
+
+/**
+ * Persist a Mission state change and its Journey event as one recoverable unit:
+ * lock → intent → state → event → complete.
+ */
+export async function commitMissionChange(
+  deps: CommitMissionDeps,
+  change: MissionChange,
+): Promise<void> {
+  const lockPath = join(change.sidecarPath, ".lock");
+  return deps.lock.withMissionLock(lockPath, change.missionId, change.operation, async () => {
+    await commitMissionChangeUnderLock(deps, change);
+  });
 }

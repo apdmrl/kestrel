@@ -21,7 +21,10 @@ import { genericPromptRenderer } from "../application/agent/generic-prompt-rende
 import { authenticateGitHub } from "../application/auth/authenticate-github.js";
 import { findChallenge } from "../application/discovery/find-challenge.js";
 import { acceptMission } from "../application/mission/accept-mission.js";
-import { prepareMission } from "../application/mission/prepare-mission.js";
+import {
+  prepareMission,
+  resumeMissionPreparation,
+} from "../application/mission/prepare-mission.js";
 import { getCurrentMission } from "../application/mission/get-current-mission.js";
 import { completeMission } from "../application/mission/complete-mission.js";
 import { abandonMission } from "../application/mission/abandon-mission.js";
@@ -263,16 +266,6 @@ export async function bootstrap(config: KestrelConfig): Promise<CommandHandlers>
     },
     missionPrepare: async ({ missionId }) => {
       const resolved = await resolveMission(missionId);
-      const repository = resolved.mission.challengeSnapshot.repository;
-      const workspaceRoot =
-        resolved.mission.acceptanceContext.workspaceRoot ?? config.workspaceRoot;
-      const plan = workspaceManager.planWorkspace(
-        workspaceRoot,
-        resolved.mission.id,
-        repository,
-        resolved.mission.challengeSnapshot.source.issueNumber,
-      );
-      const upstreamUrl = "https://github.com/" + repository.owner + "/" + repository.name + ".git";
       const prepared = await prepareMission(
         {
           lock,
@@ -284,30 +277,13 @@ export async function bootstrap(config: KestrelConfig): Promise<CommandHandlers>
           clock,
           gitFactory,
         },
-        {
-          mission: resolved.mission,
-          sidecarPath: resolved.sidecarPath,
-          lockPath: resolved.lockPath,
-          plan,
-          upstreamUrl,
-          expectedStateVersion: resolved.version,
-        },
+        { missionId: resolved.mission.id, sidecarPath: resolved.sidecarPath },
       );
       return missionView(prepared);
     },
     missionResume: async ({ missionId }) => {
       const resolved = await resolveMission(missionId);
-      const repository = resolved.mission.challengeSnapshot.repository;
-      const workspaceRoot =
-        resolved.mission.acceptanceContext.workspaceRoot ?? config.workspaceRoot;
-      const plan = workspaceManager.planWorkspace(
-        workspaceRoot,
-        resolved.mission.id,
-        repository,
-        resolved.mission.challengeSnapshot.source.issueNumber,
-      );
-      const upstreamUrl = "https://github.com/" + repository.owner + "/" + repository.name + ".git";
-      const prepared = await prepareMission(
+      const prepared = await resumeMissionPreparation(
         {
           lock,
           journal,
@@ -318,14 +294,7 @@ export async function bootstrap(config: KestrelConfig): Promise<CommandHandlers>
           clock,
           gitFactory,
         },
-        {
-          mission: resolved.mission,
-          sidecarPath: resolved.sidecarPath,
-          lockPath: resolved.lockPath,
-          plan,
-          upstreamUrl,
-          expectedStateVersion: resolved.version,
-        },
+        { missionId: resolved.mission.id, sidecarPath: resolved.sidecarPath },
       );
       return missionView(prepared);
     },
