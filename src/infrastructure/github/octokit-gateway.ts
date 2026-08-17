@@ -1,3 +1,4 @@
+import type { OAuthAppStrategyOptions } from "@octokit/auth-oauth-device";
 import { createKestrelError } from "../../application/errors/kestrel-error.js";
 import type { RepositoryIdentity } from "../../domain/challenge/repository-identity.js";
 import type { IsoDateTime } from "../../domain/shared/time.js";
@@ -28,11 +29,20 @@ export interface DeviceAuthStrategy {
   (options: { type: "oauth" }): Promise<{ token: string }>;
 }
 
+/**
+ * The request implementation the device flow needs: the same shape the real
+ * @octokit/auth-oauth-device strategy accepts, so the OAuth base URL is derived
+ * from the configured API URL instead of defaulting to github.com.
+ */
+export type DeviceAuthRequest = NonNullable<OAuthAppStrategyOptions["request"]>;
+
 export interface DeviceAuthFactory {
   (options: {
     clientType: "oauth-app";
     clientId: string;
     scopes: string[];
+    /** Request implementation; without it the device flow bypasses GITHUB_API_URL. */
+    request?: DeviceAuthRequest;
     onVerification: (verification: {
       device_code: string;
       user_code: string;
@@ -90,6 +100,11 @@ export class OctokitGateway implements GitHubGateway {
       clientType: "oauth-app",
       clientId: this.clientId,
       scopes: ["public_repo"],
+      // Route the device flow through the configured API base URL (production
+      // api.github.com, or the local/test endpoint) instead of defaulting to
+      // github.com and bypassing GITHUB_API_URL. The narrow OctokitLike view
+      // hides endpoint metadata the device flow needs, so assert it here.
+      request: this.octokit.request as DeviceAuthRequest,
       onVerification: (verification) => {
         resolveVerification({
           deviceCode: verification.device_code,

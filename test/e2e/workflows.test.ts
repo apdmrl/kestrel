@@ -154,6 +154,28 @@ beforeAll(async () => {
   server = createServer((req, res) => {
     const url = req.url ?? "";
     res.setHeader("content-type", "application/json");
+    if (url.startsWith("/login/device/code")) {
+      res.end(
+        JSON.stringify({
+          device_code: "device-code-secret",
+          user_code: "ABCD",
+          verification_uri: "https://github.com/login/device",
+          expires_in: 900,
+          interval: 5,
+        }),
+      );
+      return;
+    }
+    if (url.startsWith("/login/oauth/access_token")) {
+      res.end(
+        JSON.stringify({
+          access_token: "DEVICE_FLOW_ACCESS_TOKEN",
+          token_type: "bearer",
+          scope: "public_repo",
+        }),
+      );
+      return;
+    }
     if (url.startsWith("/search/issues")) {
       searchCount += 1;
       const first = searchCount === 1;
@@ -329,6 +351,44 @@ describe("kestrel end-to-end workflow", () => {
     expect(acceptB.status).toBe(0);
     expect(acceptB.stdout).toContain(titleB);
     expect(acceptB.stdout).not.toContain(titleA);
+  }, 60_000);
+
+  it("keeps --json stdout machine-readable during interactive device authorization", async () => {
+    const result = await runCli(["--json", "find", "--mood", "QUICK_WIN"], {
+      PATH: noCredGitDir + ":" + process.env.PATH,
+      GITHUB_CLIENT_ID: "test-client-id",
+    });
+    expect(result.status).toBe(0);
+
+    // Every nonempty stdout byte must be exactly one JSON document.
+    const stdoutLines = result.stdout.split("\n").filter((line) => line.trim().length > 0);
+    expect(stdoutLines.length).toBeGreaterThan(0);
+    const parsed = JSON.parse(stdoutLines.join("\n")) as { ok: boolean };
+    expect(parsed.ok).toBe(true);
+
+    // Human authorization guidance must never pollute machine stdout.
+    expect(result.stdout).not.toContain("https://github.com/login/device");
+    expect(result.stdout).not.toContain("ABCD");
+
+    // The guidance belongs on stderr and carries only safe fields.
+    expect(result.stderr).toContain("https://github.com/login/device");
+    expect(result.stderr).toContain("ABCD");
+    expect(result.stderr).not.toContain("device-code-secret");
+    expect(result.stderr).not.toContain("DEVICE_FLOW_ACCESS_TOKEN");
+    expect(result.stderr).not.toContain("Bearer ");
+  }, 60_000);
+
+  it("preserves interactive device guidance on stderr in plain mode", async () => {
+    const result = await runCli(["find", "--mood", "QUICK_WIN"], {
+      PATH: noCredGitDir + ":" + process.env.PATH,
+      GITHUB_CLIENT_ID: "test-client-id",
+    });
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("Recommendation");
+    expect(result.stdout).not.toContain("https://github.com/login/device");
+    expect(result.stderr).toContain("https://github.com/login/device");
+    expect(result.stderr).toContain("ABCD");
+    expect(result.stderr).not.toContain("device-code-secret");
   }, 60_000);
 
   it("classifies a corrupt journey ledger without crashing", async () => {

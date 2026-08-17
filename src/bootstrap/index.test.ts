@@ -1,7 +1,7 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createChallenge } from "../domain/challenge/challenge.js";
 import type { Challenge } from "../domain/challenge/challenge.js";
 import { createEvaluationContext } from "../domain/challenge/evaluation-context.js";
@@ -183,6 +183,34 @@ const emptyChallengeSource: ChallengeSource = {
 };
 
 describe("bootstrap github authentication", () => {
+  it("defaults device authorization guidance to stderr, never stdout", async () => {
+    const store = new FakeCredentialStore();
+    const gateway = new FakeGateway();
+    const written: string[] = [];
+    const stderrSpy = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation((chunk: string | Uint8Array) => {
+        written.push(String(chunk));
+        return true;
+      });
+    try {
+      const handlers = await bootstrap(createConfig({ KESTREL_HOME: dir, GITHUB_CLIENT_ID: "cid" }), {
+        interactive: true,
+        credentialStore: store,
+        gateway,
+        challengeSourceFactory: () => emptyChallengeSource,
+      });
+      await handlers.find({ mood: "QUICK_WIN" });
+    } finally {
+      stderrSpy.mockRestore();
+    }
+    const output = written.join("\n");
+    expect(output).toContain("https://github.com/login/device");
+    expect(output).toContain("ABCD");
+    expect(output).not.toContain("device-code-secret");
+    expect(output).not.toContain("fresh-token");
+  });
+
   it("presents the verification URI and user code during interactive device flow", async () => {
     const written: string[] = [];
     const store = new FakeCredentialStore();

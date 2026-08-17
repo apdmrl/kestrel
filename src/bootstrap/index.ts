@@ -170,7 +170,10 @@ export async function bootstrap(
       config.githubClientId ?? "",
       createOAuthDeviceAuth,
     );
-  const writeAuth = options.writeAuth ?? ((text: string) => process.stdout.write(text));
+  // Authorization guidance is presentation, never machine output: default it
+  // to stderr so --json stdout stays a single parseable JSON document. The CLI
+  // composition root may supply an explicit presentation channel instead.
+  const writeAuth = options.writeAuth ?? ((text: string) => process.stderr.write(text));
   const interactive = options.interactive ?? true;
 
   await recoverTransactions({
