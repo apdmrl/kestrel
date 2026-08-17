@@ -11,6 +11,7 @@ import type {
 } from "../evidence/evidence.js";
 import type { EvidenceDecision } from "../policy/evidence-decision.js";
 import type { DeveloperMode } from "../preferences/preferences.js";
+import type { Reflection } from "../reflection/reflection.js";
 import type { RecommendationSnapshot } from "../recommendation/recommendation.js";
 import { snapshotRecommendation } from "../recommendation/recommendation.js";
 import type { MissionId } from "../shared/identifiers.js";
@@ -53,6 +54,7 @@ interface MissionState {
   readonly mergeEvidence: MergeEvidence | undefined;
   readonly issueLink: IssueLinkEvidence | undefined;
   readonly preparationCheckpoints: readonly PreparationCheckpointState[];
+  readonly reflection: Reflection | undefined;
 }
 
 export interface AcceptMissionInput {
@@ -85,6 +87,7 @@ export interface MissionRehydrationState {
   readonly mergeEvidence: MergeEvidence | undefined;
   readonly issueLink: IssueLinkEvidence | undefined;
   readonly preparationCheckpoints: readonly PreparationCheckpointState[];
+  readonly reflection: Reflection | undefined;
 }
 
 function sameRepository(a: RepositoryIdentity, b: RepositoryIdentity): boolean {
@@ -157,6 +160,7 @@ export class Mission {
         mergeEvidence: undefined,
         issueLink: undefined,
         preparationCheckpoints: [],
+        reflection: undefined,
       }),
     );
   }
@@ -301,6 +305,10 @@ export class Mission {
     return ok(new Mission({ ...this.state, status: "ABANDONED" }));
   }
 
+  setReflection(reflection: Reflection): DomainResult<Mission> {
+    return ok(new Mission({ ...this.state, reflection: { ...reflection } }));
+  }
+
   addEvidence(evidence: Evidence): DomainResult<Mission> {
     const result = addEvidence(this.state.evidence, evidence);
     if (!result.ok) {
@@ -432,5 +440,9 @@ export class Mission {
 
   get preparationCheckpoints(): readonly PreparationCheckpointState[] {
     return this.state.preparationCheckpoints;
+  }
+
+  get reflection(): Reflection | undefined {
+    return this.state.reflection;
   }
 }

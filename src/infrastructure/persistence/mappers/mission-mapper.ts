@@ -69,6 +69,15 @@ export function toPersistedMission(mission: Mission): PersistedMission {
       checkpoint: entry.checkpoint,
       data: { ...entry.data },
     })),
+    reflection: mission.reflection
+      ? {
+          initialHypothesis: mission.reflection.initialHypothesis ?? null,
+          finalUnderstanding: mission.reflection.finalUnderstanding ?? null,
+          unexpectedFinding: mission.reflection.unexpectedFinding ?? null,
+          lesson: mission.reflection.lesson ?? null,
+          notes: mission.reflection.notes ?? null,
+        }
+      : null,
   };
 }
 
@@ -398,5 +407,15 @@ function reconstructMission(data: PersistedMission): DomainResult<Mission> {
       checkpoint: entry.checkpoint,
       data: { ...entry.data },
     })),
+    reflection:
+      data.reflection === null
+        ? undefined
+        : {
+            initialHypothesis: data.reflection.initialHypothesis ?? undefined,
+            finalUnderstanding: data.reflection.finalUnderstanding ?? undefined,
+            unexpectedFinding: data.reflection.unexpectedFinding ?? undefined,
+            lesson: data.reflection.lesson ?? undefined,
+            notes: data.reflection.notes ?? undefined,
+          },
   });
 }

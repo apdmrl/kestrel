@@ -69,6 +69,14 @@ const evidenceCollectionSchema = z.object({
   items: z.array(evidenceSchema),
 });
 
+const reflectionSchema = z.object({
+  initialHypothesis: z.string().nullable(),
+  finalUnderstanding: z.string().nullable(),
+  unexpectedFinding: z.string().nullable(),
+  lesson: z.string().nullable(),
+  notes: z.string().nullable(),
+});
+
 const preparationCheckpointStateSchema = z.object({
   checkpoint: z.enum([
     "WORKSPACE_CREATED",
@@ -98,6 +106,7 @@ export const missionSchema = z.object({
   mergeEvidence: mergeEvidenceSchema.nullable(),
   issueLink: issueLinkEvidenceSchema.nullable(),
   preparationCheckpoints: z.array(preparationCheckpointStateSchema),
+  reflection: reflectionSchema.nullable(),
 });
 
 export type PersistedMission = z.infer<typeof missionSchema>;
