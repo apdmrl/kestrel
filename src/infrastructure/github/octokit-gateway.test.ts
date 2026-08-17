@@ -112,4 +112,11 @@ describe("OctokitGateway", () => {
       code: "DM_GITHUB_AUTH_CANCELLED",
     });
   });
+
+  it("rejects device flow when no client id is configured", async () => {
+    const gateway = new OctokitGateway(new FakeOctokit(), "", fakeDeviceAuthFactory().factory);
+    await expect(gateway.beginDeviceFlow()).rejects.toMatchObject({
+      code: "DM_GITHUB_AUTH_REQUIRED",
+    });
+  });
 });

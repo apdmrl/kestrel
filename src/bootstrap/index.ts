@@ -19,6 +19,9 @@ import { OctokitGateway } from "../infrastructure/github/octokit-gateway.js";
 import { GithubChallengeSource } from "../infrastructure/github/github-challenge-source.js";
 import { genericPromptRenderer } from "../application/agent/generic-prompt-renderer.js";
 import { authenticateGitHub } from "../application/auth/authenticate-github.js";
+import type { ChallengeSource } from "../ports/challenge-source.js";
+import type { CredentialStore } from "../ports/credential-store.js";
+import type { GitHubGateway } from "../ports/github-gateway.js";
 import { findChallenge } from "../application/discovery/find-challenge.js";
 import { acceptMission } from "../application/mission/accept-mission.js";
 import {
@@ -60,6 +63,17 @@ export interface KestrelConfig {
   readonly githubApiUrl: string | undefined;
 }
 
+export interface BootstrapOptions {
+  /** Whether device flow may present interactive instructions. Defaults to true. */
+  readonly interactive?: boolean;
+  /** Writes user-facing device-flow instructions (verification URI and user code). */
+  readonly writeAuth?: (text: string) => void;
+  /** Overrides for adapters, used by tests and alternative compositions. */
+  readonly credentialStore?: CredentialStore;
+  readonly gateway?: GitHubGateway;
+  readonly challengeSourceFactory?: (token: string) => ChallengeSource;
+}
+
 export function createConfig(env: Record<string, string | undefined>): KestrelConfig {
   return {
     home: env.KESTREL_HOME ?? join(homedir(), ".kestrel"),
@@ -96,18 +110,6 @@ function noMission(message: string): ReturnType<typeof createKestrelError> {
   });
 }
 
-function authRequired(): ReturnType<typeof createKestrelError> {
-  return createKestrelError({
-    code: "DM_GITHUB_AUTH_REQUIRED",
-    category: "USER_ACTION_REQUIRED",
-    userMessage: "GitHub authentication is not configured",
-    suggestedActions: ["Set GITHUB_CLIENT_ID and run the command again"],
-    retryability: "NO_RETRY",
-    recoveryStrategy: "USER_ACTION",
-    severity: "ERROR",
-  });
-}
-
 function missionView(mission: Mission): ViewModel {
   return {
     kind: "mission",
@@ -122,7 +124,10 @@ function missionView(mission: Mission): ViewModel {
 }
 
 /** Compose the concrete adapters, recover pending transactions, and expose CLI handlers. */
-export async function bootstrap(config: KestrelConfig): Promise<CommandHandlers> {
+export async function bootstrap(
+  config: KestrelConfig,
+  options: BootstrapOptions = {},
+): Promise<CommandHandlers> {
   const missionStore = new FileSystemMissionStore();
   const preferencesStore = new FileSystemPreferencesStore(join(config.home, "preferences.json"));
   const indexStore = new FileSystemMissionIndexStore(join(config.home, "index.json"));
@@ -131,17 +136,21 @@ export async function bootstrap(config: KestrelConfig): Promise<CommandHandlers>
   const lock = new FileMissionLock();
   const journal = new FileTransactionJournal(join(config.home, "transactions"));
   const runner = new ExecaProcessRunner();
-  const credentialStore = new GitCredentialStore(runner);
+  const credentialStore = options.credentialStore ?? new GitCredentialStore(runner);
   const clock = new SystemClock();
   const idGenerator = new CryptoIdGenerator();
   const workspaceManager = new FilesystemWorkspaceManager();
   const gitFactory = (cwd: string) => new SystemGitClient(cwd, runner);
   const octokitOptions = config.githubApiUrl !== undefined ? { baseUrl: config.githubApiUrl } : {};
-  const gateway = new OctokitGateway(
-    new Octokit(octokitOptions),
-    config.githubClientId ?? "",
-    createOAuthDeviceAuth,
-  );
+  const gateway =
+    options.gateway ??
+    new OctokitGateway(
+      new Octokit(octokitOptions),
+      config.githubClientId ?? "",
+      createOAuthDeviceAuth,
+    );
+  const writeAuth = options.writeAuth ?? ((text: string) => process.stdout.write(text));
+  const interactive = options.interactive ?? true;
 
   await recoverTransactions({
     lock,
@@ -162,16 +171,25 @@ export async function bootstrap(config: KestrelConfig): Promise<CommandHandlers>
   };
 
   const requireGithubToken = async (): Promise<string> => {
-    // GitCredentialStore raises USER_ACTION_REQUIRED when no credential helper is
-    // configured; propagate that instead of falling through to device flow.
-    const cached = await credentialStore.get("github", "github");
-    if (cached !== undefined) {
-      return cached.token;
-    }
-    if (config.githubClientId === undefined || config.githubClientId.trim().length === 0) {
-      throw authRequired();
-    }
-    const auth = await authenticateGitHub({ credentialStore, gateway }, { account: "github" });
+    // Always validate cached tokens and present the device-flow verification
+    // code. The verification URI and short user code are safe to display; the
+    // device code and access token are never written out.
+    const auth = await authenticateGitHub(
+      { credentialStore, gateway },
+      {
+        account: "github",
+        interactive,
+        onAuthorization: (authorization) => {
+          writeAuth(
+            "To authenticate, open " +
+              authorization.verificationUri +
+              " and enter the code " +
+              authorization.userCode +
+              "\n",
+          );
+        },
+      },
+    );
     return auth.token;
   };
 
@@ -214,11 +232,14 @@ export async function bootstrap(config: KestrelConfig): Promise<CommandHandlers>
     const moodValue: Mood = isMood(mood) ? mood : "QUICK_WIN";
     const typeValue = type !== undefined ? validateChallengeType(type) : undefined;
     const token = await requireGithubToken();
-    const source = new GithubChallengeSource(
-      new Octokit({ ...octokitOptions, auth: token }),
-      clock,
-      idGenerator,
-    );
+    const source =
+      options.challengeSourceFactory !== undefined
+        ? options.challengeSourceFactory(token)
+        : new GithubChallengeSource(
+            new Octokit({ ...octokitOptions, auth: token }),
+            clock,
+            idGenerator,
+          );
     const preferences = await loadPreferences();
     const developer = resolveDeveloperContext(preferences.explicit, preferences.learned);
     const intent = createSearchIntent({

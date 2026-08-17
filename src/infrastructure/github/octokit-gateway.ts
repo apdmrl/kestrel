@@ -55,6 +55,18 @@ function cancelledError() {
   });
 }
 
+function authRequiredError() {
+  return createKestrelError({
+    code: "DM_GITHUB_AUTH_REQUIRED",
+    category: "USER_ACTION_REQUIRED",
+    userMessage: "GitHub authentication is not configured",
+    suggestedActions: ["Set GITHUB_CLIENT_ID and run the command again"],
+    retryability: "NO_RETRY",
+    recoveryStrategy: "USER_ACTION",
+    severity: "ERROR",
+  });
+}
+
 export class OctokitGateway implements GitHubGateway {
   private pendingAuth: Promise<GitHubToken> | undefined;
   private strategy: DeviceAuthStrategy | undefined;
@@ -66,6 +78,9 @@ export class OctokitGateway implements GitHubGateway {
   ) {}
 
   async beginDeviceFlow(): Promise<DeviceFlowAuthorization> {
+    if (this.clientId.trim().length === 0) {
+      throw authRequiredError();
+    }
     let resolveVerification!: (value: DeviceFlowAuthorization) => void;
     const verificationPromise = new Promise<DeviceFlowAuthorization>((resolve) => {
       resolveVerification = resolve;
