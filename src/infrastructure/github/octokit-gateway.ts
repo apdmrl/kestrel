@@ -1,9 +1,14 @@
 import { createKestrelError } from "../../application/errors/kestrel-error.js";
+import type { RepositoryIdentity } from "../../domain/challenge/repository-identity.js";
+import type { IsoDateTime } from "../../domain/shared/time.js";
 import type {
   DeviceFlowAuthorization,
   GitHubGateway,
   GitHubToken,
   GitHubViewer,
+  IssueLinkResult,
+  MergeInfo,
+  PullRequestInfo,
 } from "../../ports/github-gateway.js";
 import { mapGitHubError } from "./github-error-mapper.js";
 
@@ -120,6 +125,93 @@ export class OctokitGateway implements GitHubGateway {
       });
       const data = response.data as { login: string; id: number };
       return { login: data.login, id: data.id };
+    } catch (error) {
+      throw mapGitHubError(error);
+    }
+  }
+
+  async getPullRequest(
+    repository: RepositoryIdentity,
+    number: number,
+    token: string,
+  ): Promise<PullRequestInfo> {
+    try {
+      const headers = { authorization: "Bearer " + token };
+      const prResponse = await this.octokit.request(
+        "GET /repos/" + repository.owner + "/" + repository.name + "/pulls/" + number,
+        { headers },
+      );
+      const pr = prResponse.data as {
+        number: number;
+        html_url: string;
+        user: { login: string };
+        state: string;
+      };
+      const commitsResponse = await this.octokit.request(
+        "GET /repos/" + repository.owner + "/" + repository.name + "/pulls/" + number + "/commits",
+        { headers },
+      );
+      const commitsData = commitsResponse.data as Array<{ sha: string }>;
+      const state = pr.state === "open" ? "OPEN" : pr.state === "closed" ? "CLOSED" : "MERGED";
+      return {
+        number: pr.number,
+        url: pr.html_url,
+        repository,
+        author: pr.user.login,
+        commits: commitsData.map((commit) => commit.sha),
+        state,
+      };
+    } catch (error) {
+      throw mapGitHubError(error);
+    }
+  }
+
+  async getIssueLinkage(
+    repository: RepositoryIdentity,
+    prNumber: number,
+    token: string,
+  ): Promise<IssueLinkResult | undefined> {
+    try {
+      const response = await this.octokit.request(
+        "GET /repos/" + repository.owner + "/" + repository.name + "/pulls/" + prNumber,
+        { headers: { authorization: "Bearer " + token } },
+      );
+      const pr = response.data as { body?: string | null };
+      const body = pr.body ?? "";
+      const match =
+        /(?:close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)\s+#(\d+)/i.exec(body);
+      if (match === null) {
+        return undefined;
+      }
+      return { issueNumber: Number(match[1]), relationship: "CLOSING_KEYWORD" };
+    } catch (error) {
+      throw mapGitHubError(error);
+    }
+  }
+
+  async getMergeInfo(
+    repository: RepositoryIdentity,
+    prNumber: number,
+    token: string,
+  ): Promise<MergeInfo> {
+    try {
+      const response = await this.octokit.request(
+        "GET /repos/" + repository.owner + "/" + repository.name + "/pulls/" + prNumber,
+        { headers: { authorization: "Bearer " + token } },
+      );
+      const pr = response.data as {
+        merged: boolean;
+        merge_commit_sha?: string | null;
+        merged_at?: string | null;
+      };
+      return {
+        merged: pr.merged,
+        mergeSha: pr.merge_commit_sha ?? undefined,
+        mergedAt:
+          pr.merged_at === null || pr.merged_at === undefined
+            ? undefined
+            : (pr.merged_at as IsoDateTime),
+      };
     } catch (error) {
       throw mapGitHubError(error);
     }

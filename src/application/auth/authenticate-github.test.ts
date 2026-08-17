@@ -59,6 +59,18 @@ class FakeGateway implements GitHubGateway {
   async getViewer(token: string): Promise<GitHubViewer> {
     return this.viewerFn(token);
   }
+
+  async getPullRequest(): Promise<never> {
+    throw new Error("unused");
+  }
+
+  async getIssueLinkage(): Promise<undefined> {
+    return undefined;
+  }
+
+  async getMergeInfo(): Promise<{ merged: boolean; mergeSha: undefined; mergedAt: undefined }> {
+    return { merged: false, mergeSha: undefined, mergedAt: undefined };
+  }
 }
 
 function deps(store: FakeCredentialStore, gateway: FakeGateway) {
