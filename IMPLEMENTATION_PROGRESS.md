@@ -1,34 +1,42 @@
 # Kestrel v0.1 Implementation Progress
 
-> This file tracks the **review-fix** pass (starting from commit `a4f59db`) described in
-> `docs/kestrel/deepseek-review-fix-prompt.md`. All ten phases are complete and the final
-> verification gate is green again.
+> This file tracks the **post-review remediation** pass described in
+> `docs/kestrel/prompts/deepseek-kestrel-post-review-fixes.md`, which ran on top of the
+> earlier review-fix pass. All ten tasks are complete and the full Node 24 verification gate
+> is green.
 
-Current phase: 10 (Add real end-to-end coverage) — complete
+Current phase: 10 (Final verification and progress report) — complete
 Current verification: green — `npm ci`, boundaries, lint, format:check, typecheck,
-test (407 tests), build, and `npm pack --dry-run` all pass
-Last green commit: f28c47c (Phase 10)
+test (**456 tests across 73 files**), build, `npm pack --dry-run`, and
+`npm audit --omit=dev` (0 vulnerabilities) all pass under Node v24.19.0 / npm 11.17.0
+Last green commit: 14eda87 (chore: update test toolchain dependencies)
 
-## Review-fix phases
+## Post-review tasks
 
-- [x] Phase 1 — Make the production CLI functional
-- [x] Phase 2 — Repair mission preparation and recovery
-- [x] Phase 3 — Maintain the Mission index
-- [x] Phase 4 — Repair credential handling
-- [x] Phase 5 — Secure submission verification
-- [x] Phase 6 — Bind merge verification to the submitted PR
-- [x] Phase 7 — Fix evidence and issue-link integrity
-- [x] Phase 8 — Harden filesystem and locking safety
-- [x] Phase 9 — Make ledger and handoff writes durable
-- [x] Phase 10 — Add real end-to-end coverage
+- [x] Task 1 — Restore the single-writer lock invariant (guard serialized across the critical section)
+- [x] Task 2 — Complete the GitHub credential lifecycle (device-flow wiring, validation, non-interactive)
+- [x] Task 3 — Bind `mission accept` to the discovered recommendation
+- [x] Task 4 — Make preparation branch recovery crash-idempotent
+- [x] Task 5 — Serialize mission index updates across processes
+- [x] Task 6 — Harden repository identity and prompt trust boundaries
+- [x] Task 7 — Strengthen filesystem durability and workspace containment
+- [x] Task 8 — Complete CLI-level end-to-end coverage
+- [x] Task 9 — Update the test toolchain to resolve development advisories
+- [x] Task 10 — Full Node 24 verification gate and this report
 
-## Decisions
+## Verification
 
-- 2026-08-17: Original implementation started from the approved architecture and implementation plan.
-- Review-fix pass: the prior "v0.1 complete" acceptance claim was retracted after a code review
-  found verified defects (placeholder CLI handlers, non-durable preparation, missing index
-  writer, credential redaction bug, trust-bearing verification inputs, and more). All ten
-  review-fix phases are now complete and re-verified green.
+- Node v24.19.0, npm 11.17.0
+- `npm ci`: clean install, 0 vulnerabilities
+- `npm run boundaries`: pass
+- `npm run lint`: pass
+- `npm run format:check`: pass
+- `npm run typecheck`: pass
+- `npm test`: 456 passed (73 files)
+- `npm run build`: pass
+- `npm pack --dry-run`: pass
+- `npm audit --omit=dev`: 0 vulnerabilities
+- CLI smoke checks (`dist/cli/main.js`): `--help`, `mission --help`, `agent --help`, `verify --help` all exit 0
 
 ## Blockers
 
