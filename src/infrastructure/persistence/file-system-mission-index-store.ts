@@ -6,6 +6,7 @@ import type { RepositoryIdentity } from "../../domain/challenge/repository-ident
 import type { MissionStatus } from "../../domain/mission/mission-status.js";
 import type { MissionId } from "../../domain/shared/identifiers.js";
 import type { IsoDateTime } from "../../domain/shared/time.js";
+import type { MissionLock } from "../../ports/mission-lock.js";
 import type {
   MissionIndex,
   MissionIndexEntry,
@@ -63,8 +64,14 @@ function fromEntry(entry: MissionIndexEntry): PersistedIndexEntry {
   };
 }
 
+const INDEX_LOCK_MISSION_ID = "index" as MissionId;
+
 export class FileSystemMissionIndexStore implements MissionIndexStore {
-  constructor(private readonly filePath: string) {}
+  constructor(
+    private readonly filePath: string,
+    private readonly lock?: MissionLock,
+    private readonly indexLockPath?: string,
+  ) {}
 
   async get(): Promise<{ index: MissionIndex; version: number }> {
     const envelope = await readValidatedJson(this.filePath, missionIndexFileSchema);
@@ -78,6 +85,21 @@ export class FileSystemMissionIndexStore implements MissionIndexStore {
   }
 
   async save(
+    index: MissionIndex,
+    expectedVersion: number,
+  ): Promise<{ index: MissionIndex; version: number }> {
+    if (this.lock !== undefined && this.indexLockPath !== undefined) {
+      return this.lock.withMissionLock(
+        this.indexLockPath,
+        INDEX_LOCK_MISSION_ID,
+        "index-save",
+        () => this.saveUnlocked(index, expectedVersion),
+      );
+    }
+    return this.saveUnlocked(index, expectedVersion);
+  }
+
+  private async saveUnlocked(
     index: MissionIndex,
     expectedVersion: number,
   ): Promise<{ index: MissionIndex; version: number }> {

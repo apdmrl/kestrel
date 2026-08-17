@@ -142,15 +142,19 @@ export async function bootstrap(
   config: KestrelConfig,
   options: BootstrapOptions = {},
 ): Promise<CommandHandlers> {
+  const lock = new FileMissionLock();
   const missionStore = new FileSystemMissionStore();
   const preferencesStore = new FileSystemPreferencesStore(join(config.home, "preferences.json"));
-  const indexStore = new FileSystemMissionIndexStore(join(config.home, "index.json"));
+  const indexStore = new FileSystemMissionIndexStore(
+    join(config.home, "index.json"),
+    lock,
+    join(config.home, "index.json.lock"),
+  );
   const handoffStore = new FileSystemAgentHandoffStore();
   const journeyStore = new JsonlJourneyStore(join(config.home, "journey", "events.jsonl"));
   const recommendationStore = new FileSystemRecommendationStore(
     join(config.home, "recommendation.json"),
   );
-  const lock = new FileMissionLock();
   const journal = new FileTransactionJournal(join(config.home, "transactions"));
   const runner = new ExecaProcessRunner();
   const credentialStore = options.credentialStore ?? new GitCredentialStore(runner);
