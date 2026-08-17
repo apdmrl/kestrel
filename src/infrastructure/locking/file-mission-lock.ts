@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, open, readFile, rename, unlink } from "node:fs/promises";
-import { dirname } from "node:path";
+import { mkdir, open, readFile, rmdir, unlink, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { z } from "zod";
 import { createKestrelError } from "../../application/errors/kestrel-error.js";
 import type { MissionId } from "../../domain/shared/identifiers.js";
@@ -18,7 +18,24 @@ const lockFileSchema = z.object({
 
 type LockFile = z.infer<typeof lockFileSchema>;
 
-function isProcessAlive(pid: number): boolean {
+const guardFileSchema = z.object({
+  schemaVersion: z.literal(1),
+  pid: z.number().int().positive(),
+  createdAt: z.string().min(1),
+  token: z.string().min(1),
+});
+
+type GuardFile = z.infer<typeof guardFileSchema>;
+
+/** Liveness probe for an owning process; injectable for deterministic tests. */
+export type ProcessLiveness = (pid: number) => boolean | Promise<boolean>;
+
+export interface FileMissionLockOptions {
+  /** Liveness probe; defaults to a null-signal check against the process table. */
+  isProcessAlive?: ProcessLiveness;
+}
+
+function defaultIsProcessAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
@@ -74,6 +91,7 @@ function malformedLockError() {
     retryability: "NO_RETRY",
     recoveryStrategy: "MANUAL_INTERVENTION",
     severity: "ERROR",
+    debugContext: {},
   });
 }
 
@@ -90,7 +108,25 @@ function ioError(message: string, cause: unknown) {
   });
 }
 
+/**
+ * Mission single-writer lock.
+ *
+ * The lock file itself records the owner (pid + token). Every mutation of that
+ * file — acquisition, release, and stale recovery — is serialized through a
+ * separate recovery-guard directory. The guard directory is created atomically
+ * with mkdir and removed with rmdir (which only succeeds when empty), so it is
+ * never "renamed away" to expose a window in which a second writer can slip
+ * in. The lock file is therefore never removed or replaced before exclusive
+ * recovery ownership has been established, and a live owner is always left
+ * authoritative.
+ */
 export class FileMissionLock implements MissionLock {
+  private readonly isProcessAlive: ProcessLiveness;
+
+  constructor(options: FileMissionLockOptions = {}) {
+    this.isProcessAlive = options.isProcessAlive ?? defaultIsProcessAlive;
+  }
+
   async withMissionLock<T>(
     lockPath: string,
     missionId: MissionId,
@@ -99,39 +135,45 @@ export class FileMissionLock implements MissionLock {
   ): Promise<T> {
     const token = randomUUID();
     await mkdir(dirname(lockPath), { recursive: true });
-    let handle;
+    const guardPath = this.guardPath(lockPath);
+    const guardToken = await this.acquireGuard(guardPath);
     try {
-      handle = await open(lockPath, "wx");
-    } catch (error) {
-      if (isEexist(error)) {
-        throw await this.classifyExistingLock(lockPath);
+      let handle;
+      try {
+        handle = await open(lockPath, "wx");
+      } catch (error) {
+        if (isEexist(error)) {
+          throw await this.classifyExistingLock(lockPath);
+        }
+        throw ioError("Failed to acquire the mission lock", error);
       }
-      throw ioError("Failed to acquire the mission lock", error);
-    }
 
-    const content =
-      JSON.stringify(
-        {
-          schemaVersion: 1,
-          missionId,
-          pid: process.pid,
-          createdAt: new Date().toISOString() as IsoDateTime,
-          operation,
-          token,
-        },
-        null,
-        2,
-      ) + "\n";
+      const content =
+        JSON.stringify(
+          {
+            schemaVersion: 1,
+            missionId,
+            pid: process.pid,
+            createdAt: new Date().toISOString() as IsoDateTime,
+            operation,
+            token,
+          },
+          null,
+          2,
+        ) + "\n";
 
-    try {
-      await handle.writeFile(content, "utf8");
-      await handle.sync();
-    } catch (error) {
-      await handle.close().catch(() => undefined);
-      await unlink(lockPath).catch(() => undefined);
-      throw ioError("Failed to write the mission lock", error);
+      try {
+        await handle.writeFile(content, "utf8");
+        await handle.sync();
+      } catch (error) {
+        await handle.close().catch(() => undefined);
+        await unlink(lockPath).catch(() => undefined);
+        throw ioError("Failed to write the mission lock", error);
+      }
+      await handle.close();
+    } finally {
+      await this.releaseGuard(guardPath, guardToken);
     }
-    await handle.close();
 
     try {
       return await action();
@@ -141,27 +183,102 @@ export class FileMissionLock implements MissionLock {
   }
 
   async breakStaleLock(lockPath: string): Promise<void> {
-    // Atomically claim the lock file so a replacement lock is never unlinked
-    // by this breaker; only the unique staging path is ever removed.
-    const stagingPath = lockPath + ".break." + randomUUID();
+    await mkdir(dirname(lockPath), { recursive: true });
+    const guardPath = this.guardPath(lockPath);
+    const guardToken = await this.acquireGuard(guardPath);
     try {
-      await rename(lockPath, stagingPath);
-    } catch (error) {
-      if (isEnoent(error)) {
+      const current = await this.readLock(lockPath);
+      if (current === undefined) {
         return;
       }
-      throw ioError("Failed to claim the stale lock", error);
+      if (await this.isProcessAlive(current.pid)) {
+        throw lockedError(current.pid);
+      }
+      await unlink(lockPath);
+    } finally {
+      await this.releaseGuard(guardPath, guardToken);
     }
-    const claimed = await this.readLock(stagingPath);
-    if (claimed === undefined) {
-      await rename(stagingPath, lockPath).catch(() => undefined);
-      throw malformedLockError();
+  }
+
+  private guardPath(lockPath: string): string {
+    return lockPath + ".guard";
+  }
+
+  private async acquireGuard(guardPath: string): Promise<string> {
+    const token = randomUUID();
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        await mkdir(guardPath);
+      } catch (error) {
+        if (!isEexist(error)) {
+          throw ioError("Failed to acquire the mission lock guard", error);
+        }
+        const owner = await this.readGuardOwner(guardPath);
+        if (owner !== undefined && (await this.isProcessAlive(owner.pid))) {
+          throw lockedError(owner.pid);
+        }
+        await this.breakGuard(guardPath);
+        continue;
+      }
+      try {
+        await this.writeGuardOwner(guardPath, token);
+        return token;
+      } catch (error) {
+        await unlink(join(guardPath, "owner.json")).catch(() => undefined);
+        await rmdir(guardPath).catch(() => undefined);
+        throw ioError("Failed to write the mission lock guard", error);
+      }
     }
-    if (isProcessAlive(claimed.pid)) {
-      await rename(stagingPath, lockPath).catch(() => undefined);
-      throw lockedError(claimed.pid);
+    throw lockedError(process.pid);
+  }
+
+  private async writeGuardOwner(guardPath: string, token: string): Promise<void> {
+    const content =
+      JSON.stringify(
+        {
+          schemaVersion: 1,
+          pid: process.pid,
+          createdAt: new Date().toISOString() as IsoDateTime,
+          token,
+        },
+        null,
+        2,
+      ) + "\n";
+    await writeFile(join(guardPath, "owner.json"), content, { encoding: "utf8", flag: "wx" });
+  }
+
+  private async readGuardOwner(guardPath: string): Promise<GuardFile | undefined> {
+    let content: string;
+    try {
+      content = await readFile(join(guardPath, "owner.json"), "utf8");
+    } catch (error) {
+      if (isEnoent(error)) {
+        return undefined;
+      }
+      throw ioError("Failed to read the mission lock guard", error);
     }
-    await unlink(stagingPath).catch(() => undefined);
+    let raw: unknown;
+    try {
+      raw = JSON.parse(content);
+    } catch {
+      return undefined;
+    }
+    const parsed = guardFileSchema.safeParse(raw);
+    return parsed.success ? parsed.data : undefined;
+  }
+
+  private async breakGuard(guardPath: string): Promise<void> {
+    await unlink(join(guardPath, "owner.json")).catch(() => undefined);
+    await rmdir(guardPath).catch(() => undefined);
+  }
+
+  private async releaseGuard(guardPath: string, token: string): Promise<void> {
+    const owner = await this.readGuardOwner(guardPath).catch(() => undefined);
+    if (owner !== undefined && owner.token !== token) {
+      return;
+    }
+    await unlink(join(guardPath, "owner.json")).catch(() => undefined);
+    await rmdir(guardPath).catch(() => undefined);
   }
 
   private async classifyExistingLock(lockPath: string) {
@@ -169,30 +286,29 @@ export class FileMissionLock implements MissionLock {
     if (current === undefined) {
       return lockedError(process.pid);
     }
-    if (isProcessAlive(current.pid)) {
+    if (await this.isProcessAlive(current.pid)) {
       return lockedError(current.pid);
     }
     return staleLockError(current.pid);
   }
 
   private async release(lockPath: string, token: string): Promise<void> {
-    // Atomically claim the lock file, then verify ownership on the unique
-    // staging path. A replacement lock is restored rather than deleted.
-    const stagingPath = lockPath + ".release." + randomUUID();
+    const guardPath = this.guardPath(lockPath);
+    let guardToken: string;
     try {
-      await rename(lockPath, stagingPath);
-    } catch (error) {
-      if (isEnoent(error)) {
-        return;
-      }
-      throw ioError("Failed to release the mission lock", error);
-    }
-    const claimed = await this.readLock(stagingPath);
-    if (claimed === undefined || claimed.token !== token) {
-      await rename(stagingPath, lockPath).catch(() => undefined);
+      guardToken = await this.acquireGuard(guardPath);
+    } catch {
       return;
     }
-    await unlink(stagingPath).catch(() => undefined);
+    try {
+      const current = await this.readLock(lockPath);
+      if (current === undefined || current.token !== token) {
+        return;
+      }
+      await unlink(lockPath);
+    } finally {
+      await this.releaseGuard(guardPath, guardToken);
+    }
   }
 
   private async readLock(lockPath: string): Promise<LockFile | undefined> {

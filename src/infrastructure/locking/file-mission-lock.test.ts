@@ -48,6 +48,21 @@ async function expectCode(promise: Promise<unknown>, code: string): Promise<void
   }
 }
 
+/**
+ * Deterministic synchronization barrier: yield to the event loop until a
+ * condition holds or a bounded yield budget is exhausted. No wall-clock sleep
+ * is involved, so the result cannot flake with machine speed.
+ */
+async function waitFor(condition: () => boolean): Promise<void> {
+  for (let i = 0; i < 2000; i++) {
+    if (condition()) {
+      return;
+    }
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  throw new Error("condition not reached before the bounded yield budget");
+}
+
 describe("FileMissionLock", () => {
   it("acquires exclusively and releases on success", async () => {
     const lock = new FileMissionLock();
@@ -146,5 +161,67 @@ describe("FileMissionLock", () => {
     const raw = await readFile(lockPath(), "utf8");
     expect((JSON.parse(raw) as { token: string }).token).toBe("stale-token");
     await lock.breakStaleLock(lockPath());
+  });
+
+  it("keeps a live owner authoritative while recovery is paused mid-claim", async () => {
+    const alivePid = 424242;
+    let reached = false;
+    let resume: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      resume = resolve;
+    });
+    const lock = new FileMissionLock({
+      isProcessAlive: (pid) => {
+        if (pid === alivePid) {
+          reached = true;
+          return gate.then(() => true);
+        }
+        return true;
+      },
+    });
+    await writeLock(staleLockContent(alivePid));
+
+    const breaker = lock.breakStaleLock(lockPath());
+    await waitFor(() => reached);
+
+    // While recovery holds the claim, a second acquisition must be excluded.
+    await expectCode(
+      lock.withMissionLock(lockPath(), missionId, "other", async () => undefined),
+      "DM_MISSION_LOCKED",
+    );
+
+    resume();
+    await expectCode(breaker, "DM_MISSION_LOCKED");
+
+    // The original live owner remains authoritative and untouched.
+    const raw = JSON.parse(await readFile(lockPath(), "utf8")) as { pid: number };
+    expect(raw.pid).toBe(alivePid);
+  });
+
+  it("lets exactly one stale-lock breaker recover and excludes the others", async () => {
+    await writeLock(staleLockContent(99999999));
+    let reached = false;
+    let resume: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      resume = resolve;
+    });
+    const first = new FileMissionLock({
+      isProcessAlive: (pid) => {
+        if (pid === 99999999) {
+          reached = true;
+          return gate.then(() => false);
+        }
+        return true;
+      },
+    });
+    const breaker1 = first.breakStaleLock(lockPath());
+    await waitFor(() => reached);
+
+    const second = new FileMissionLock();
+    await expectCode(second.breakStaleLock(lockPath()), "DM_MISSION_LOCKED");
+
+    resume();
+    await breaker1;
+    await expect(stat(lockPath())).rejects.toThrow();
   });
 });
