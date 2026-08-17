@@ -6,6 +6,7 @@ export type MissionId = Brand<string, "MissionId">;
 export type ChallengeId = Brand<string, "ChallengeId">;
 export type EventId = Brand<string, "EventId">;
 export type HandoffId = Brand<string, "HandoffId">;
+export type TransactionId = Brand<string, "TransactionId">;
 
 function parseId<T extends string>(brand: T, input: string): DomainResult<Brand<string, T>> {
   const value = input.trim();
@@ -29,4 +30,8 @@ export function parseEventId(input: string): DomainResult<EventId> {
 
 export function parseHandoffId(input: string): DomainResult<HandoffId> {
   return parseId("HandoffId", input);
+}
+
+export function parseTransactionId(input: string): DomainResult<TransactionId> {
+  return parseId("TransactionId", input);
 }
