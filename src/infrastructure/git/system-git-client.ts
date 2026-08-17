@@ -56,6 +56,19 @@ export class SystemGitClient implements GitClient {
     await this.runGit(["checkout", "-b", branchName]);
   }
 
+  async branchExists(branchName: string): Promise<boolean> {
+    try {
+      await this.runGit(["show-ref", "--verify", "--quiet", "refs/heads/" + branchName]);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async checkoutBranch(branchName: string): Promise<void> {
+    await this.runGit(["checkout", branchName]);
+  }
+
   async getRepositoryIdentity(): Promise<RepositoryIdentity> {
     const result = await this.runGit(["remote", "get-url", "origin"]);
     return parseGitHubIdentity(result.stdout);

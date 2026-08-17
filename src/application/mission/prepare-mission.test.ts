@@ -101,8 +101,10 @@ function gitFatal(): ReturnType<typeof createKestrelError> {
 class FakeGit implements GitClient {
   cloneCalls = 0;
   createBranchCalls = 0;
+  checkoutCalls = 0;
   cloned = false;
   branch = "main";
+  branches = new Set<string>(["main"]);
   baseSha = "base-sha";
   identity: RepositoryIdentity = { ...repository };
   failOn: string | undefined = undefined;
@@ -133,6 +135,16 @@ class FakeGit implements GitClient {
   async createBranch(name: string): Promise<void> {
     this.createBranchCalls += 1;
     this.failIf("createBranch");
+    this.branches.add(name);
+    this.branch = name;
+  }
+  async branchExists(name: string): Promise<boolean> {
+    this.failIf("branchExists");
+    return this.branches.has(name);
+  }
+  async checkoutBranch(name: string): Promise<void> {
+    this.checkoutCalls += 1;
+    this.failIf("checkoutBranch");
     this.branch = name;
   }
   async getRepositoryIdentity(): Promise<RepositoryIdentity> {
@@ -412,6 +424,138 @@ describe("prepareMission (durable, resumable)", () => {
       const resumed = await resumeMissionPreparation(h.deps(git), { missionId, sidecarPath });
       expect(resumed.status).toBe("IN_PROGRESS");
       expect(git.cloneCalls).toBe(1); // the already-cloned repository was reused
+    } finally {
+      await h.cleanup();
+    }
+  });
+
+  it("converges after a branch-creation save failure without recreating the branch", async () => {
+    const h = await makeHarness();
+    try {
+      const missionId = "m1" as MissionId;
+      const { sidecarPath, plan } = await h.seed(missionId);
+      const git = new FakeGit();
+      const faulty = new FaultySaveStore(h.missionStore, "BRANCH_CREATED");
+      await expect(
+        prepareMission(h.deps(git, { missionStore: faulty }), { missionId, sidecarPath }),
+      ).rejects.toMatchObject({ code: "DM_MISSION_PREPARATION_INTERRUPTED" });
+      expect(git.createBranchCalls).toBe(1);
+      expect(git.branch).toBe(plan.branchName);
+
+      const resumed = await resumeMissionPreparation(h.deps(git), { missionId, sidecarPath });
+      expect(resumed.status).toBe("IN_PROGRESS");
+      expect(git.createBranchCalls).toBe(1); // reconciled, never recreated
+      expect(git.branch).toBe(plan.branchName);
+    } finally {
+      await h.cleanup();
+    }
+  });
+
+  it("restart after branch creation converges to the intended branch", async () => {
+    const h = await makeHarness();
+    try {
+      const missionId = "m1" as MissionId;
+      const { sidecarPath, plan } = await h.seed(missionId);
+      const git = new FakeGit();
+      const faulty = new FaultySaveStore(h.missionStore, "CONTEXT_COLLECTED");
+      await expect(
+        prepareMission(h.deps(git, { missionStore: faulty }), { missionId, sidecarPath }),
+      ).rejects.toMatchObject({ code: "DM_MISSION_PREPARATION_INTERRUPTED" });
+      expect(git.createBranchCalls).toBe(1);
+      expect(git.branch).toBe(plan.branchName);
+
+      const token = restartConfirmationToken(missionId, sidecarPath);
+      await restartMissionPreparation(h.deps(git), {
+        missionId,
+        sidecarPath,
+        confirmation: token,
+      });
+
+      const again = await resumeMissionPreparation(h.deps(git), { missionId, sidecarPath });
+      expect(again.status).toBe("IN_PROGRESS");
+      expect(git.createBranchCalls).toBe(1); // branch reconciled, never recreated
+      expect(git.branch).toBe(plan.branchName);
+    } finally {
+      await h.cleanup();
+    }
+  });
+
+  it("records the branch checkpoint without creating when already on the intended branch", async () => {
+    const h = await makeHarness();
+    try {
+      const missionId = "m1" as MissionId;
+      const { sidecarPath, plan } = await h.seed(missionId);
+      const git = new FakeGit();
+      git.cloned = true;
+      git.branch = plan.branchName;
+      git.branches.add(plan.branchName);
+
+      const mission = await prepareMission(h.deps(git), { missionId, sidecarPath });
+      expect(mission.status).toBe("IN_PROGRESS");
+      expect(git.createBranchCalls).toBe(0);
+      expect(git.checkoutCalls).toBe(0);
+    } finally {
+      await h.cleanup();
+    }
+  });
+
+  it("checks out the intended branch when it exists but another is checked out", async () => {
+    const h = await makeHarness();
+    try {
+      const missionId = "m1" as MissionId;
+      const { sidecarPath, plan } = await h.seed(missionId);
+      const git = new FakeGit();
+      git.branches.add(plan.branchName); // intended branch exists, "main" stays checked out
+
+      const mission = await prepareMission(h.deps(git), { missionId, sidecarPath });
+      expect(mission.status).toBe("IN_PROGRESS");
+      expect(git.createBranchCalls).toBe(0);
+      expect(git.checkoutCalls).toBe(1);
+      expect(git.branch).toBe(plan.branchName);
+    } finally {
+      await h.cleanup();
+    }
+  });
+
+  it("fails without deleting the clone when the checked-out branch is unexpected", async () => {
+    const h = await makeHarness();
+    try {
+      const missionId = "m1" as MissionId;
+      const { sidecarPath, plan } = await h.seed(missionId);
+      const git = new FakeGit();
+      const faulty = new FaultySaveStore(h.missionStore, "CONTEXT_COLLECTED");
+      await expect(
+        prepareMission(h.deps(git, { missionStore: faulty }), { missionId, sidecarPath }),
+      ).rejects.toMatchObject({ code: "DM_MISSION_PREPARATION_INTERRUPTED" });
+      expect(git.branch).toBe(plan.branchName);
+
+      git.branch = "other";
+      git.branches.add("other");
+      await expect(
+        resumeMissionPreparation(h.deps(git), { missionId, sidecarPath }),
+      ).rejects.toMatchObject({ code: "DM_REPOSITORY_MISMATCH" });
+      expect(git.cloneCalls).toBe(1);
+      expect(git.cloned).toBe(true);
+    } finally {
+      await h.cleanup();
+    }
+  });
+
+  it("verifies the recorded branch name exactly, not merely nonempty", async () => {
+    const h = await makeHarness();
+    try {
+      const missionId = "m1" as MissionId;
+      const { sidecarPath } = await h.seed(missionId);
+      const git = new FakeGit();
+      const faulty = new FaultySaveStore(h.missionStore, "CONTEXT_COLLECTED");
+      await expect(
+        prepareMission(h.deps(git, { missionStore: faulty }), { missionId, sidecarPath }),
+      ).rejects.toMatchObject({ code: "DM_MISSION_PREPARATION_INTERRUPTED" });
+
+      git.branch = "main"; // nonempty, but not the recorded branch
+      await expect(
+        resumeMissionPreparation(h.deps(git), { missionId, sidecarPath }),
+      ).rejects.toMatchObject({ code: "DM_REPOSITORY_MISMATCH" });
     } finally {
       await h.cleanup();
     }

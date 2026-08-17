@@ -16,6 +16,8 @@ export interface GitClient {
   getDefaultBranch(): Promise<string>;
   getHeadSha(): Promise<string>;
   createBranch(branchName: string): Promise<void>;
+  branchExists(branchName: string): Promise<boolean>;
+  checkoutBranch(branchName: string): Promise<void>;
   getRepositoryIdentity(): Promise<RepositoryIdentity>;
   collectChangesSince(baseSha: string): Promise<LocalChanges>;
   getCurrentBranch(): Promise<string>;

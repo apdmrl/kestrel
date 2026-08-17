@@ -206,8 +206,9 @@ async function verifyCheckpoint(
     case "BRANCH_CREATED": {
       const git = deps.gitFactory(plan.repositoryPath);
       const branch = await git.getCurrentBranch();
-      if (branch.trim().length === 0) {
-        throw externalStateChanged("the repository is not on a branch");
+      const recordedBranch = checkpointData(mission, "BRANCH_CREATED").branch as string;
+      if (branch !== recordedBranch) {
+        throw externalStateChanged("the checked-out branch no longer matches the recorded branch");
       }
       return;
     }
@@ -248,10 +249,19 @@ async function executeCheckpoint(
       result = mission.recordPreparationCheckpoint(checkpoint, { baseCommit, defaultBranch });
       break;
     }
-    case "BRANCH_CREATED":
-      await deps.gitFactory(plan.repositoryPath).createBranch(plan.branchName);
+    case "BRANCH_CREATED": {
+      const git = deps.gitFactory(plan.repositoryPath);
+      const current = await git.getCurrentBranch();
+      if (current !== plan.branchName) {
+        if (await git.branchExists(plan.branchName)) {
+          await git.checkoutBranch(plan.branchName);
+        } else {
+          await git.createBranch(plan.branchName);
+        }
+      }
       result = mission.recordPreparationCheckpoint(checkpoint, { branch: plan.branchName });
       break;
+    }
     case "CONTEXT_COLLECTED":
       result = mission.recordPreparationCheckpoint(checkpoint, {});
       break;

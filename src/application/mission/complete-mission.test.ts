@@ -103,6 +103,10 @@ class FakeGit implements GitClient {
     return "head";
   }
   async createBranch(): Promise<void> {}
+  async branchExists(): Promise<boolean> {
+    return false;
+  }
+  async checkoutBranch(): Promise<void> {}
   async getRepositoryIdentity() {
     return this.identity;
   }
