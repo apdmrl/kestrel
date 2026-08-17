@@ -1,11 +1,10 @@
-import type { ChallengeType } from "../challenge/challenge.js";
 import type { DomainResult } from "../shared/result.js";
 import { err, ok } from "../shared/result.js";
 
 /** What Kestrel infers from behavior. Always a signal, never a declared preference. */
 export interface LearnedSignals {
   readonly languageAffinity: Readonly<Record<string, number>>;
-  readonly missionTypeAffinity: Readonly<Record<ChallengeType, number>>;
+  readonly missionTypeAffinity: Readonly<Record<string, number>>;
   readonly interestAffinity: Readonly<Record<string, number>>;
   readonly scopeAffinity: Readonly<Record<string, number>>;
   readonly recentPatterns: readonly string[];
@@ -13,7 +12,7 @@ export interface LearnedSignals {
 
 export interface CreateLearnedSignalsInput {
   readonly languageAffinity?: Readonly<Record<string, number>>;
-  readonly missionTypeAffinity?: Readonly<Record<ChallengeType, number>>;
+  readonly missionTypeAffinity?: Readonly<Record<string, number>>;
   readonly interestAffinity?: Readonly<Record<string, number>>;
   readonly scopeAffinity?: Readonly<Record<string, number>>;
   readonly recentPatterns?: readonly string[];

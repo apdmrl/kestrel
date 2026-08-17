@@ -1,6 +1,5 @@
 import type { DomainResult } from "../shared/result.js";
 import { ok } from "../shared/result.js";
-import type { ChallengeType } from "../challenge/challenge.js";
 import type { LearnedSignals } from "./learned-signals.js";
 
 export type DeveloperMode = "GUIDED" | "EXPERT";
@@ -28,7 +27,7 @@ export interface DeveloperContext {
   readonly mode: DeveloperMode;
   readonly workspaceRoot: string | undefined;
   readonly languageAffinity: Readonly<Record<string, number>>;
-  readonly missionTypeAffinity: Readonly<Record<ChallengeType, number>>;
+  readonly missionTypeAffinity: Readonly<Record<string, number>>;
   readonly interestAffinity: Readonly<Record<string, number>>;
   readonly scopeAffinity: Readonly<Record<string, number>>;
   readonly recentPatterns: readonly string[];
