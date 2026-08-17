@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, open, readFile, rmdir, unlink, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, readdir, rename, rm, rmdir, unlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { z } from "zod";
 import { createKestrelError } from "../../application/errors/kestrel-error.js";
@@ -33,6 +33,18 @@ export type ProcessLiveness = (pid: number) => boolean | Promise<boolean>;
 export interface FileMissionLockOptions {
   /** Liveness probe; defaults to a null-signal check against the process table. */
   isProcessAlive?: ProcessLiveness;
+  /**
+   * Deterministic test hook: fired after the guard reservation (owner record)
+   * is fully written but before the atomic rename commits it. Lets a test
+   * pause an acquisition between reservation and finalized ownership.
+   */
+  onGuardReserved?: (guardPath: string, token: string) => Promise<void> | void;
+  /**
+   * Deterministic test hook: fired when a guard's owner is judged dead, just
+   * before the dead owner's record is removed. Lets a test pause a recovery
+   * contender between reading a dead owner and breaking its guard.
+   */
+  onDeadGuardOwner?: (guardPath: string, deadToken: string) => Promise<void> | void;
 }
 
 function defaultIsProcessAlive(pid: number): boolean {
@@ -113,18 +125,42 @@ function ioError(message: string, cause: unknown) {
  *
  * The lock file itself records the owner (pid + token). Every mutation of that
  * file — acquisition, release, and stale recovery — is serialized through a
- * separate recovery-guard directory. The guard directory is created atomically
- * with mkdir and removed with rmdir (which only succeeds when empty), so it is
- * never "renamed away" to expose a window in which a second writer can slip
- * in. The lock file is therefore never removed or replaced before exclusive
+ * separate recovery-guard directory. Node.js exposes no dependable OS advisory
+ * lock (flock) in core, so the guard uses directory-based locking with atomic
+ * commit evidence:
+ *
+ * 1. The contender writes its full owner record (pid + random token) into a
+ *    uniquely named reservation directory that is invisible to other
+ *    contenders (guardPath + "." + token + ".tmp").
+ * 2. The reservation is committed with a single atomic rename() onto the guard
+ *    path. After commit the guard directory always contains a complete,
+ *    schema-valid, token-named owner record — an ownerless or malformed guard
+ *    directory can therefore never be produced by a live process and is
+ *    provably crash residue that can be reclaimed deterministically.
+ * 3. Removal is content- and token-conditional: a recovery contender only
+ *    unlinks records whose embedded token matches the dead owner it observed,
+ *    and the directory is removed only with rmdir (which succeeds only when
+ *    empty). A replacement owner's record (different token) can never be
+ *    deleted by an old releaser or a slow recovery contender, even under
+ *    arbitrary interleavings.
+ *
+ * The lock file is therefore never removed or replaced before exclusive
  * recovery ownership has been established, and a live owner is always left
  * authoritative.
  */
 export class FileMissionLock implements MissionLock {
   private readonly isProcessAlive: ProcessLiveness;
+  private readonly onGuardReserved:
+    | ((guardPath: string, token: string) => Promise<void> | void)
+    | undefined;
+  private readonly onDeadGuardOwner:
+    | ((guardPath: string, deadToken: string) => Promise<void> | void)
+    | undefined;
 
   constructor(options: FileMissionLockOptions = {}) {
     this.isProcessAlive = options.isProcessAlive ?? defaultIsProcessAlive;
+    this.onGuardReserved = options.onGuardReserved;
+    this.onDeadGuardOwner = options.onDeadGuardOwner;
   }
 
   async withMissionLock<T>(
@@ -206,40 +242,60 @@ export class FileMissionLock implements MissionLock {
     return lockPath + ".guard";
   }
 
+  /**
+   * Guard reservation, committed with a single atomic rename. The owner record
+   * is fully written (and, for tests, optionally paused) before the rename, so
+   * the guard path never exists without a complete, valid owner record.
+   */
   private async acquireGuard(guardPath: string): Promise<string> {
     const token = randomUUID();
-    for (let attempt = 0; attempt < 2; attempt++) {
-      try {
-        await mkdir(guardPath);
-      } catch (error) {
-        if (!isEexist(error)) {
-          throw ioError("Failed to acquire the mission lock guard", error);
+    const reservationDir = guardPath + "." + token + ".tmp";
+    try {
+      await mkdir(reservationDir);
+      await this.writeGuardOwner(reservationDir, token);
+      await this.onGuardReserved?.(guardPath, token);
+
+      for (let attempt = 0; attempt < 4; attempt++) {
+        try {
+          await rename(reservationDir, guardPath);
+          return token;
+        } catch (error) {
+          if (!this.isGuardConflict(error)) {
+            throw ioError("Failed to acquire the mission lock guard", error);
+          }
         }
-        const owner = await this.readGuardOwner(guardPath);
-        if (owner === undefined) {
-          // The guard exists but has no readable owner marker yet: another
-          // process is mid-acquisition. Treat it as held, never break it.
-          throw lockedError(process.pid);
+
+        const inspected = await this.inspectGuard(guardPath);
+        if (inspected.kind === "gone") {
+          continue; // Freed by a concurrent release; retry the rename.
         }
-        if (await this.isProcessAlive(owner.pid)) {
-          throw lockedError(owner.pid);
+        if (inspected.kind === "owner") {
+          if (await this.isProcessAlive(inspected.owner.pid)) {
+            throw lockedError(inspected.owner.pid);
+          }
+          await this.onDeadGuardOwner?.(guardPath, inspected.owner.token);
+          await this.breakGuard(guardPath, inspected.owner);
+          continue;
         }
-        await this.breakGuard(guardPath);
-        continue;
+        // Ownerless or malformed entries are provably crash residue under this
+        // protocol (a live owner always commits a complete, valid record).
+        await this.removeResidue(guardPath, inspected);
       }
-      try {
-        await this.writeGuardOwner(guardPath, token);
-        return token;
-      } catch (error) {
-        await unlink(join(guardPath, "owner.json")).catch(() => undefined);
-        await rmdir(guardPath).catch(() => undefined);
-        throw ioError("Failed to write the mission lock guard", error);
-      }
+      throw lockedError(process.pid);
+    } finally {
+      await rm(reservationDir, { recursive: true, force: true }).catch(() => undefined);
     }
-    throw lockedError(process.pid);
   }
 
-  private async writeGuardOwner(guardPath: string, token: string): Promise<void> {
+  private isGuardConflict(error: unknown): boolean {
+    if (typeof error !== "object" || error === null) {
+      return false;
+    }
+    const code = (error as { code?: string }).code;
+    return code === "EEXIST" || code === "ENOTEMPTY" || code === "ENOTDIR";
+  }
+
+  private async writeGuardOwner(directory: string, token: string): Promise<void> {
     const content =
       JSON.stringify(
         {
@@ -251,19 +307,13 @@ export class FileMissionLock implements MissionLock {
         null,
         2,
       ) + "\n";
-    await writeFile(join(guardPath, "owner.json"), content, { encoding: "utf8", flag: "wx" });
+    await writeFile(join(directory, "owner-" + token + ".json"), content, {
+      encoding: "utf8",
+      flag: "wx",
+    });
   }
 
-  private async readGuardOwner(guardPath: string): Promise<GuardFile | undefined> {
-    let content: string;
-    try {
-      content = await readFile(join(guardPath, "owner.json"), "utf8");
-    } catch (error) {
-      if (isEnoent(error)) {
-        return undefined;
-      }
-      throw ioError("Failed to read the mission lock guard", error);
-    }
+  private parseGuardOwner(content: string): GuardFile | undefined {
     let raw: unknown;
     try {
       raw = JSON.parse(content);
@@ -274,17 +324,115 @@ export class FileMissionLock implements MissionLock {
     return parsed.success ? parsed.data : undefined;
   }
 
-  private async breakGuard(guardPath: string): Promise<void> {
-    await unlink(join(guardPath, "owner.json")).catch(() => undefined);
-    await rmdir(guardPath).catch(() => undefined);
+  private async inspectGuard(
+    guardPath: string,
+  ): Promise<
+    | { kind: "gone" }
+    | { kind: "owner"; owner: GuardFile }
+    | { kind: "residue"; entries: string[] | null }
+  > {
+    let entries: string[];
+    try {
+      entries = await readdir(guardPath);
+    } catch (error) {
+      if (isEnoent(error)) {
+        return { kind: "gone" };
+      }
+      if ((error as { code?: string }).code === "ENOTDIR") {
+        // The guard path itself is a file, not a directory: residue.
+        return { kind: "residue", entries: null };
+      }
+      throw ioError("Failed to inspect the mission lock guard", error);
+    }
+    const junk: string[] = [];
+    let owner: GuardFile | undefined;
+    for (const entry of entries) {
+      let content: string;
+      try {
+        content = await readFile(join(guardPath, entry), "utf8");
+      } catch (error) {
+        if (isEnoent(error)) {
+          continue; // Raced away; re-inspect on the next attempt.
+        }
+        throw ioError("Failed to read a mission lock guard record", error);
+      }
+      const parsed = this.parseGuardOwner(content);
+      if (parsed === undefined) {
+        junk.push(entry);
+      } else {
+        owner ??= parsed;
+      }
+    }
+    if (owner !== undefined) {
+      return { kind: "owner", owner };
+    }
+    return { kind: "residue", entries: junk };
   }
 
-  private async releaseGuard(guardPath: string, token: string): Promise<void> {
-    const owner = await this.readGuardOwner(guardPath).catch(() => undefined);
-    if (owner !== undefined && owner.token !== token) {
+  /** Remove a dead owner's guard record by token, then the directory if empty. */
+  private async breakGuard(guardPath: string, deadOwner: GuardFile): Promise<void> {
+    let entries: string[];
+    try {
+      entries = await readdir(guardPath);
+    } catch (error) {
+      if (isEnoent(error)) {
+        return;
+      }
+      if ((error as { code?: string }).code === "ENOTDIR") {
+        await unlink(guardPath).catch(() => undefined);
+        return;
+      }
+      throw ioError("Failed to read the mission lock guard during recovery", error);
+    }
+    for (const entry of entries) {
+      let content: string;
+      try {
+        content = await readFile(join(guardPath, entry), "utf8");
+      } catch (error) {
+        if (isEnoent(error)) {
+          continue;
+        }
+        throw ioError("Failed to read a mission lock guard record during recovery", error);
+      }
+      const parsed = this.parseGuardOwner(content);
+      if (parsed !== undefined && parsed.token !== deadOwner.token) {
+        continue; // A replacement owner's record: never touch it.
+      }
+      // The dead owner's record or unparseable junk from a crashed writer.
+      await unlink(join(guardPath, entry)).catch(() => undefined);
+    }
+    await rmdir(guardPath).catch(() => undefined); // ENOTEMPTY: a replacement owns it now.
+  }
+
+  /** Remove provably-abandoned residue: junk entries and an empty/absent directory. */
+  private async removeResidue(
+    guardPath: string,
+    residue: { entries: string[] | null },
+  ): Promise<void> {
+    if (residue.entries === null) {
+      // The guard path itself is a file, not a directory.
+      await unlink(guardPath).catch(() => undefined);
       return;
     }
-    await unlink(join(guardPath, "owner.json")).catch(() => undefined);
+    for (const entry of residue.entries) {
+      const entryPath = join(guardPath, entry);
+      await unlink(entryPath).catch(async (error) => {
+        if (isEnoent(error)) {
+          return;
+        }
+        await rmdir(entryPath).catch(() => undefined); // Entry is a stray directory.
+      });
+    }
+    await rmdir(guardPath).catch(() => undefined); // ENOTEMPTY: something re-created it; retry.
+  }
+
+  /**
+   * Release only the record this process created (token-named). A replacement
+   * owner's record has a different token and is never unlinked; rmdir then
+   * fails with ENOTEMPTY and leaves the replacement guard intact.
+   */
+  private async releaseGuard(guardPath: string, token: string): Promise<void> {
+    await unlink(join(guardPath, "owner-" + token + ".json")).catch(() => undefined);
     await rmdir(guardPath).catch(() => undefined);
   }
 
