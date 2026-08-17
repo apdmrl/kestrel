@@ -4,9 +4,9 @@
 > `docs/kestrel/deepseek-review-fix-prompt.md`. The previous "v0.1 complete" claim is
 > **retracted** until every required workflow and the final verification gate is green again.
 
-Current phase: 9 (Make ledger and handoff writes durable)
-Current verification: not green (work in progress)
-Last green commit: f6c34b5 (Phase 8)
+Current phase: 10 (Add real end-to-end coverage)
+Current verification: not green (final gate pending)
+Last green commit: eed97c1 (Phase 9)
 
 ## Review-fix phases
 
@@ -19,7 +19,7 @@ Last green commit: f6c34b5 (Phase 8)
 - [x] Phase 7 — Fix evidence and issue-link integrity
 - [x] Phase 8 — Harden filesystem and locking safety
 - [x] Phase 9 — Make ledger and handoff writes durable
-- [ ] Phase 10 — Add real end-to-end coverage
+- [x] Phase 10 — Add real end-to-end coverage
 
 ## Decisions
 

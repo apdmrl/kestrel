@@ -57,6 +57,7 @@ export interface KestrelConfig {
   readonly home: string;
   readonly workspaceRoot: string;
   readonly githubClientId: string | undefined;
+  readonly githubApiUrl: string | undefined;
 }
 
 export function createConfig(env: Record<string, string | undefined>): KestrelConfig {
@@ -64,6 +65,7 @@ export function createConfig(env: Record<string, string | undefined>): KestrelCo
     home: env.KESTREL_HOME ?? join(homedir(), ".kestrel"),
     workspaceRoot: env.KESTREL_WORKSPACE ?? join(homedir(), "Kestrel", "missions"),
     githubClientId: env.GITHUB_CLIENT_ID,
+    githubApiUrl: env.GITHUB_API_URL,
   };
 }
 
@@ -134,8 +136,9 @@ export async function bootstrap(config: KestrelConfig): Promise<CommandHandlers>
   const idGenerator = new CryptoIdGenerator();
   const workspaceManager = new FilesystemWorkspaceManager();
   const gitFactory = (cwd: string) => new SystemGitClient(cwd, runner);
+  const octokitOptions = config.githubApiUrl !== undefined ? { baseUrl: config.githubApiUrl } : {};
   const gateway = new OctokitGateway(
-    new Octokit(),
+    new Octokit(octokitOptions),
     config.githubClientId ?? "",
     createOAuthDeviceAuth,
   );
@@ -211,7 +214,11 @@ export async function bootstrap(config: KestrelConfig): Promise<CommandHandlers>
     const moodValue: Mood = isMood(mood) ? mood : "QUICK_WIN";
     const typeValue = type !== undefined ? validateChallengeType(type) : undefined;
     const token = await requireGithubToken();
-    const source = new GithubChallengeSource(new Octokit({ auth: token }), clock, idGenerator);
+    const source = new GithubChallengeSource(
+      new Octokit({ ...octokitOptions, auth: token }),
+      clock,
+      idGenerator,
+    );
     const preferences = await loadPreferences();
     const developer = resolveDeveloperContext(preferences.explicit, preferences.learned);
     const intent = createSearchIntent({

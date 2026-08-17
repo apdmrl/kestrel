@@ -161,7 +161,10 @@ async function tryGetRepositoryIdentity(
   try {
     return await deps.gitFactory(plan.repositoryPath).getRepositoryIdentity();
   } catch (error) {
-    if (isKestrelError(error) && error.code === "DM_GIT_FATAL") {
+    if (
+      isKestrelError(error) &&
+      (error.code === "DM_GIT_FATAL" || error.code === "DM_GIT_NOT_FOUND")
+    ) {
       return undefined;
     }
     throw error;
