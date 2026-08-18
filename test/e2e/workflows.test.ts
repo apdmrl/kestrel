@@ -46,6 +46,10 @@ let devicePollCount = 0;
 let searchHold = false;
 let searchArrived = false;
 let releaseSearchHold: (() => void) | undefined;
+/** When true, pull-request responses wait until the gate is released. */
+let pullsHold = false;
+let pullsArrived = false;
+let releasePullsHold: (() => void) | undefined;
 
 interface CliResult {
   status: number | null;
@@ -486,6 +490,12 @@ beforeAll(async () => {
       const number = match === null ? 0 : Number(match[1]);
       const override =
         prFixture !== undefined && prFixture.number === number ? prFixture : undefined;
+      if (pullsHold) {
+        pullsArrived = true;
+        await new Promise<void>((resolve) => {
+          releasePullsHold = resolve;
+        });
+      }
       if (override?.notFound === true) {
         res.statusCode = 404;
         res.end(JSON.stringify({ message: "not found" }));
@@ -1234,20 +1244,30 @@ describe("kestrel end-to-end workflow", () => {
     await writeFile(join(repo, "fix.txt"), "fixed\n", "utf8");
     await runGit(repo, ["add", "fix.txt"]);
     await runGit(repo, ["commit", "-m", "fix the bug"]);
+    const headSha = (
+      await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" })
+    ).stdout.trim();
     prFixture = {
       number: 31,
       author: "octocat",
       state: "open",
       body: "closes #42",
-      commits: [],
-      notFound: true,
+      commits: [headSha],
     };
-    // Use the 404 fixture to keep the request deterministic; the kill happens
-    // after the request starts (server-observed) or the process exits fast.
+    // Hold the pull-request response until the server observed the request,
+    // then terminate the child mid-request: a deterministic cancellation.
+    pullsHold = true;
+    pullsArrived = false;
+    releasePullsHold = undefined;
     const verify = spawnCli(["verify", "submission", "--id", missionId, "--pr", "31"]);
-    await Promise.race([verify.result, new Promise<void>((r) => setTimeout(r, 1500))]);
-    verify.child.kill("SIGKILL");
-    await verify.result;
+    try {
+      await waitFor(() => pullsArrived, "pull-request request arrived");
+      verify.child.kill("SIGKILL");
+      await verify.result;
+    } finally {
+      pullsHold = false;
+      releasePullsHold?.();
+    }
     prFixture = undefined;
     // No partial submission mutation: the mission stays IN_PROGRESS/NONE.
     expect((await readPersistedMission(sidecar)).mission.submissionVerification).toBe("NONE");

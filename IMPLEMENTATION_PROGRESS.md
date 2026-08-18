@@ -50,7 +50,7 @@ Last green code commit: 4230246 (test: prove complete CLI recovery contract)
 
 ## Known limitations (unresolved by design, documented honestly)
 
-- Workspace containment is not race-free against a *concurrent local attacker*: Node.js
+- Workspace containment is not race-free against a _concurrent local attacker_: Node.js
   exposes no directory-handle-relative, no-follow creation primitive (no `mkdirat`/openat),
   so a parent replaced in the final check-to-create window can redirect one directory
   creation outside the root. Kestrel detects the escape canonically, classifies it as
