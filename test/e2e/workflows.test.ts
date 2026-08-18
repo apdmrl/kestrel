@@ -1,16 +1,7 @@
 import { readFileSync } from "node:fs";
 import { execFile, spawn } from "node:child_process";
 import { createServer, type Server } from "node:http";
-import {
-  chmod,
-  mkdir,
-  mkdtemp,
-  readdir,
-  readFile,
-  rm,
-  stat,
-  writeFile,
-} from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -29,7 +20,6 @@ let fakeGitDir = "";
 let noCredGitDir = "";
 let fixture = "";
 let cloneLog = "";
-let cloneGate = "";
 let cloneStarted = "";
 
 /** Configurable pull-request fixture served by the fake GitHub server. */
@@ -392,7 +382,6 @@ beforeAll(async () => {
   await chmod(join(fakeGitDir, "git"), 0o755);
 
   cloneLog = join(home, "clone.log");
-  cloneGate = join(home, "clone.gate");
   cloneStarted = join(home, "clone.started");
 
   noCredGitDir = await mkdtemp(join(tmpdir(), "kestrel-e2e-nocred-"));
@@ -509,8 +498,7 @@ beforeAll(async () => {
       res.end(
         JSON.stringify({
           number: override?.number ?? 999,
-          html_url:
-            "https://github.com/octocat/hello-world/pull/" + (override?.number ?? 999),
+          html_url: "https://github.com/octocat/hello-world/pull/" + (override?.number ?? 999),
           user: { login: override?.author ?? "someone-else" },
           state: override?.state ?? "open",
           body: override?.body ?? "closes #42",
@@ -586,9 +574,9 @@ describe("kestrel end-to-end workflow", () => {
     expect(state.status).toBe("COMPLETED");
     expect(state.submissionVerification).toBe("NONE");
     expect(state.workspace).not.toBeNull();
-    const rawMission = JSON.parse(
-      await readFile(join(sidecar, "mission.json"), "utf8"),
-    ) as { mission: { evidence: { items: unknown[] } } };
+    const rawMission = JSON.parse(await readFile(join(sidecar, "mission.json"), "utf8")) as {
+      mission: { evidence: { items: unknown[] } };
+    };
     expect(rawMission.mission.evidence.items.length).toBeGreaterThan(0);
 
     // Index: exactly one entry for this mission, completed.
@@ -735,7 +723,9 @@ describe("kestrel end-to-end workflow", () => {
     await writeFile(join(repo, "fix.txt"), "fixed\n", "utf8");
     await runGit(repo, ["add", "fix.txt"]);
     await runGit(repo, ["commit", "-m", "fix the bug"]);
-    const headSha = (await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" })).stdout.trim();
+    const headSha = (
+      await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" })
+    ).stdout.trim();
 
     // A valid, merged pull request for the mission's repository and commits.
     prFixture = {
@@ -801,7 +791,9 @@ describe("kestrel end-to-end workflow", () => {
     await writeFile(join(repo, "fix.txt"), "fixed\n", "utf8");
     await runGit(repo, ["add", "fix.txt"]);
     await runGit(repo, ["commit", "-m", "fix the bug"]);
-    const headSha = (await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" })).stdout.trim();
+    const headSha = (
+      await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" })
+    ).stdout.trim();
 
     const sidecar = await findSidecarFor(missionId);
     const cases: Array<{
@@ -812,24 +804,50 @@ describe("kestrel end-to-end workflow", () => {
     }> = [
       {
         name: "wrong repository (PR not on the mission repository)",
-        fixture: { number: 11, author: "octocat", state: "open", body: "closes #42", commits: [headSha], notFound: true },
+        fixture: {
+          number: 11,
+          author: "octocat",
+          state: "open",
+          body: "closes #42",
+          commits: [headSha],
+          notFound: true,
+        },
         classified: "DM_GITHUB_NOT_FOUND",
       },
       {
         name: "wrong author",
-        fixture: { number: 12, author: "someone-else", state: "open", body: "closes #42", commits: [headSha] },
+        fixture: {
+          number: 12,
+          author: "someone-else",
+          state: "open",
+          body: "closes #42",
+          commits: [headSha],
+        },
         reason: "authenticated author",
       },
       {
         name: "missing commit overlap",
-        fixture: { number: 13, author: "octocat", state: "open", body: "closes #42", commits: ["0000000000000000000000000000000000000000"] },
+        fixture: {
+          number: 13,
+          author: "octocat",
+          state: "open",
+          body: "closes #42",
+          commits: ["0000000000000000000000000000000000000000"],
+        },
         reason: "no mission commits",
       },
     ];
     for (const entry of cases) {
       prFixture = entry.fixture;
       try {
-        const verify = await runCli(["verify", "submission", "--id", missionId, "--pr", String(entry.fixture.number)]);
+        const verify = await runCli([
+          "verify",
+          "submission",
+          "--id",
+          missionId,
+          "--pr",
+          String(entry.fixture.number),
+        ]);
         if (entry.classified !== undefined) {
           expect(verify.status, entry.name).not.toBe(0);
           expect(verify.stderr, entry.name).toContain(entry.classified);
@@ -848,7 +866,13 @@ describe("kestrel end-to-end workflow", () => {
 
     // A valid match with a different head branch still verifies: branch names
     // are supporting context only in the matcher and never reject a match.
-    prFixture = { number: 14, author: "octocat", state: "open", body: "closes #42", commits: [headSha] };
+    prFixture = {
+      number: 14,
+      author: "octocat",
+      state: "open",
+      body: "closes #42",
+      commits: [headSha],
+    };
     try {
       const ok = await runCli(["verify", "submission", "--id", missionId, "--pr", "14"]);
       expect(ok.status).toBe(0);
@@ -871,10 +895,18 @@ describe("kestrel end-to-end workflow", () => {
     await writeFile(join(repo, "fix.txt"), "fixed\n", "utf8");
     await runGit(repo, ["add", "fix.txt"]);
     await runGit(repo, ["commit", "-m", "fix the bug"]);
-    const headSha = (await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" })).stdout.trim();
+    const headSha = (
+      await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" })
+    ).stdout.trim();
 
     // The PR references issue 99, but the mission targets issue 42.
-    prFixture = { number: 21, author: "octocat", state: "open", body: "closes #99", commits: [headSha] };
+    prFixture = {
+      number: 21,
+      author: "octocat",
+      state: "open",
+      body: "closes #99",
+      commits: [headSha],
+    };
     try {
       const linked = await runCli(["verify", "link", "--id", missionId, "--pr", "21"]);
       expect(linked.status).toBe(0);
@@ -884,7 +916,13 @@ describe("kestrel end-to-end workflow", () => {
     }
 
     // Record a real submission for PR 7, then verify a DIFFERENT merged PR.
-    prFixture = { number: 7, author: "octocat", state: "open", body: "closes #42", commits: [headSha] };
+    prFixture = {
+      number: 7,
+      author: "octocat",
+      state: "open",
+      body: "closes #42",
+      commits: [headSha],
+    };
     try {
       const submitted = await runCli(["verify", "submission", "--id", missionId, "--pr", "7"]);
       expect(submitted.status).toBe(0);
@@ -896,7 +934,14 @@ describe("kestrel end-to-end workflow", () => {
     expect(different.stderr).toContain("DM_VERIFICATION_CONFLICT");
 
     // The recorded PR is not merged upstream yet.
-    prFixture = { number: 7, author: "octocat", state: "open", body: "closes #42", commits: [headSha], merged: false };
+    prFixture = {
+      number: 7,
+      author: "octocat",
+      state: "open",
+      body: "closes #42",
+      commits: [headSha],
+      merged: false,
+    };
     try {
       const notMerged = await runCli(["verify", "merge", "--id", missionId, "--pr", "7"]);
       expect(notMerged.status).toBe(0);
@@ -1020,7 +1065,10 @@ describe("kestrel end-to-end workflow", () => {
     expect((await readIndexEntries()).filter((e) => e.missionId === missionId)).toHaveLength(1);
 
     // Phase STATE_WRITTEN: intent + handoff already saved, event not appended.
-    await writeFile(join(txDir, "tx-phase-STATE_WRITTEN.json"), JSON.stringify(intent("STATE_WRITTEN")));
+    await writeFile(
+      join(txDir, "tx-phase-STATE_WRITTEN.json"),
+      JSON.stringify(intent("STATE_WRITTEN")),
+    );
     await writeFile(
       join(sidecar, "handoffs", "handoff-phase-STATE_WRITTEN.json"),
       JSON.stringify(intent("STATE_WRITTEN").handoff),
@@ -1041,7 +1089,10 @@ describe("kestrel end-to-end workflow", () => {
       JSON.stringify(pending.handoff),
     );
     const ledger = join(home, "journey", "events.jsonl");
-    await writeFile(ledger, (await readFile(ledger, "utf8")) + JSON.stringify(pending.event) + "\n");
+    await writeFile(
+      ledger,
+      (await readFile(ledger, "utf8")) + JSON.stringify(pending.event) + "\n",
+    );
     const run3 = await runCli(["journey"]);
     expect(run3.status).toBe(0);
     const events3 = (await readJourneyEvents()).filter((e) => e.missionId === missionId);
@@ -1183,7 +1234,14 @@ describe("kestrel end-to-end workflow", () => {
     await writeFile(join(repo, "fix.txt"), "fixed\n", "utf8");
     await runGit(repo, ["add", "fix.txt"]);
     await runGit(repo, ["commit", "-m", "fix the bug"]);
-    prFixture = { number: 31, author: "octocat", state: "open", body: "closes #42", commits: [], notFound: true };
+    prFixture = {
+      number: 31,
+      author: "octocat",
+      state: "open",
+      body: "closes #42",
+      commits: [],
+      notFound: true,
+    };
     // Use the 404 fixture to keep the request deterministic; the kill happens
     // after the request starts (server-observed) or the process exits fast.
     const verify = spawnCli(["verify", "submission", "--id", missionId, "--pr", "31"]);
@@ -1247,7 +1305,14 @@ describe("kestrel end-to-end workflow", () => {
     await writeFile(join(repo, "README.md"), "modified by user\n", "utf8");
 
     // Failure: a classified command failure must not touch the work.
-    prFixture = { number: 41, author: "octocat", state: "open", body: "closes #42", commits: [], notFound: true };
+    prFixture = {
+      number: 41,
+      author: "octocat",
+      state: "open",
+      body: "closes #42",
+      commits: [],
+      notFound: true,
+    };
     try {
       const failed = await runCli(["verify", "submission", "--id", missionId, "--pr", "41"]);
       expect(failed.status).not.toBe(0);
@@ -1283,7 +1348,7 @@ describe("kestrel end-to-end workflow", () => {
     expect(middle.stderr).toContain("DM_STATE_CORRUPTED");
 
     // Truncated final tail.
-    await writeFile(journeyPath, validLine + "\n{\"eventId\":\"trunc", "utf8");
+    await writeFile(journeyPath, validLine + '\n{"eventId":"trunc', "utf8");
     const tail = await runCli(["--json", "journey"]);
     expect(tail.status).not.toBe(0);
     expect(tail.stderr).toContain("DM_STATE_CORRUPTED");
@@ -1324,7 +1389,10 @@ describe("kestrel end-to-end workflow", () => {
     };
     // The event is already in the ledger; only the intent file is present.
     await writeFile(join(txDir, "tx-dedup.json"), JSON.stringify(pending));
-    await writeFile(journeyPath, (await readFile(journeyPath, "utf8")) + JSON.stringify(pending.event) + "\n");
+    await writeFile(
+      journeyPath,
+      (await readFile(journeyPath, "utf8")) + JSON.stringify(pending.event) + "\n",
+    );
     const dedupRun = await runCli(["journey"]);
     expect(dedupRun.status).toBe(0);
     const handoffEvents = (await readJourneyEvents()).filter(
@@ -1364,13 +1432,22 @@ describe("kestrel end-to-end workflow", () => {
 
     // Separation: repository files, Kestrel metadata, transactions, journey,
     // recommendations, and credentials live in distinct, disjoint areas.
-    const missionDir = join(workspace, (await readdir(workspace)).find((e) => {
-      try {
-        return (JSON.parse(readFileSync(join(workspace, e, "kestrel", "mission.json"), "utf8")) as { mission: { id: string } }).mission.id === missionId;
-      } catch {
-        return false;
-      }
-    }) as string);
+    const missionDir = join(
+      workspace,
+      (await readdir(workspace)).find((e) => {
+        try {
+          return (
+            (
+              JSON.parse(readFileSync(join(workspace, e, "kestrel", "mission.json"), "utf8")) as {
+                mission: { id: string };
+              }
+            ).mission.id === missionId
+          );
+        } catch {
+          return false;
+        }
+      }) as string,
+    );
     expect(await readdir(join(missionDir, "repo"))).toContain("README.md");
     expect(await readdir(join(missionDir, "repo"))).not.toContain("mission.json");
     const metadata = await readdir(sidecar);

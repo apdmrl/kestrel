@@ -80,7 +80,10 @@ export class FileSystemRecommendationStore implements RecommendationStore {
       if (existing.recommendationId !== challengeId) {
         throw corruptError();
       }
-      if (JSON.stringify(existing.recommendation) === JSON.stringify(toPersistedRecommendation(recommendation))) {
+      if (
+        JSON.stringify(existing.recommendation) ===
+        JSON.stringify(toPersistedRecommendation(recommendation))
+      ) {
         return; // Idempotent: the identical snapshot is already installed.
       }
       throw conflictError();

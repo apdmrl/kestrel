@@ -99,9 +99,9 @@ describe("atomic-json-file", () => {
   it("keeps the previous target intact when the failure happens before the rename", async () => {
     const path = join(dir, "state.json");
     await mkdir(path); // The rename target is an existing directory: rename fails.
-    await expect(
-      writeJsonAtomically(path, { value: 1 }, schema),
-    ).rejects.toMatchObject({ code: "DM_STATE_WRITE_FAILED" });
+    await expect(writeJsonAtomically(path, { value: 1 }, schema)).rejects.toMatchObject({
+      code: "DM_STATE_WRITE_FAILED",
+    });
     // The pre-rename failure preserves the previous target and leaves no temp
     // residue; it remains an ordinary write failure.
     const entries = await readdir(dir);

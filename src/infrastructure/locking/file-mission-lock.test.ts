@@ -331,7 +331,12 @@ describe("FileMissionLock", () => {
       winnerHeld = true;
       await hold;
     });
-    const run2 = contender2.withMissionLock(lockPath(), missionId, "complete", async () => undefined);
+    const run2 = contender2.withMissionLock(
+      lockPath(),
+      missionId,
+      "complete",
+      async () => undefined,
+    );
 
     await waitFor(() => firstReached && secondReached);
 
@@ -390,10 +395,15 @@ describe("FileMissionLock", () => {
       releaseReplacement = resolve;
     });
     const replacement = new FileMissionLock();
-    const replacementRun = replacement.withMissionLock(lockPath(), missionId, "complete", async () => {
-      replacementHeld = true;
-      await hold;
-    });
+    const replacementRun = replacement.withMissionLock(
+      lockPath(),
+      missionId,
+      "complete",
+      async () => {
+        replacementHeld = true;
+        await hold;
+      },
+    );
     await waitFor(() => replacementHeld);
 
     // The slow contender resumes and must be excluded; the replacement guard
@@ -423,7 +433,12 @@ describe("FileMissionLock", () => {
       },
     });
 
-    const acquisition = lock.withMissionLock(lockPath(), missionId, "complete", async () => undefined);
+    const acquisition = lock.withMissionLock(
+      lockPath(),
+      missionId,
+      "complete",
+      async () => undefined,
+    );
     await waitFor(() => reserved);
 
     // The reservation is not yet committed: the guard path itself is absent, so

@@ -93,9 +93,9 @@ describe("createProgram command routing", () => {
     const c = capture();
     const program = createProgram({ handlers: h, stdout: c.stdout, stderr: c.stderr });
     program.exitOverride();
-    await expect(program.parseAsync(["node", "kestrel", "mission", "accept"])).rejects.toMatchObject(
-      { code: "commander.missingMandatoryOptionValue" },
-    );
+    await expect(
+      program.parseAsync(["node", "kestrel", "mission", "accept"]),
+    ).rejects.toMatchObject({ code: "commander.missingMandatoryOptionValue" });
     // The handler must never run for a bare accept.
     expect(calls).toEqual([]);
     expect(c.getErr()).toContain("--id");

@@ -194,12 +194,15 @@ describe("bootstrap github authentication", () => {
         return true;
       });
     try {
-      const handlers = await bootstrap(createConfig({ KESTREL_HOME: dir, GITHUB_CLIENT_ID: "cid" }), {
-        interactive: true,
-        credentialStore: store,
-        gateway,
-        challengeSourceFactory: () => emptyChallengeSource,
-      });
+      const handlers = await bootstrap(
+        createConfig({ KESTREL_HOME: dir, GITHUB_CLIENT_ID: "cid" }),
+        {
+          interactive: true,
+          credentialStore: store,
+          gateway,
+          challengeSourceFactory: () => emptyChallengeSource,
+        },
+      );
       await handlers.find({ mood: "QUICK_WIN" });
     } finally {
       stderrSpy.mockRestore();

@@ -1,5 +1,15 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, open, readFile, readdir, rename, rm, rmdir, unlink, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  open,
+  readFile,
+  readdir,
+  rename,
+  rm,
+  rmdir,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { z } from "zod";
 import { createKestrelError } from "../../application/errors/kestrel-error.js";
@@ -151,11 +161,9 @@ function ioError(message: string, cause: unknown) {
 export class FileMissionLock implements MissionLock {
   private readonly isProcessAlive: ProcessLiveness;
   private readonly onGuardReserved:
-    | ((guardPath: string, token: string) => Promise<void> | void)
-    | undefined;
+    ((guardPath: string, token: string) => Promise<void> | void) | undefined;
   private readonly onDeadGuardOwner:
-    | ((guardPath: string, deadToken: string) => Promise<void> | void)
-    | undefined;
+    ((guardPath: string, deadToken: string) => Promise<void> | void) | undefined;
 
   constructor(options: FileMissionLockOptions = {}) {
     this.isProcessAlive = options.isProcessAlive ?? defaultIsProcessAlive;

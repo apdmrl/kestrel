@@ -8,7 +8,7 @@ Kestrel prepares the work. The developer owns the work.
 
 ```
 kestrel find                      # discover one recommended challenge
-kestrel mission accept            # accept a discovered challenge as a mission
+kestrel mission accept --id <id>  # accept the exact recommendation shown by find
 kestrel mission prepare           # prepare the mission workspace (resumable)
 kestrel mission resume            # resume an interrupted preparation
 kestrel mission current           # show the current mission
