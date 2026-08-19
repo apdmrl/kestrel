@@ -16,6 +16,16 @@ import { createKestrelError } from "../../application/errors/kestrel-error.js";
 import type { MissionId } from "../../domain/shared/identifiers.js";
 import type { IsoDateTime } from "../../domain/shared/time.js";
 import type { MissionLock } from "../../ports/mission-lock.js";
+import {
+  defaultIsProcessAlive,
+  readProcessIdentity,
+  type ProcessIdentity,
+} from "../system/process-liveness.js";
+
+const identitySchema = z.object({
+  bootId: z.string().min(1),
+  startTicks: z.string().min(1),
+});
 
 const lockFileSchema = z.object({
   schemaVersion: z.literal(1),
@@ -24,6 +34,7 @@ const lockFileSchema = z.object({
   createdAt: z.string().min(1),
   operation: z.string().min(1),
   token: z.string().min(1),
+  identity: identitySchema.optional(),
 });
 
 type LockFile = z.infer<typeof lockFileSchema>;
@@ -33,15 +44,24 @@ const guardFileSchema = z.object({
   pid: z.number().int().positive(),
   createdAt: z.string().min(1),
   token: z.string().min(1),
+  identity: identitySchema.optional(),
 });
 
 type GuardFile = z.infer<typeof guardFileSchema>;
 
-/** Liveness probe for an owning process; injectable for deterministic tests. */
-export type ProcessLiveness = (pid: number) => boolean | Promise<boolean>;
+/**
+ * Liveness probe for an owning process; injectable for deterministic tests.
+ * Receives the owner's recorded stable identity (boot id + start ticks) so it
+ * can detect OS pid reuse by exact identity match. Legacy records without an
+ * identity pass `undefined`.
+ */
+export type ProcessLiveness = (
+  pid: number,
+  ownerIdentity: ProcessIdentity | undefined,
+) => boolean | Promise<boolean>;
 
 export interface FileMissionLockOptions {
-  /** Liveness probe; defaults to a null-signal check against the process table. */
+  /** Liveness probe; defaults to a signal-zero check plus a pid-reuse guard. */
   isProcessAlive?: ProcessLiveness;
   /**
    * Deterministic test hook: fired after the guard reservation (owner record)
@@ -55,15 +75,6 @@ export interface FileMissionLockOptions {
    * contender between reading a dead owner and breaking its guard.
    */
   onDeadGuardOwner?: (guardPath: string, deadToken: string) => Promise<void> | void;
-}
-
-function defaultIsProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return (error as { code?: string }).code === "EPERM";
-  }
 }
 
 function isEexist(error: unknown): boolean {
@@ -96,7 +107,7 @@ function staleLockError(pid: number) {
     code: "DM_MISSION_LOCK_STALE",
     category: "RECOVERABLE_STATE",
     userMessage: "Mission lock is held by a process that is no longer running",
-    suggestedActions: ["Run breakStaleLock to recover the lock"],
+    suggestedActions: ["Run 'kestrel mission break-lock' to recover the lock"],
     retryability: "NO_RETRY",
     recoveryStrategy: "USER_ACTION",
     severity: "WARNING",
@@ -192,6 +203,7 @@ export class FileMissionLock implements MissionLock {
         throw ioError("Failed to acquire the mission lock", error);
       }
 
+      const identity = readProcessIdentity(process.pid);
       const content =
         JSON.stringify(
           {
@@ -201,6 +213,7 @@ export class FileMissionLock implements MissionLock {
             createdAt: new Date().toISOString() as IsoDateTime,
             operation,
             token,
+            ...(identity !== undefined ? { identity } : {}),
           },
           null,
           2,
@@ -237,7 +250,7 @@ export class FileMissionLock implements MissionLock {
       if (current === undefined) {
         return;
       }
-      if (await this.isProcessAlive(current.pid)) {
+      if (await this.isProcessAlive(current.pid, current.identity)) {
         throw lockedError(current.pid);
       }
       await unlink(lockPath);
@@ -278,7 +291,7 @@ export class FileMissionLock implements MissionLock {
           continue; // Freed by a concurrent release; retry the rename.
         }
         if (inspected.kind === "owner") {
-          if (await this.isProcessAlive(inspected.owner.pid)) {
+          if (await this.isProcessAlive(inspected.owner.pid, inspected.owner.identity)) {
             throw lockedError(inspected.owner.pid);
           }
           await this.onDeadGuardOwner?.(guardPath, inspected.owner.token);
@@ -304,6 +317,7 @@ export class FileMissionLock implements MissionLock {
   }
 
   private async writeGuardOwner(directory: string, token: string): Promise<void> {
+    const identity = readProcessIdentity(process.pid);
     const content =
       JSON.stringify(
         {
@@ -311,6 +325,7 @@ export class FileMissionLock implements MissionLock {
           pid: process.pid,
           createdAt: new Date().toISOString() as IsoDateTime,
           token,
+          ...(identity !== undefined ? { identity } : {}),
         },
         null,
         2,
@@ -449,7 +464,7 @@ export class FileMissionLock implements MissionLock {
     if (current === undefined) {
       return lockedError(process.pid);
     }
-    if (await this.isProcessAlive(current.pid)) {
+    if (await this.isProcessAlive(current.pid, current.identity)) {
       return lockedError(current.pid);
     }
     return staleLockError(current.pid);

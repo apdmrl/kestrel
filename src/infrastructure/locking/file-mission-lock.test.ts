@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { MissionId } from "../../domain/shared/identifiers.js";
+import { readProcessIdentity, type ProcessIdentity } from "../system/process-liveness.js";
 import { FileMissionLock } from "./file-mission-lock.js";
 
 const missionId = "m1" as MissionId;
@@ -35,6 +36,20 @@ function staleLockContent(pid: number): string {
       createdAt: "2026-08-15T10:00:00Z",
       operation: "complete",
       token: "stale-token",
+    }) + "\n"
+  );
+}
+
+function identityLockContent(pid: number, identity: ProcessIdentity): string {
+  return (
+    JSON.stringify({
+      schemaVersion: 1,
+      missionId,
+      pid,
+      createdAt: "2026-08-15T10:00:00Z",
+      operation: "complete",
+      token: "stale-token",
+      identity: { bootId: identity.bootId, startTicks: identity.startTicks },
     }) + "\n"
   );
 }
@@ -97,6 +112,52 @@ describe("FileMissionLock", () => {
   });
 
   it("detects a stale owner and requires explicit recovery", async () => {
+    await writeLock(staleLockContent(99999999));
+    const lock = new FileMissionLock();
+    await expectCode(
+      lock.withMissionLock(lockPath(), missionId, "complete", async () => undefined),
+      "DM_MISSION_LOCK_STALE",
+    );
+  });
+
+  it("classifies a live pid with a mismatched identity as stale (pid reuse)", async () => {
+    // process.pid is alive, but the lock names an identity that does not match
+    // the current process, so the pid must have been recycled.
+    await writeLock(identityLockContent(process.pid, { bootId: "none", startTicks: "1" }));
+    const lock = new FileMissionLock();
+    await expectCode(
+      lock.withMissionLock(lockPath(), missionId, "complete", async () => undefined),
+      "DM_MISSION_LOCK_STALE",
+    );
+    await lock.breakStaleLock(lockPath());
+    await expect(stat(lockPath())).rejects.toThrow();
+  });
+
+  it("keeps a live process with an exact identity match authoritative", async () => {
+    const identity = readProcessIdentity(process.pid);
+    if (identity === undefined) {
+      return; // non-Linux: no identity to record; covered by legacy-live tests
+    }
+    await writeLock(identityLockContent(process.pid, identity));
+    const lock = new FileMissionLock();
+    await expectCode(
+      lock.withMissionLock(lockPath(), missionId, "complete", async () => undefined),
+      "DM_MISSION_LOCKED",
+    );
+    await expectCode(lock.breakStaleLock(lockPath()), "DM_MISSION_LOCKED");
+  });
+
+  it("treats a legacy lock (no identity) on a live pid as conservatively live", async () => {
+    await writeLock(staleLockContent(process.pid));
+    const lock = new FileMissionLock();
+    await expectCode(
+      lock.withMissionLock(lockPath(), missionId, "complete", async () => undefined),
+      "DM_MISSION_LOCKED",
+    );
+    await expectCode(lock.breakStaleLock(lockPath()), "DM_MISSION_LOCKED");
+  });
+
+  it("treats a legacy lock (no identity) on an absent pid as stale", async () => {
     await writeLock(staleLockContent(99999999));
     const lock = new FileMissionLock();
     await expectCode(
