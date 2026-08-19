@@ -41,6 +41,13 @@ export async function main(): Promise<void> {
     const exitCode = (error as { exitCode?: unknown }).exitCode;
     process.exitCode = typeof exitCode === "number" ? exitCode : 1;
   }
+  // After a first SIGINT/SIGTERM the operation has unwound (locks released,
+  // resumable state preserved). Force a prompt exit so a background poll (e.g.
+  // device flow) cannot keep the process alive; a second signal already forced
+  // an immediate exit in the handler.
+  if (controller.signal.aborted) {
+    process.exit(typeof process.exitCode === "number" ? process.exitCode : 130);
+  }
 }
 
 // main.ts is only the process entry point, never imported by other modules.

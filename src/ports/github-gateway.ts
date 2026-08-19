@@ -44,16 +44,23 @@ export interface MergeInfo {
 export interface GitHubGateway {
   beginDeviceFlow(): Promise<DeviceFlowAuthorization>;
   pollForToken(deviceCode: string, signal?: AbortSignal): Promise<GitHubToken>;
-  getViewer(token: string): Promise<GitHubViewer>;
+  getViewer(token: string, signal?: AbortSignal): Promise<GitHubViewer>;
   getPullRequest(
     repository: RepositoryIdentity,
     number: number,
     token: string,
+    signal?: AbortSignal,
   ): Promise<PullRequestInfo>;
   getIssueLinkage(
     repository: RepositoryIdentity,
     prNumber: number,
     token: string,
+    signal?: AbortSignal,
   ): Promise<IssueLinkResult | undefined>;
-  getMergeInfo(repository: RepositoryIdentity, prNumber: number, token: string): Promise<MergeInfo>;
+  getMergeInfo(
+    repository: RepositoryIdentity,
+    prNumber: number,
+    token: string,
+    signal?: AbortSignal,
+  ): Promise<MergeInfo>;
 }

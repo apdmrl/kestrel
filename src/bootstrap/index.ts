@@ -181,7 +181,8 @@ export async function bootstrap(
   const clock = new SystemClock();
   const idGenerator = new CryptoIdGenerator();
   const workspaceManager = new FilesystemWorkspaceManager();
-  const gitFactory = (cwd: string) => new SystemGitClient(cwd, runner);
+  const gitFactory = (cwd: string, signal?: AbortSignal) =>
+    new SystemGitClient(cwd, runner, signal);
   const octokitOptions = config.githubApiUrl !== undefined ? { baseUrl: config.githubApiUrl } : {};
   const gateway =
     options.gateway ??
@@ -228,6 +229,7 @@ export async function bootstrap(
       {
         account: "github",
         interactive,
+        ...(options.signal !== undefined ? { signal: options.signal } : {}),
         onAuthorization: (authorization) => {
           writeAuth(
             "To authenticate, open " +
@@ -343,7 +345,12 @@ export async function bootstrap(
     }
     return findChallenge(
       { source, developer, clock },
-      { mode: "PICK_ONE", mood: moodValue, intent: intent.value },
+      {
+        mode: "PICK_ONE",
+        mood: moodValue,
+        intent: intent.value,
+        ...(options.signal !== undefined ? { signal: options.signal } : {}),
+      },
     );
   };
 
@@ -525,7 +532,7 @@ export async function bootstrap(
           journeyStore,
           indexStore,
           gateway,
-          git: gitFactory(repositoryPath),
+          git: gitFactory(repositoryPath, options.signal),
           idGenerator,
           clock,
         },
@@ -536,6 +543,7 @@ export async function bootstrap(
           expectedStateVersion: resolved.version,
           token,
           prNumber,
+          ...(options.signal !== undefined ? { signal: options.signal } : {}),
         },
       );
       if (result.kind === "submitted") {
@@ -560,6 +568,7 @@ export async function bootstrap(
           expectedStateVersion: resolved.version,
           token,
           prNumber,
+          ...(options.signal !== undefined ? { signal: options.signal } : {}),
         },
       );
       if (result.kind === "linked") {
@@ -580,6 +589,7 @@ export async function bootstrap(
           expectedStateVersion: resolved.version,
           token,
           prNumber,
+          ...(options.signal !== undefined ? { signal: options.signal } : {}),
         },
       );
       if (result.kind === "merged") {

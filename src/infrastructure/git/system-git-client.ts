@@ -121,11 +121,16 @@ export class SystemGitClient implements GitClient {
   constructor(
     private readonly cwd: string,
     private readonly runner: ProcessRunner,
+    private readonly signal?: AbortSignal,
   ) {}
 
   async isAvailable(): Promise<boolean> {
     try {
-      const result = await this.runner.run({ executable: "git", args: ["--version"] });
+      const result = await this.runner.run({
+        executable: "git",
+        args: ["--version"],
+        ...(this.signal !== undefined ? { signal: this.signal } : {}),
+      });
       return result.exitCode === 0;
     } catch {
       return false;
@@ -226,7 +231,12 @@ export class SystemGitClient implements GitClient {
   private async runGit(args: string[]) {
     let result;
     try {
-      result = await this.runner.run({ executable: "git", args, cwd: this.cwd });
+      result = await this.runner.run({
+        executable: "git",
+        args,
+        cwd: this.cwd,
+        ...(this.signal !== undefined ? { signal: this.signal } : {}),
+      });
     } catch (error) {
       throw mapGitProcessError(error);
     }

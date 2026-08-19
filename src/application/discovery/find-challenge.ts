@@ -56,7 +56,7 @@ export async function findChallenge(
   throwIfAborted(input.signal);
 
   const exclusions = input.exclusions ?? [];
-  const challenges = await deps.source.search(input.intent);
+  const challenges = await deps.source.search(input.intent, input.signal);
   throwIfAborted(input.signal);
 
   const filtered = challenges.filter((challenge) => !exclusions.includes(challenge.id));
@@ -70,7 +70,7 @@ export async function findChallenge(
   const candidates: Candidate[] = [];
   for (const challenge of toEnrich) {
     throwIfAborted(input.signal);
-    const evaluationContext = await deps.source.enrich(challenge);
+    const evaluationContext = await deps.source.enrich(challenge, input.signal);
     candidates.push({ challenge, evaluationContext });
   }
 

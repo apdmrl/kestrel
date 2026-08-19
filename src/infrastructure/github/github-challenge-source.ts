@@ -8,6 +8,7 @@ import type { IdGenerator } from "../../ports/id-generator.js";
 import type { ChallengeSource } from "../../ports/challenge-source.js";
 import { planDiscovery } from "../../application/discovery/discovery-planner.js";
 import { normalizeIssue } from "./github-normalizer.js";
+import { mapGitHubError } from "./github-error-mapper.js";
 import type { OctokitLike } from "./octokit-gateway.js";
 
 function buildQuery(query: {
@@ -43,18 +44,24 @@ export class GithubChallengeSource implements ChallengeSource {
     private readonly idGenerator: IdGenerator,
   ) {}
 
-  async search(intent: SearchIntent): Promise<readonly Challenge[]> {
+  async search(intent: SearchIntent, signal?: AbortSignal): Promise<readonly Challenge[]> {
     const plan = planDiscovery(intent);
     const batch = plan.batches[0];
     if (batch === undefined) {
       return [];
     }
     const q = buildQuery(batch.query);
-    const response = await this.octokit.request("GET /search/issues", {
-      q,
-      per_page: batch.pageBudget,
-      page: 1,
-    });
+    let response;
+    try {
+      response = await this.octokit.request("GET /search/issues", {
+        q,
+        per_page: batch.pageBudget,
+        page: 1,
+        ...(signal !== undefined ? { request: { signal } } : {}),
+      });
+    } catch (error) {
+      throw mapGitHubError(error, signal);
+    }
     const data = response.data as { items?: Array<Record<string, unknown>> };
     const challenges: Challenge[] = [];
     for (const raw of data.items ?? []) {
@@ -86,10 +93,16 @@ export class GithubChallengeSource implements ChallengeSource {
     return challenges;
   }
 
-  async enrich(challenge: Challenge): Promise<EvaluationContext> {
-    const repo = await this.octokit.request(
-      "GET /repos/" + challenge.repository.owner + "/" + challenge.repository.name,
-    );
+  async enrich(challenge: Challenge, signal?: AbortSignal): Promise<EvaluationContext> {
+    let repo;
+    try {
+      repo = await this.octokit.request(
+        "GET /repos/" + challenge.repository.owner + "/" + challenge.repository.name,
+        ...(signal !== undefined ? [{ request: { signal } }] : []),
+      );
+    } catch (error) {
+      throw mapGitHubError(error, signal);
+    }
     const data = repo.data as {
       archived?: boolean;
       stargazers_count?: number;

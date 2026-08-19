@@ -148,15 +148,16 @@ export class OctokitGateway implements GitHubGateway {
     return await pending;
   }
 
-  async getViewer(token: string): Promise<GitHubViewer> {
+  async getViewer(token: string, signal?: AbortSignal): Promise<GitHubViewer> {
     try {
       const response = await this.octokit.request("GET /user", {
         headers: { authorization: "Bearer " + token },
+        ...(signal !== undefined ? { request: { signal } } : {}),
       });
       const data = response.data as { login: string; id: number };
       return { login: data.login, id: data.id };
     } catch (error) {
-      throw mapGitHubError(error);
+      throw mapGitHubError(error, signal);
     }
   }
 
@@ -164,12 +165,17 @@ export class OctokitGateway implements GitHubGateway {
     repository: RepositoryIdentity,
     number: number,
     token: string,
+    signal?: AbortSignal,
   ): Promise<PullRequestInfo> {
     try {
       const headers = { authorization: "Bearer " + token };
+      const requestOptions = (): Record<string, unknown> => ({
+        headers,
+        ...(signal !== undefined ? { request: { signal } } : {}),
+      });
       const prResponse = await this.octokit.request(
         "GET /repos/" + repository.owner + "/" + repository.name + "/pulls/" + number,
-        { headers },
+        requestOptions(),
       );
       const pr = prResponse.data as {
         number: number;
@@ -179,7 +185,7 @@ export class OctokitGateway implements GitHubGateway {
       };
       const commitsResponse = await this.octokit.request(
         "GET /repos/" + repository.owner + "/" + repository.name + "/pulls/" + number + "/commits",
-        { headers },
+        requestOptions(),
       );
       const commitsData = commitsResponse.data as Array<{ sha: string }>;
       const state = pr.state === "open" ? "OPEN" : pr.state === "closed" ? "CLOSED" : "MERGED";
@@ -192,7 +198,7 @@ export class OctokitGateway implements GitHubGateway {
         state,
       };
     } catch (error) {
-      throw mapGitHubError(error);
+      throw mapGitHubError(error, signal);
     }
   }
 
@@ -200,11 +206,15 @@ export class OctokitGateway implements GitHubGateway {
     repository: RepositoryIdentity,
     prNumber: number,
     token: string,
+    signal?: AbortSignal,
   ): Promise<IssueLinkResult | undefined> {
     try {
       const response = await this.octokit.request(
         "GET /repos/" + repository.owner + "/" + repository.name + "/pulls/" + prNumber,
-        { headers: { authorization: "Bearer " + token } },
+        {
+          headers: { authorization: "Bearer " + token },
+          ...(signal !== undefined ? { request: { signal } } : {}),
+        },
       );
       const pr = response.data as { body?: string | null };
       const body = pr.body ?? "";
@@ -219,7 +229,7 @@ export class OctokitGateway implements GitHubGateway {
         relationship: "CLOSING_KEYWORD",
       };
     } catch (error) {
-      throw mapGitHubError(error);
+      throw mapGitHubError(error, signal);
     }
   }
 
@@ -227,11 +237,15 @@ export class OctokitGateway implements GitHubGateway {
     repository: RepositoryIdentity,
     prNumber: number,
     token: string,
+    signal?: AbortSignal,
   ): Promise<MergeInfo> {
     try {
       const response = await this.octokit.request(
         "GET /repos/" + repository.owner + "/" + repository.name + "/pulls/" + prNumber,
-        { headers: { authorization: "Bearer " + token } },
+        {
+          headers: { authorization: "Bearer " + token },
+          ...(signal !== undefined ? { request: { signal } } : {}),
+        },
       );
       const pr = response.data as {
         merged: boolean;
@@ -247,7 +261,7 @@ export class OctokitGateway implements GitHubGateway {
             : (pr.merged_at as IsoDateTime),
       };
     } catch (error) {
-      throw mapGitHubError(error);
+      throw mapGitHubError(error, signal);
     }
   }
 }

@@ -31,10 +31,25 @@ export interface VerifyMergeInput {
   readonly expectedStateVersion: number;
   readonly token: string;
   readonly prNumber: number;
+  readonly signal?: AbortSignal;
 }
 
 export type VerifyMergeResult =
   { readonly kind: "merged"; readonly mission: Mission } | { readonly kind: "not-merged" };
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted === true) {
+    throw createKestrelError({
+      code: "DM_PROCESS_CANCELLED",
+      category: "USER_ACTION_REQUIRED",
+      userMessage: "Operation cancelled",
+      suggestedActions: ["Run the command again when ready"],
+      retryability: "NO_RETRY",
+      recoveryStrategy: "USER_ACTION",
+      severity: "INFO",
+    });
+  }
+}
 
 function missionRepository(mission: Mission): RepositoryIdentity {
   return mission.challengeSnapshot.repository;
@@ -72,7 +87,9 @@ export async function verifyMerge(
     missionRepository(input.mission),
     submitted.number,
     input.token,
+    input.signal,
   );
+  throwIfAborted(input.signal);
   if (!mergeInfo.merged) {
     return { kind: "not-merged" };
   }
@@ -142,6 +159,7 @@ export async function verifyMerge(
       severity: "FATAL",
     });
   }
+  throwIfAborted(input.signal); // Cancel immediately before the final commit.
   await commitMissionChange(
     {
       lock: deps.lock,

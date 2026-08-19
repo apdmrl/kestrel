@@ -37,9 +37,22 @@ function abuseLimited(error: ErrorLike): boolean {
 }
 
 /** Map an Octokit/HTTP failure to a stable, recovery-oriented KestrelError. */
-export function mapGitHubError(error: unknown): KestrelError {
+export function mapGitHubError(error: unknown, signal?: AbortSignal): KestrelError {
   if (isKestrelError(error)) {
     return error;
+  }
+  // A user-initiated cancellation of an in-flight request is a classified
+  // cancellation (exit 130), never a timeout.
+  if (signal?.aborted === true) {
+    return createKestrelError({
+      code: "DM_PROCESS_CANCELLED",
+      category: "USER_ACTION_REQUIRED",
+      userMessage: "Operation cancelled",
+      suggestedActions: ["Run the command again when ready"],
+      retryability: "NO_RETRY",
+      recoveryStrategy: "USER_ACTION",
+      severity: "INFO",
+    });
   }
   const shape = (error ?? {}) as ErrorLike;
   const status = shape.status;

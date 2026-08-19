@@ -29,7 +29,7 @@ export interface PrepareMissionDeps {
   readonly workspaceManager: WorkspaceManager;
   readonly idGenerator: IdGenerator;
   readonly clock: Clock;
-  readonly gitFactory: (cwd: string) => GitClient;
+  readonly gitFactory: (cwd: string, signal?: AbortSignal) => GitClient;
   readonly signal?: AbortSignal;
 }
 
@@ -171,7 +171,7 @@ async function tryGetRepositoryIdentity(
   plan: WorkspacePlan,
 ): Promise<RepositoryIdentity | undefined> {
   try {
-    return await deps.gitFactory(plan.repositoryPath).getRepositoryIdentity();
+    return await deps.gitFactory(plan.repositoryPath, deps.signal).getRepositoryIdentity();
   } catch (error) {
     if (
       isKestrelError(error) &&
@@ -209,14 +209,14 @@ async function verifyCheckpoint(
     }
     case "BASE_RECORDED": {
       const baseCommit = checkpointData(mission, "BASE_RECORDED").baseCommit as string;
-      const git = deps.gitFactory(plan.repositoryPath);
+      const git = deps.gitFactory(plan.repositoryPath, deps.signal);
       if (!(await git.commitExists(baseCommit))) {
         throw externalStateChanged("the recorded base commit is no longer present");
       }
       return;
     }
     case "BRANCH_CREATED": {
-      const git = deps.gitFactory(plan.repositoryPath);
+      const git = deps.gitFactory(plan.repositoryPath, deps.signal);
       const branch = await git.getCurrentBranch();
       const recordedBranch = checkpointData(mission, "BRANCH_CREATED").branch as string;
       if (branch !== recordedBranch) {
@@ -247,7 +247,7 @@ async function executeCheckpoint(
     case "REPOSITORY_CLONED": {
       const existing = await tryGetRepositoryIdentity(deps, plan);
       if (existing === undefined) {
-        await deps.gitFactory(plan.root).clone(upstreamUrl, plan.repositoryPath);
+        await deps.gitFactory(plan.root, deps.signal).clone(upstreamUrl, plan.repositoryPath);
       } else if (!sameRepository(existing, mission.challengeSnapshot.repository)) {
         throw externalStateChanged("the clone target contains a different repository");
       }
@@ -255,14 +255,14 @@ async function executeCheckpoint(
       break;
     }
     case "BASE_RECORDED": {
-      const git = deps.gitFactory(plan.repositoryPath);
+      const git = deps.gitFactory(plan.repositoryPath, deps.signal);
       const defaultBranch = await git.getDefaultBranch();
       const baseCommit = await git.getHeadSha();
       result = mission.recordPreparationCheckpoint(checkpoint, { baseCommit, defaultBranch });
       break;
     }
     case "BRANCH_CREATED": {
-      const git = deps.gitFactory(plan.repositoryPath);
+      const git = deps.gitFactory(plan.repositoryPath, deps.signal);
       const current = await git.getCurrentBranch();
       if (current !== plan.branchName) {
         if (await git.branchExists(plan.branchName)) {
@@ -364,6 +364,9 @@ export async function prepareMission(
       version += 1;
     }
 
+    // Cancel before the final completion transition and its commit, so a late
+    // SIGINT after the last checkpoint never records the completion.
+    throwIfAborted(deps.signal);
     const baseCommit = checkpointData(current, "BASE_RECORDED").baseCommit as string;
     const branch = checkpointData(current, "BRANCH_CREATED").branch as string;
     const completed = current.completePreparation({
@@ -374,6 +377,7 @@ export async function prepareMission(
     if (!completed.ok) {
       throw interrupted(completed.error);
     }
+    throwIfAborted(deps.signal);
     const event = createJourneyEvent({
       eventId: deps.idGenerator.newEventId(),
       missionId: input.missionId,

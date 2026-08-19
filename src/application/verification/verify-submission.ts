@@ -34,19 +34,38 @@ export interface VerifySubmissionInput {
   readonly expectedStateVersion: number;
   readonly token: string;
   readonly prNumber: number;
+  readonly signal?: AbortSignal;
 }
 
 export type VerifySubmissionResult =
   | { readonly kind: "submitted"; readonly mission: Mission }
   | { readonly kind: "not-submitted"; readonly reasons: readonly string[] };
 
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted === true) {
+    throw createKestrelError({
+      code: "DM_PROCESS_CANCELLED",
+      category: "USER_ACTION_REQUIRED",
+      userMessage: "Operation cancelled",
+      suggestedActions: ["Run the command again when ready"],
+      retryability: "NO_RETRY",
+      recoveryStrategy: "USER_ACTION",
+      severity: "INFO",
+    });
+  }
+}
+
 function missionRepository(mission: Mission): RepositoryIdentity {
   return mission.challengeSnapshot.repository;
 }
 
 /** Derive the authenticated author from the gateway, never from caller input. */
-async function authenticatedAuthor(deps: VerifySubmissionDeps, token: string): Promise<string> {
-  const viewer = await deps.gateway.getViewer(token);
+async function authenticatedAuthor(
+  deps: VerifySubmissionDeps,
+  token: string,
+  signal?: AbortSignal,
+): Promise<string> {
+  const viewer = await deps.gateway.getViewer(token, signal);
   return viewer.login;
 }
 
@@ -69,9 +88,16 @@ export async function verifySubmission(
   input: VerifySubmissionInput,
 ): Promise<VerifySubmissionResult> {
   const repository = missionRepository(input.mission);
-  const author = await authenticatedAuthor(deps, input.token);
+  const author = await authenticatedAuthor(deps, input.token, input.signal);
+  throwIfAborted(input.signal);
   const commits = await missionCommits(deps, input.mission);
-  const pr = await deps.gateway.getPullRequest(repository, input.prNumber, input.token);
+  const pr = await deps.gateway.getPullRequest(
+    repository,
+    input.prNumber,
+    input.token,
+    input.signal,
+  );
+  throwIfAborted(input.signal);
 
   const existing = input.mission.submittedPullRequest;
   if (existing !== undefined && existing.number === pr.number) {
@@ -144,6 +170,7 @@ export async function verifySubmission(
       severity: "FATAL",
     });
   }
+  throwIfAborted(input.signal); // Cancel immediately before the final commit.
   await commitMissionChange(
     {
       lock: deps.lock,

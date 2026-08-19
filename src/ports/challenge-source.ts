@@ -4,6 +4,6 @@ import type { SearchIntent } from "../domain/discovery/search-intent.js";
 
 /** Provider-neutral challenge discovery and selective enrichment. */
 export interface ChallengeSource {
-  search(intent: SearchIntent): Promise<readonly Challenge[]>;
-  enrich(challenge: Challenge): Promise<EvaluationContext>;
+  search(intent: SearchIntent, signal?: AbortSignal): Promise<readonly Challenge[]>;
+  enrich(challenge: Challenge, signal?: AbortSignal): Promise<EvaluationContext>;
 }

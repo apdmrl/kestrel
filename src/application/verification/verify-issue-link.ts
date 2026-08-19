@@ -31,10 +31,25 @@ export interface VerifyIssueLinkInput {
   readonly expectedStateVersion: number;
   readonly token: string;
   readonly prNumber: number;
+  readonly signal?: AbortSignal;
 }
 
 export type VerifyIssueLinkResult =
   { readonly kind: "linked"; readonly mission: Mission } | { readonly kind: "not-linked" };
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted === true) {
+    throw createKestrelError({
+      code: "DM_PROCESS_CANCELLED",
+      category: "USER_ACTION_REQUIRED",
+      userMessage: "Operation cancelled",
+      suggestedActions: ["Run the command again when ready"],
+      retryability: "NO_RETRY",
+      recoveryStrategy: "USER_ACTION",
+      severity: "INFO",
+    });
+  }
+}
 
 function missionRepository(mission: Mission): RepositoryIdentity {
   return mission.challengeSnapshot.repository;
@@ -53,7 +68,9 @@ export async function verifyIssueLink(
     missionRepository(input.mission),
     input.prNumber,
     input.token,
+    input.signal,
   );
+  throwIfAborted(input.signal);
   if (link === undefined) {
     return { kind: "not-linked" };
   }
@@ -119,6 +136,7 @@ export async function verifyIssueLink(
       severity: "FATAL",
     });
   }
+  throwIfAborted(input.signal); // Cancel immediately before the final commit.
   await commitMissionChange(
     {
       lock: deps.lock,
