@@ -138,14 +138,108 @@ async function waitForFile(path: string): Promise<void> {
   );
 }
 
-/** Remove a crashed process's lock residue so a new process can resume. */
-async function clearStaleLock(sidecarPath: string): Promise<void> {
-  const entries = await readdir(sidecarPath).catch(() => []);
-  for (const entry of entries) {
-    if (entry === ".lock" || entry.startsWith(".lock.guard")) {
-      await rm(join(sidecarPath, entry), { recursive: true, force: true });
-    }
-  }
+/** Remove a crashed process's lock residue by running the product recovery command. */
+async function breakStaleLock(missionId: string): Promise<CliResult> {
+  return runCli(["mission", "break-lock", "--id", missionId]);
+}
+
+/** Write a stale (dead-owner) mission lock at a sidecar, simulating a crash. */
+async function writeStaleMissionLock(missionId: string, sidecarPath: string): Promise<void> {
+  await writeFile(
+    join(sidecarPath, ".lock"),
+    JSON.stringify({
+      schemaVersion: 1,
+      missionId,
+      pid: 99999999,
+      createdAt: "2026-08-15T10:00:00Z",
+      operation: "prepare",
+      token: "stale-token",
+    }),
+    "utf8",
+  );
+}
+
+/** Write a stale (dead-owner) global index lock. */
+async function writeStaleIndexLock(): Promise<void> {
+  await writeFile(
+    join(home, "index.json.lock"),
+    JSON.stringify({
+      schemaVersion: 1,
+      missionId: "index",
+      pid: 99999999,
+      createdAt: "2026-08-15T10:00:00Z",
+      operation: "index-save",
+      token: "stale-index-token",
+    }),
+    "utf8",
+  );
+}
+
+/** Write a pending transaction intent referencing a mission (PREPARED phase). */
+async function writePendingIntent(
+  missionId: string,
+  sidecarPath: string,
+  txId: string,
+): Promise<void> {
+  const txDir = join(home, "transactions");
+  await mkdir(txDir, { recursive: true });
+  const intent = {
+    schemaVersion: 1,
+    transactionId: txId,
+    eventId: "evt-" + txId,
+    missionId,
+    sidecarPath,
+    expectedStateVersion: 0,
+    targetMission: readPersistedMission(sidecarPath).mission,
+    event: {
+      schemaVersion: 1,
+      eventId: "evt-" + txId,
+      missionId,
+      type: "AgentHandoffRecorded",
+      occurredAt: "2026-08-15T10:00:00Z",
+      payload: { handoffId: "handoff-" + txId },
+    },
+    phase: "PREPARED",
+  };
+  await writeFile(join(txDir, txId + ".json"), JSON.stringify(intent), "utf8");
+}
+
+/** Remove a single mission's entry from the global index, leaving the rest intact. */
+async function removeIndexEntry(missionId: string): Promise<void> {
+  const raw = JSON.parse(await readFile(join(home, "index.json"), "utf8")) as {
+    stateVersion: number;
+    entries: Array<{ missionId: string }>;
+  };
+  raw.entries = raw.entries.filter((e) => e.missionId !== missionId);
+  raw.stateVersion += 1;
+  await writeFile(join(home, "index.json"), JSON.stringify(raw, null, 2), "utf8");
+}
+
+/**
+ * Create a FIFO gate that pauses the fake git wrapper before it runs the given
+ * subcommand, so a test can stop preparation at an exact checkpoint boundary
+ * instead of racing a kill against fast local checkpoints.
+ */
+async function beginGitGate(
+  cmd: string,
+  tag: string,
+): Promise<{ env: Record<string, string>; started: string; release: () => Promise<void> }> {
+  const fifo = join(home, "gate-" + tag + ".fifo");
+  const started = join(home, "gate-" + tag + ".started");
+  await rm(fifo, { force: true });
+  await rm(started, { force: true });
+  await execFileAsync("mkfifo", [fifo]);
+  return {
+    env: {
+      KESTREL_GIT_GATE: fifo,
+      KESTREL_GIT_GATE_CMD: cmd,
+      KESTREL_GIT_GATE_STARTED: started,
+    },
+    started,
+    release: async () => {
+      await execFileAsync("bash", ["-c", "printf x > " + fifo]);
+    },
+  };
 }
 
 async function cloneCount(): Promise<number> {
@@ -377,6 +471,12 @@ beforeAll(async () => {
       '    cat "$KESTREL_CLONE_GATE" >/dev/null',
       "  fi",
       "  exit 0",
+      "fi",
+      // Deterministic gate for a specific git subcommand, so tests can pause
+      // preparation at an exact checkpoint boundary instead of racing a kill.
+      'if [ -n "${KESTREL_GIT_GATE:-}" ] && [ "$1" = "${KESTREL_GIT_GATE_CMD:-}" ]; then',
+      '  touch "${KESTREL_GIT_GATE_STARTED:-/dev/null}"',
+      '  cat "$KESTREL_GIT_GATE" >/dev/null',
       "fi",
       'exec /usr/bin/git "$@"',
       "",
@@ -681,6 +781,30 @@ describe("kestrel end-to-end workflow", () => {
     expect(acceptB.stdout).not.toContain(titleA);
   }, 60_000);
 
+  it("accepts a recommendation discovered before the per-id layout upgrade", async () => {
+    searchCount = 0;
+    const find = await runCli(["find", "--mood", "QUICK_WIN"]);
+    expect(find.status).toBe(0);
+    const id = extractRecommendationId(find.stdout);
+    const recDir = join(home, "recommendations");
+    const recFile = join(recDir, id + ".json");
+    const snapshot = await readFile(recFile, "utf8");
+
+    // Simulate a pre-upgrade home: the single-latest legacy file only, with the
+    // per-id directory absent.
+    await rm(recDir, { recursive: true, force: true });
+    const legacyPath = join(home, "recommendation.json");
+    await writeFile(legacyPath, snapshot, "utf8");
+
+    // The upgrade migrates the legacy snapshot so accept binds without re-finding.
+    const accept = await runCli(["mission", "accept", "--id", id]);
+    expect(accept.status).toBe(0);
+    expect(accept.stdout).toContain("ACCEPTED");
+    // The legacy file was consumed and the per-id snapshot reinstated.
+    await expect(stat(legacyPath)).rejects.toThrow();
+    expect(await readdir(recDir)).toContain(id + ".json");
+  }, 60_000);
+
   it("keeps --json stdout machine-readable during interactive device authorization", async () => {
     const result = await runCli(["--json", "find", "--mood", "QUICK_WIN"], {
       PATH: noCredGitDir + ":" + process.env.PATH,
@@ -973,29 +1097,73 @@ describe("kestrel end-to-end workflow", () => {
     // Interrupt preparation after each of the seven checkpoints, resuming in a
     // new process each time. The clone and branch side effects must occur at
     // most once across all interruptions.
+    //
+    // The git-bound boundaries (after checkpoints 1, 2, 3) are paused
+    // deterministically at the first git command of the following checkpoint,
+    // so the interruption is exact. The pure-local checkpoints (4-7) cannot be
+    // gated through git, so they are crashed at the first moment their
+    // checkpoint is observed; exact per-checkpoint resumption for all seven is
+    // proven deterministically at the unit level (prepare-mission.test.ts).
     for (let checkpointCount = 1; checkpointCount <= 7; checkpointCount++) {
-      const spawned = spawnCli(["mission", "prepare", "--id", missionId]);
-      await waitFor(
-        () => {
-          try {
-            const raw = readPersistedMission(sidecar);
-            return raw.mission.preparationCheckpoints.length >= checkpointCount;
-          } catch {
-            return false;
-          }
-        },
-        "checkpoint " + checkpointCount + " recorded",
-      );
-      // Only kill once the clone (the only expensive external side effect)
-      // has verifiably finished, so a mid-clone kill cannot double it.
-      if (checkpointCount === 1) {
-        await waitFor(async () => (await cloneCount()) >= 1, "clone completed before first kill");
-      }
-      spawned.child.kill("SIGKILL");
-      await spawned.result;
-      await clearStaleLock(sidecar);
-      if ((await readPersistedMission(sidecar)).mission.status === "IN_PROGRESS") {
-        break; // Interrupted after the final checkpoint; completion committed.
+      let gate:
+        { env: Record<string, string>; started: string; release: () => Promise<void> } | undefined;
+      let spawned;
+      try {
+        if (checkpointCount === 1) {
+          // After WORKSPACE_CREATED, pause the clone (REPOSITORY_CLONED).
+          const fifo = join(home, "gate-cp1.fifo");
+          await rm(fifo, { force: true });
+          await execFileAsync("mkfifo", [fifo]);
+          gate = {
+            env: {},
+            started: cloneStarted,
+            release: async () => {
+              await execFileAsync("bash", ["-c", "printf x > " + fifo]);
+            },
+          };
+          spawned = spawnCli(["mission", "prepare", "--id", missionId], {
+            KESTREL_CLONE_GATE: fifo,
+            KESTREL_CLONE_STARTED: cloneStarted,
+          });
+          await waitForFile(cloneStarted);
+        } else if (checkpointCount === 2) {
+          // After REPOSITORY_CLONED, pause getDefaultBranch (BASE_RECORDED).
+          gate = await beginGitGate("symbolic-ref", "cp2");
+          spawned = spawnCli(["mission", "prepare", "--id", missionId], gate.env);
+          await waitForFile(gate.started);
+        } else if (checkpointCount === 3) {
+          // After BASE_RECORDED, pause getCurrentBranch (BRANCH_CREATED).
+          gate = await beginGitGate("branch", "cp3");
+          spawned = spawnCli(["mission", "prepare", "--id", missionId], gate.env);
+          await waitForFile(gate.started);
+        } else {
+          spawned = spawnCli(["mission", "prepare", "--id", missionId]);
+          await waitFor(
+            () => {
+              try {
+                return (
+                  readPersistedMission(sidecar).mission.preparationCheckpoints.length >=
+                  checkpointCount
+                );
+              } catch {
+                return false;
+              }
+            },
+            "checkpoint " + checkpointCount + " recorded",
+          );
+        }
+
+        spawned.child.kill("SIGKILL");
+        await spawned.result;
+        const recovered = await breakStaleLock(missionId);
+        expect(recovered.status).toBe(0);
+        if ((await readPersistedMission(sidecar)).mission.status === "IN_PROGRESS") {
+          break; // Interrupted after the final checkpoint; completion committed.
+        }
+      } finally {
+        if (gate !== undefined) {
+          await gate.release();
+        }
       }
     }
 
@@ -1025,6 +1193,13 @@ describe("kestrel end-to-end workflow", () => {
   }, 120_000);
 
   it("recovers pending transaction intents at every phase without duplicates", async () => {
+    // A real crash leaves the transaction intent in one of the intermediate
+    // phases PREPARED / STATE_WRITTEN / EVENT_APPENDED. Because those phases
+    // are sub-millisecond local file writes with no external call to gate, we
+    // deterministically reconstruct each exact crash window on disk and assert
+    // the recovery projector converges exactly once. Real-crash coverage for
+    // the surrounding lifecycle (lock, checkpoints, git side effects) is
+    // provided by the SIGKILL interruption tests in this suite.
     searchCount = 0;
     const recommendationId = await findRecommendationId();
     const accept = await runCli(["mission", "accept", "--id", recommendationId]);
@@ -1142,13 +1317,102 @@ describe("kestrel end-to-end workflow", () => {
     winner.child.kill("SIGKILL");
     await winner.result;
     await execFileAsync("bash", ["-c", "printf x > " + gateFifo]);
-    await clearStaleLock(sidecar);
+    const recoveredLock = await breakStaleLock(missionId);
+    expect(recoveredLock.status).toBe(0);
 
     const recovered = await runCli(["mission", "prepare", "--id", missionId]);
     expect(recovered.status).toBe(0);
     expect(recovered.stdout).toContain("IN_PROGRESS");
     expect(await cloneCount()).toBe(1);
     await rm(gateFifo, { force: true });
+  }, 60_000);
+
+  it("refuses to break a live mission lock", async () => {
+    searchCount = 0;
+    const recommendationId = await findRecommendationId();
+    const accept = await runCli(["mission", "accept", "--id", recommendationId]);
+    expect(accept.status).toBe(0);
+    const missionId = extractMissionId(accept.stdout);
+
+    // Hold the clone gate so the winner is mid-critical-section with a live lock.
+    const gateFifo = join(home, "live-gate.fifo");
+    await execFileAsync("mkfifo", [gateFifo]);
+    const winner = spawnCli(["mission", "prepare", "--id", missionId], {
+      KESTREL_CLONE_GATE: gateFifo,
+      KESTREL_CLONE_STARTED: cloneStarted,
+    });
+    try {
+      await waitForFile(cloneStarted);
+      await waitForFile(join(await findSidecarFor(missionId), ".lock"));
+      const breakLive = await runCli(["mission", "break-lock", "--id", missionId]);
+      expect(breakLive.status).not.toBe(0);
+      expect(breakLive.stderr).toContain("DM_MISSION_LOCKED");
+    } finally {
+      winner.child.kill("SIGKILL");
+      await winner.result;
+      await execFileAsync("bash", ["-c", "printf x > " + gateFifo]);
+      await rm(gateFifo, { force: true });
+    }
+  }, 60_000);
+
+  it("runs break-lock before replay despite a pending intent and stale mission lock", async () => {
+    searchCount = 0;
+    const recommendationId = await findRecommendationId();
+    const accept = await runCli(["mission", "accept", "--id", recommendationId]);
+    expect(accept.status).toBe(0);
+    const missionId = extractMissionId(accept.stdout);
+    const sidecar = await findSidecarFor(missionId);
+
+    // A pending transaction intent exists, so a normal command's replay would
+    // try to acquire the mission lock; and the lock is stale from a crash.
+    await writePendingIntent(missionId, sidecar, "tx-breaklock");
+    await writeStaleMissionLock(missionId, sidecar);
+
+    // Without the fix, bootstrap's replay throws DM_MISSION_LOCK_STALE before
+    // the handler runs. With the fix, break-lock skips replay and succeeds.
+    const broke = await runCli(["mission", "break-lock", "--id", missionId]);
+    expect(broke.status).toBe(0);
+    await expect(stat(join(sidecar, ".lock"))).rejects.toThrow();
+
+    // A subsequent normal command performs the pending journal replay.
+    const replay = await runCli(["journey"]);
+    expect(replay.status).toBe(0);
+    await expect(stat(join(home, "transactions", "tx-breaklock.json"))).rejects.toThrow();
+  }, 60_000);
+
+  it("resolves break-lock via a pending intent when the index entry is absent", async () => {
+    searchCount = 0;
+    const recommendationId = await findRecommendationId();
+    const accept = await runCli(["mission", "accept", "--id", recommendationId]);
+    expect(accept.status).toBe(0);
+    const missionId = extractMissionId(accept.stdout);
+    const sidecar = await findSidecarFor(missionId);
+
+    // A crash before index persistence: the index entry is gone, but a pending
+    // intent still names the sidecar and a stale mission lock remains.
+    await removeIndexEntry(missionId);
+    await writePendingIntent(missionId, sidecar, "tx-preindex");
+    await writeStaleMissionLock(missionId, sidecar);
+
+    const broke = await runCli(["mission", "break-lock", "--id", missionId]);
+    expect(broke.status).toBe(0);
+    await expect(stat(join(sidecar, ".lock"))).rejects.toThrow();
+  }, 60_000);
+
+  it("recovers a stale global index lock during break-lock", async () => {
+    searchCount = 0;
+    const recommendationId = await findRecommendationId();
+    const accept = await runCli(["mission", "accept", "--id", recommendationId]);
+    expect(accept.status).toBe(0);
+    const missionId = extractMissionId(accept.stdout);
+    const sidecar = await findSidecarFor(missionId);
+    await writeStaleMissionLock(missionId, sidecar);
+    await writeStaleIndexLock();
+
+    const broke = await runCli(["mission", "break-lock", "--id", missionId]);
+    expect(broke.status).toBe(0);
+    await expect(stat(join(sidecar, ".lock"))).rejects.toThrow();
+    await expect(stat(join(home, "index.json.lock"))).rejects.toThrow();
   }, 60_000);
 
   it("keeps both index entries when two child processes update different missions", async () => {
@@ -1234,7 +1498,8 @@ describe("kestrel end-to-end workflow", () => {
     await waitFor(() => readCheckpoints(sidecar).length >= 1, "preparation checkpoint");
     prep.child.kill("SIGKILL");
     await prep.result;
-    await clearStaleLock(sidecar);
+    const prepLock = await breakStaleLock(missionId);
+    expect(prepLock.status).toBe(0);
     const resumed = await runCli(["mission", "resume", "--id", missionId]);
     expect(resumed.status).toBe(0);
     expect(resumed.stdout).toContain("IN_PROGRESS");
@@ -1271,6 +1536,39 @@ describe("kestrel end-to-end workflow", () => {
     prFixture = undefined;
     // No partial submission mutation: the mission stays IN_PROGRESS/NONE.
     expect((await readPersistedMission(sidecar)).mission.submissionVerification).toBe("NONE");
+  }, 60_000);
+
+  it("cancels preparation gracefully with SIGINT and releases the lock", async () => {
+    searchCount = 0;
+    await rm(cloneStarted, { force: true });
+    const recommendationId = await findRecommendationId();
+    const accept = await runCli(["mission", "accept", "--id", recommendationId]);
+    expect(accept.status).toBe(0);
+    const missionId = extractMissionId(accept.stdout);
+
+    // Gate the clone so the process is mid-critical-section, then SIGINT it.
+    const gateFifo = join(home, "cancel-gate.fifo");
+    await execFileAsync("mkfifo", [gateFifo]);
+    const child = spawnCli(["mission", "prepare", "--id", missionId], {
+      KESTREL_CLONE_GATE: gateFifo,
+      KESTREL_CLONE_STARTED: cloneStarted,
+    });
+    try {
+      await waitForFile(cloneStarted);
+      child.child.kill("SIGINT");
+      // Release the gate so the clone returns and the loop observes the abort.
+      await execFileAsync("bash", ["-c", "printf x > " + gateFifo]);
+      const result = await child.result;
+      expect(result.status).toBe(130);
+      expect(result.stderr).toContain("DM_PROCESS_CANCELLED");
+    } finally {
+      await rm(gateFifo, { force: true });
+    }
+
+    // Graceful cancellation released the lock: resume works without break-lock.
+    const resumed = await runCli(["mission", "resume", "--id", missionId]);
+    expect(resumed.status).toBe(0);
+    expect(resumed.stdout).toContain("IN_PROGRESS");
   }, 60_000);
 
   it("classifies primary and secondary GitHub rate limits without partial mutation", async () => {
@@ -1314,7 +1612,8 @@ describe("kestrel end-to-end workflow", () => {
     await waitFor(() => readCheckpoints(sidecar).length >= 2, "clone checkpoint");
     prep.child.kill("SIGKILL");
     await prep.result;
-    await clearStaleLock(sidecar);
+    const prepLock = await breakStaleLock(missionId);
+    expect(prepLock.status).toBe(0);
     const resumed = await runCli(["mission", "resume", "--id", missionId]);
     expect(resumed.status).toBe(0);
     expect(resumed.stdout).toContain("IN_PROGRESS");

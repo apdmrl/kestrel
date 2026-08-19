@@ -55,9 +55,21 @@ function interrupted(cause: unknown) {
   });
 }
 
+function cancelled() {
+  return createKestrelError({
+    code: "DM_PROCESS_CANCELLED",
+    category: "RECOVERABLE_STATE",
+    userMessage: "Operation cancelled",
+    suggestedActions: ["Re-run the command to resume where it left off"],
+    retryability: "NO_RETRY",
+    recoveryStrategy: "RESUME",
+    severity: "WARNING",
+  });
+}
+
 function throwIfAborted(signal?: AbortSignal): void {
   if (signal?.aborted === true) {
-    throw interrupted(new Error("aborted"));
+    throw cancelled();
   }
 }
 

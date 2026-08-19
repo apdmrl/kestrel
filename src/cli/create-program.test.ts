@@ -27,6 +27,8 @@ function handlers(overrides: Partial<CommandHandlers> = {}): {
       record("missionCurrent", [args], { kind: "verification", text: "current" }),
     missionComplete: async (args) =>
       record("missionComplete", [args], { kind: "verification", text: "complete" }),
+    missionBreakLock: async (args) =>
+      record("missionBreakLock", [args], { kind: "verification", text: "break-lock" }),
     missionAbandon: async (args) =>
       record("missionAbandon", [args], { kind: "verification", text: "abandon" }),
     agentBrief: async (args) =>
@@ -137,6 +139,24 @@ describe("createProgram command routing", () => {
       "missionComplete",
     ]);
     expect(calls[0]?.args).toEqual([{ missionId: "m1" }]);
+  });
+
+  it("routes mission break-lock with --id", async () => {
+    const { handlers: h, calls } = handlers();
+    await parse(h, ["mission", "break-lock", "--id", "m1"]);
+    expect(calls).toEqual([{ handler: "missionBreakLock", args: [{ missionId: "m1" }] }]);
+  });
+
+  it("rejects mission break-lock without --id before the handler runs", async () => {
+    const { handlers: h, calls } = handlers();
+    const c = capture();
+    const program = createProgram({ handlers: h, stdout: c.stdout, stderr: c.stderr });
+    program.exitOverride();
+    await expect(
+      program.parseAsync(["node", "kestrel", "mission", "break-lock"]),
+    ).rejects.toMatchObject({ code: "commander.missingMandatoryOptionValue" });
+    expect(calls).toEqual([]);
+    expect(c.getErr()).toContain("--id");
   });
 
   it("routes mission abandon with --id and --reason", async () => {

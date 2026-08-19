@@ -5,7 +5,10 @@ import { createOAuthDeviceAuth } from "@octokit/auth-oauth-device";
 import { FileSystemMissionStore } from "../infrastructure/persistence/file-system-mission-store.js";
 import { FileSystemPreferencesStore } from "../infrastructure/persistence/file-system-preferences-store.js";
 import { FileSystemMissionIndexStore } from "../infrastructure/persistence/file-system-mission-index-store.js";
-import { FileSystemRecommendationStore } from "../infrastructure/persistence/file-system-recommendation-store.js";
+import {
+  FileSystemRecommendationStore,
+  migrateLegacyRecommendation,
+} from "../infrastructure/persistence/file-system-recommendation-store.js";
 import { JsonlJourneyStore } from "../infrastructure/persistence/jsonl-journey-store.js";
 import { FileSystemAgentHandoffStore } from "../infrastructure/persistence/file-system-agent-handoff-store.js";
 import { FileMissionLock } from "../infrastructure/locking/file-mission-lock.js";
@@ -28,6 +31,7 @@ import { acceptMission } from "../application/mission/accept-mission.js";
 import {
   prepareMission,
   resumeMissionPreparation,
+  type PrepareMissionDeps,
 } from "../application/mission/prepare-mission.js";
 import { getCurrentMission } from "../application/mission/get-current-mission.js";
 import { completeMission } from "../application/mission/complete-mission.js";
@@ -68,6 +72,10 @@ export interface KestrelConfig {
 export interface BootstrapOptions {
   /** Whether device flow may present interactive instructions. Defaults to true. */
   readonly interactive?: boolean;
+  /** Cancellation signal that aborts cancellation-aware operations gracefully. */
+  readonly signal?: AbortSignal;
+  /** Whether to run journal replay before exposing handlers. Defaults to true. */
+  readonly recover?: boolean;
   /** Writes user-facing device-flow instructions (verification URI and user code). */
   readonly writeAuth?: (text: string) => void;
   /** Overrides for adapters, used by tests and alternative compositions. */
@@ -155,6 +163,18 @@ export async function bootstrap(
   const recommendationStore = new FileSystemRecommendationStore(
     join(config.home, "recommendations"),
   );
+  // Migrate the legacy single-latest recommendation file into the per-id store
+  // so a recommendation shown before the upgrade can still be accepted without
+  // re-running find. Best-effort: a corrupt legacy file is backed up by the
+  // store and must never block the user's workflow.
+  try {
+    await migrateLegacyRecommendation(
+      join(config.home, "recommendation.json"),
+      recommendationStore,
+    );
+  } catch {
+    // Migration is non-fatal; the legacy file (or its backup) remains for manual recovery.
+  }
   const journal = new FileTransactionJournal(join(config.home, "transactions"));
   const runner = new ExecaProcessRunner();
   const credentialStore = options.credentialStore ?? new GitCredentialStore(runner);
@@ -176,14 +196,19 @@ export async function bootstrap(
   const writeAuth = options.writeAuth ?? ((text: string) => process.stderr.write(text));
   const interactive = options.interactive ?? true;
 
-  await recoverTransactions({
-    lock,
-    journal,
-    missionStore,
-    journeyStore,
-    indexStore,
-    handoffStore,
-  });
+  // Journal replay runs before ordinary commands so pending transactions finish
+  // first. Recovery mode (the exact `mission break-lock` invocation) skips this
+  // so a stale lock that replay would trip over can be cleared first.
+  if (options.recover !== false) {
+    await recoverTransactions({
+      lock,
+      journal,
+      missionStore,
+      journeyStore,
+      indexStore,
+      handoffStore,
+    });
+  }
 
   const loadPreferences = async (): Promise<{
     explicit: ExplicitPreferences;
@@ -252,6 +277,39 @@ export async function bootstrap(
     return parsed.value;
   };
 
+  const conflictingLocations = () =>
+    createKestrelError({
+      code: "DM_ILLEGAL_TRANSITION",
+      category: "INVALID_INPUT",
+      userMessage: "Mission recovery sources disagree on the mission location",
+      suggestedActions: ["Inspect the index and pending transactions"],
+      retryability: "NO_RETRY",
+      recoveryStrategy: "MANUAL_INTERVENTION",
+      severity: "ERROR",
+    });
+
+  /**
+   * Resolve the exact sidecar for a recovery target from validated index data or
+   * a validated matching pending intent. Never accepts a filesystem path from
+   * the user and rejects conflicting locations between the two sources.
+   */
+  const resolveRecoverySidecar = async (missionId: string): Promise<string> => {
+    const { index } = await indexStore.get();
+    const indexEntry = index.entries.find((e) => e.missionId === missionId);
+    const intents = await journal.listPending();
+    const intent = intents.find((i) => i.missionId === missionId);
+    const indexPath = indexEntry?.sidecarPath;
+    const intentPath = intent?.sidecarPath;
+    if (indexPath !== undefined && intentPath !== undefined && indexPath !== intentPath) {
+      throw conflictingLocations();
+    }
+    const path = indexPath ?? intentPath;
+    if (path === undefined) {
+      throw noMission("No mission found to break a stale lock for");
+    }
+    return path;
+  };
+
   const loadRecommendation = async (recommendationId: string) => {
     const parsed = parseChallengeId(recommendationId);
     if (!parsed.ok) {
@@ -288,6 +346,19 @@ export async function bootstrap(
       { mode: "PICK_ONE", mood: moodValue, intent: intent.value },
     );
   };
+
+  const prepareDeps = (signal?: AbortSignal): PrepareMissionDeps => ({
+    lock,
+    journal,
+    missionStore,
+    journeyStore,
+    indexStore,
+    workspaceManager,
+    idGenerator,
+    clock,
+    gitFactory,
+    ...(signal !== undefined ? { signal } : {}),
+  });
 
   return {
     find: async ({ mood, type }) => {
@@ -337,38 +408,18 @@ export async function bootstrap(
     },
     missionPrepare: async ({ missionId }) => {
       const resolved = await resolveMission(missionId);
-      const prepared = await prepareMission(
-        {
-          lock,
-          journal,
-          missionStore,
-          journeyStore,
-          indexStore,
-          workspaceManager,
-          idGenerator,
-          clock,
-          gitFactory,
-        },
-        { missionId: resolved.mission.id, sidecarPath: resolved.sidecarPath },
-      );
+      const prepared = await prepareMission(prepareDeps(options.signal), {
+        missionId: resolved.mission.id,
+        sidecarPath: resolved.sidecarPath,
+      });
       return missionView(prepared);
     },
     missionResume: async ({ missionId }) => {
       const resolved = await resolveMission(missionId);
-      const prepared = await resumeMissionPreparation(
-        {
-          lock,
-          journal,
-          missionStore,
-          journeyStore,
-          indexStore,
-          workspaceManager,
-          idGenerator,
-          clock,
-          gitFactory,
-        },
-        { missionId: resolved.mission.id, sidecarPath: resolved.sidecarPath },
-      );
+      const prepared = await resumeMissionPreparation(prepareDeps(options.signal), {
+        missionId: resolved.mission.id,
+        sidecarPath: resolved.sidecarPath,
+      });
       return missionView(prepared);
     },
     missionCurrent: async ({ missionId } = {}) => {
@@ -380,6 +431,18 @@ export async function bootstrap(
         return { kind: "verification", text: "No active mission" };
       }
       return missionView(result.mission);
+    },
+    missionBreakLock: async ({ missionId }) => {
+      const id = parseRequiredMissionId(missionId);
+      const sidecarPath = await resolveRecoverySidecar(id);
+      // Recover the mission lock first, then the shared global index lock that
+      // replay needs. breakStaleLock refuses any live lock.
+      await lock.breakStaleLock(join(sidecarPath, ".lock"));
+      await lock.breakStaleLock(join(config.home, "index.json.lock"));
+      return {
+        kind: "verification",
+        text: "Stale mission lock cleared for " + id,
+      };
     },
     missionComplete: async ({ missionId }) => {
       const resolved = await resolveMission(missionId);

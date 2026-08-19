@@ -108,6 +108,13 @@ export function createProgram(options: ProgramOptions): Command {
         }),
       )(),
   );
+  mission
+    .command("break-lock")
+    .description("break a stale lock left by a crashed process")
+    .requiredOption("--id <missionId>", "target mission id")
+    .action((opts: { id: string }) =>
+      run(() => options.handlers.missionBreakLock({ missionId: opts.id }))(),
+    );
   withMissionId(
     mission.command("complete").description("complete the mission with local evidence"),
   ).action((opts: { id?: string }) =>

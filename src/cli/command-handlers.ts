@@ -8,6 +8,7 @@ export interface CommandHandlers {
   readonly missionResume: (args: { missionId?: string }) => Promise<ViewModel>;
   readonly missionCurrent: (args?: { missionId?: string }) => Promise<ViewModel>;
   readonly missionComplete: (args: { missionId?: string }) => Promise<ViewModel>;
+  readonly missionBreakLock: (args: { missionId: string }) => Promise<ViewModel>;
   readonly missionAbandon: (args: { missionId?: string; reason: string }) => Promise<ViewModel>;
   readonly agentBrief: (args: { missionId?: string; hypothesis?: string }) => Promise<ViewModel>;
   readonly verifySubmission: (args: { missionId?: string; prNumber: number }) => Promise<ViewModel>;
