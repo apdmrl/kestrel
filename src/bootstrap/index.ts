@@ -188,15 +188,16 @@ export async function bootstrap(
   );
   // Migrate the legacy single-latest recommendation file into the per-id store
   // so a recommendation shown before the upgrade can still be accepted without
-  // re-running find. Best-effort: a corrupt legacy file is backed up by the
-  // store and must never block the user's workflow.
+  // re-running find. Best-effort and non-fatal: inconsistencies are preserved and
+  // reported on stderr (never on JSON stdout); a failure never blocks startup.
   try {
     await migrateLegacyRecommendation(
       join(config.home, "recommendation.json"),
       recommendationStore,
+      (message) => process.stderr.write(message + "\n"),
     );
   } catch {
-    // Migration is non-fatal; the legacy file (or its backup) remains for manual recovery.
+    process.stderr.write("Legacy recommendation migration failed; continuing.\n");
   }
   const journal = new FileTransactionJournal(join(config.home, "transactions"));
   const runner = new ExecaProcessRunner();

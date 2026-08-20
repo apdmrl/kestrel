@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -355,6 +355,25 @@ describe("bootstrap recommendation binding", () => {
       expect(accepted.title).toBe("Fix crash on startup");
     }
     expect(searches()).toBe(1);
+  });
+
+  it("continues startup on a corrupt legacy recommendation, reporting to stderr", async () => {
+    const { store, gateway } = authDeps();
+    const challengeA = makeChallenge(42, "Fix crash on startup");
+    const { source } = sequencingSource([challengeA]);
+    await writeFile(join(dir, "recommendation.json"), "{ not json", "utf8");
+    const writeSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      const handlers = await bootstrap(
+        createConfig({ KESTREL_HOME: dir, KESTREL_WORKSPACE: join(dir, "workspace") }),
+        { credentialStore: store, gateway, challengeSourceFactory: () => source },
+      );
+      expect(handlers).toBeDefined();
+      const combined = writeSpy.mock.calls.map((c) => String(c[0])).join("");
+      expect(combined).toContain("Legacy recommendation");
+    } finally {
+      writeSpy.mockRestore();
+    }
   });
 
   it("rejects a missing, unknown, or malformed recommendation identifier", async () => {
