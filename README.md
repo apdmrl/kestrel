@@ -13,6 +13,7 @@ kestrel mission prepare           # prepare the mission workspace (resumable)
 kestrel mission resume            # resume an interrupted preparation
 kestrel mission current           # show the current mission
 kestrel mission complete          # complete the mission with local evidence
+kestrel mission break-lock --id <id>  # recover a stale lock left by a crashed process
 kestrel mission abandon           # abandon the mission
 kestrel agent brief               # record an immutable agent brief handoff
 kestrel verify submission         # verify a submitted pull request
