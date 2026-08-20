@@ -42,7 +42,7 @@ describe("built CLI", () => {
   it("exposes the complete v0.1 command hierarchy", async () => {
     for (const [group, expected] of [
       ["", ["find", "mission", "agent", "verify", "journey", "progress", "preferences"]],
-      ["mission", ["accept", "prepare", "resume", "current", "complete", "abandon"]],
+      ["mission", ["accept", "prepare", "resume", "current", "complete", "break-lock", "abandon"]],
       ["agent", ["brief"]],
       ["verify", ["submission", "link", "merge"]],
     ] as const) {

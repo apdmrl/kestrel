@@ -18,6 +18,7 @@ function noopHandlers(): CommandHandlers {
     missionResume: view,
     missionCurrent: view,
     missionComplete: view,
+    missionBreakLock: view,
     missionAbandon: view,
     agentBrief: view,
     verifySubmission: view,
