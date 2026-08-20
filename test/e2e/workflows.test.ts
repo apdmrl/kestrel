@@ -215,6 +215,69 @@ async function removeIndexEntry(missionId: string): Promise<void> {
   await writeFile(join(home, "index.json"), JSON.stringify(raw, null, 2), "utf8");
 }
 
+let barrierCounter = 0;
+
+/** Set up a deterministic FIFO recovery barrier and return its env for a child. */
+async function beginBarrier(
+  tag: string,
+  matchPrefix?: string,
+): Promise<{
+  dir: string;
+  release: string;
+  env: Record<string, string>;
+}> {
+  const dir = join(home, "barrier-" + tag + "-" + barrierCounter++);
+  await mkdir(dir, { recursive: true });
+  const release = join(dir, "release.fifo");
+  await rm(release, { force: true });
+  await execFileAsync("mkfifo", [release]);
+  return {
+    dir,
+    release,
+    env: {
+      NODE_ENV: "test",
+      KESTREL_RECOVERY_BARRIER_MARKER_DIR: dir,
+      KESTREL_RECOVERY_BARRIER_RELEASE: release,
+      ...(matchPrefix !== undefined ? { KESTREL_RECOVERY_BARRIER_MATCH: matchPrefix } : {}),
+    },
+  };
+}
+
+/** Wait for the barrier marker file for a boundary to appear in a marker dir. */
+async function waitForMarker(dir: string, boundary: string): Promise<void> {
+  const prefix = boundary.replace(/[^A-Za-z0-9._-]/g, "_") + "__";
+  await waitFor(
+    async () => (await readdir(dir)).some((entry) => entry.startsWith(prefix)),
+    "barrier reached: " + boundary,
+  );
+} /** Release a barrier without hanging if no process is waiting on it. */
+async function releaseBarrier(release: string): Promise<void> {
+  await execFileAsync("bash", [
+    "-c",
+    "timeout 2 bash -c 'printf x > " + release + "' 2>/dev/null || true",
+  ]).catch(() => undefined);
+  await rm(release, { force: true });
+}
+
+/** Return the missionId and sidecarPath of a pending transaction intent, if any. */
+async function pendingIntent(): Promise<{ missionId: string; sidecarPath: string } | undefined> {
+  const txDir = join(home, "transactions");
+  const files = await readdir(txDir).catch(() => []);
+  for (const file of files) {
+    if (!file.endsWith(".json")) {
+      continue;
+    }
+    const raw = JSON.parse(await readFile(join(txDir, file), "utf8")) as {
+      missionId?: string;
+      sidecarPath?: string;
+    };
+    if (raw.missionId !== undefined && raw.sidecarPath !== undefined) {
+      return { missionId: raw.missionId, sidecarPath: raw.sidecarPath };
+    }
+  }
+  return undefined;
+}
+
 /**
  * Create a FIFO gate that pauses the fake git wrapper before it runs the given
  * subcommand, so a test can stop preparation at an exact checkpoint boundary
@@ -1845,6 +1908,87 @@ describe("kestrel end-to-end workflow", () => {
     expect(handoffEvents).toHaveLength(1);
     await expect(stat(join(txDir, "tx-dedup.json"))).rejects.toThrow();
   }, 60_000);
+
+  it("recovers a fresh crash immediately after each of the seven preparation checkpoints", async () => {
+    const checkpoints = [
+      "WORKSPACE_CREATED",
+      "REPOSITORY_CLONED",
+      "BASE_RECORDED",
+      "BRANCH_CREATED",
+      "CONTEXT_COLLECTED",
+      "GUIDANCE_GENERATED",
+      "BRIEF_GENERATED",
+    ];
+    for (let i = 0; i < checkpoints.length; i++) {
+      searchCount = 0;
+      await writeFile(cloneLog, "");
+      const recommendationId = await findRecommendationId();
+      const accept = await runCli(["mission", "accept", "--id", recommendationId]);
+      expect(accept.status).toBe(0);
+      const missionId = extractMissionId(accept.stdout);
+      const sidecar = await findSidecarFor(missionId);
+
+      // Pause immediately after the exact checkpoint write, then crash.
+      const barrier = await beginBarrier("cp" + i, "preparation:" + checkpoints[i] + ":persisted");
+      const prep = spawnCli(["mission", "prepare", "--id", missionId], barrier.env);
+      try {
+        await waitForMarker(barrier.dir, "preparation:" + checkpoints[i] + ":persisted");
+        prep.child.kill("SIGKILL");
+        await prep.result;
+      } finally {
+        await releaseBarrier(barrier.release);
+      }
+
+      // Recover via the product command, then resume in a fresh process.
+      const broke = await breakStaleLock(missionId);
+      expect(broke.status).toBe(0);
+      const resumed = await runCli(["mission", "resume", "--id", missionId]);
+      expect(resumed.status).toBe(0);
+      expect(resumed.stdout).toContain("IN_PROGRESS");
+
+      const state = await readPersistedMission(sidecar);
+      expect(state.mission.status).toBe("IN_PROGRESS");
+      expect(state.mission.preparationCheckpoints).toHaveLength(7);
+      // At-most-once clone across the crash and resume.
+      expect(await cloneCount()).toBe(1);
+    }
+  }, 300_000);
+
+  it("recovers a real accept transaction killed at each exact phase", async () => {
+    for (const phase of ["PREPARED", "STATE_WRITTEN", "EVENT_APPENDED"]) {
+      searchCount = 0;
+      const recommendationId = await findRecommendationId();
+      const barrier = await beginBarrier("tx" + phase, "transaction:" + phase + ":persisted");
+      const accept = spawnCli(["mission", "accept", "--id", recommendationId], barrier.env);
+      try {
+        await waitForMarker(barrier.dir, "transaction:" + phase + ":persisted");
+        accept.child.kill("SIGKILL");
+        await accept.result;
+      } finally {
+        await releaseBarrier(barrier.release);
+      }
+
+      // Resolve the interrupted mission from the pending intent (works even for
+      // the PREPARED phase, before mission.json is written).
+      const intent = await pendingIntent();
+      expect(intent).toBeDefined();
+      const missionId = (intent as { missionId: string }).missionId;
+      const sidecar = (intent as { sidecarPath: string }).sidecarPath;
+      // Clear the stale mission and index locks, then let a normal command replay.
+      const broke = await breakStaleLock(missionId);
+      expect(broke.status).toBe(0);
+      const journey = await runCli(["journey"]);
+      expect(journey.status).toBe(0);
+
+      // Convergence: exactly one accepted mission and one event, no duplicates.
+      const entries = (await readIndexEntries()).filter((e) => e.missionId === missionId);
+      expect(entries).toHaveLength(1);
+      expect(entries[0]?.status).toBe("ACCEPTED");
+      const events = (await readJourneyEvents()).filter((e) => e.missionId === missionId);
+      expect(events.filter((e) => e.type === "MissionAccepted")).toHaveLength(1);
+      expect(readPersistedMission(sidecar).mission.status).toBe("ACCEPTED");
+    }
+  }, 300_000);
 
   it("keeps agent handoffs immutable and separates every storage area", async () => {
     searchCount = 0;

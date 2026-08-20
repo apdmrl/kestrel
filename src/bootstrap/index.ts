@@ -13,6 +13,11 @@ import { JsonlJourneyStore } from "../infrastructure/persistence/jsonl-journey-s
 import { FileSystemAgentHandoffStore } from "../infrastructure/persistence/file-system-agent-handoff-store.js";
 import { FileMissionLock } from "../infrastructure/locking/file-mission-lock.js";
 import { FileTransactionJournal } from "../infrastructure/transactions/file-transaction-journal.js";
+import { FifoRecoveryBarrier } from "../infrastructure/transactions/fifo-recovery-barrier.js";
+import {
+  resetRecoveryBarrier,
+  setRecoveryBarrier,
+} from "../application/transactions/recovery-barrier.js";
 import { ExecaProcessRunner } from "../infrastructure/process/execa-process-runner.js";
 import { GitCredentialStore } from "../infrastructure/credentials/git-credential-store.js";
 import { SystemClock } from "../infrastructure/system/system-clock.js";
@@ -150,6 +155,24 @@ export async function bootstrap(
   config: KestrelConfig,
   options: BootstrapOptions = {},
 ): Promise<CommandHandlers> {
+  // The recovery barrier is a built-CLI test hook only: it activates exclusively
+  // under NODE_ENV=test with the dedicated test-barrier variables set. Normal
+  // production composition keeps the no-op barrier.
+  if (
+    process.env.NODE_ENV === "test" &&
+    process.env.KESTREL_RECOVERY_BARRIER_MARKER_DIR !== undefined &&
+    process.env.KESTREL_RECOVERY_BARRIER_RELEASE !== undefined
+  ) {
+    setRecoveryBarrier(
+      new FifoRecoveryBarrier(
+        process.env.KESTREL_RECOVERY_BARRIER_MARKER_DIR,
+        process.env.KESTREL_RECOVERY_BARRIER_RELEASE,
+        process.env.KESTREL_RECOVERY_BARRIER_MATCH,
+      ),
+    );
+  } else {
+    resetRecoveryBarrier();
+  }
   const lock = new FileMissionLock();
   const missionStore = new FileSystemMissionStore();
   const preferencesStore = new FileSystemPreferencesStore(join(config.home, "preferences.json"));

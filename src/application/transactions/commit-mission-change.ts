@@ -11,6 +11,7 @@ import type { MissionLock } from "../../ports/mission-lock.js";
 import type { MissionStore } from "../../ports/mission-store.js";
 import type { TransactionJournal } from "../../ports/transaction-journal.js";
 import { missionIndexEntry, upsertMissionIndex } from "../mission/mission-index-maintenance.js";
+import { getRecoveryBarrier } from "./recovery-barrier.js";
 
 export interface CommitMissionDeps {
   readonly lock: MissionLock;
@@ -53,6 +54,7 @@ export async function commitMissionChangeUnderLock(
       event: change.event,
       ...(change.handoff !== undefined ? { handoff: change.handoff } : {}),
     });
+    await getRecoveryBarrier().reach("transaction:PREPARED:persisted", change.missionId);
     await deps.missionStore.save(
       change.sidecarPath,
       change.targetMission,
@@ -77,8 +79,10 @@ export async function commitMissionChangeUnderLock(
       await deps.handoffStore.save(change.handoff, change.sidecarPath);
     }
     await deps.journal.advancePhase(change.transactionId, "STATE_WRITTEN");
+    await getRecoveryBarrier().reach("transaction:STATE_WRITTEN:persisted", change.missionId);
     await deps.journeyStore.append(change.event);
     await deps.journal.advancePhase(change.transactionId, "EVENT_APPENDED");
+    await getRecoveryBarrier().reach("transaction:EVENT_APPENDED:persisted", change.missionId);
     await deps.journal.remove(change.transactionId);
   } catch (error) {
     if (isKestrelError(error)) {

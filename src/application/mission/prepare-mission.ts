@@ -19,6 +19,7 @@ import type { TransactionJournal } from "../../ports/transaction-journal.js";
 import type { WorkspaceManager, WorkspacePlan } from "../../ports/workspace-manager.js";
 import { createKestrelError, isKestrelError } from "../errors/kestrel-error.js";
 import { commitMissionChangeUnderLock } from "../transactions/commit-mission-change.js";
+import { getRecoveryBarrier } from "../transactions/recovery-barrier.js";
 
 export interface PrepareMissionDeps {
   readonly lock: MissionLock;
@@ -354,6 +355,7 @@ export async function prepareMission(
       try {
         next = await executeCheckpoint(deps, current, checkpoint, plan, upstreamUrl);
         await deps.missionStore.save(input.sidecarPath, next, version);
+        await getRecoveryBarrier().reach(`preparation:${checkpoint}:persisted`, input.missionId);
       } catch (error) {
         if (isKestrelError(error)) {
           throw error;
