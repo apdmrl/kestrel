@@ -19,7 +19,7 @@ beforeAll(() => {
     stdio: "ignore",
     env,
   });
-});
+}, 60_000);
 
 afterAll(() => {
   if (prefix !== "") {
