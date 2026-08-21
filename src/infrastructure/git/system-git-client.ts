@@ -1,4 +1,4 @@
-import { createKestrelError } from "../../application/errors/kestrel-error.js";
+import { createKestrelError, isKestrelError } from "../../application/errors/kestrel-error.js";
 import type { RepositoryIdentity } from "../../domain/challenge/repository-identity.js";
 import type { GitClient, LocalChanges } from "../../ports/git-client.js";
 import type { ProcessRunner } from "../../ports/process-runner.js";
@@ -20,6 +20,14 @@ function githubRemoteError(): never {
 
 function isRepoSegment(value: string): boolean {
   return GITHUB_REPO_SEGMENT.test(value) && !value.includes("..") && !value.startsWith(".");
+}
+
+/** True for a user-initiated Git cancellation that must not be swallowed. */
+function isCancellation(error: unknown): boolean {
+  return (
+    isKestrelError(error) &&
+    (error.code === "DM_GIT_CANCELLED" || error.code === "DM_PROCESS_CANCELLED")
+  );
 }
 
 function stripGitSuffix(name: string): string {
@@ -132,7 +140,11 @@ export class SystemGitClient implements GitClient {
         ...(this.signal !== undefined ? { signal: this.signal } : {}),
       });
       return result.exitCode === 0;
-    } catch {
+    } catch (error) {
+      // A cancelled probe is rethrown as cancellation, never "Git unavailable".
+      if (isCancellation(error)) {
+        throw error;
+      }
       return false;
     }
   }
@@ -160,7 +172,11 @@ export class SystemGitClient implements GitClient {
     try {
       await this.runGit(["show-ref", "--verify", "--quiet", "refs/heads/" + branchName]);
       return true;
-    } catch {
+    } catch (error) {
+      // A cancelled probe is rethrown, never "branch missing".
+      if (isCancellation(error)) {
+        throw error;
+      }
       return false;
     }
   }
@@ -183,7 +199,11 @@ export class SystemGitClient implements GitClient {
     try {
       await this.runGit(["cat-file", "-e", sha + "^{commit}"]);
       return true;
-    } catch {
+    } catch (error) {
+      // A cancelled probe is rethrown, never "commit missing".
+      if (isCancellation(error)) {
+        throw error;
+      }
       return false;
     }
   }

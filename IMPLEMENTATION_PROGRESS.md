@@ -72,6 +72,17 @@ Current phase: general-release-review fix pass — in progress
 
 - [ ] **Task 5 / KGR-005 — Preserve cancellation through Git predicates.** (RED → GREEN pending)
 
+- [x] **Task 5 / KGR-005 — Preserve cancellation through Git predicates.**
+  - RED: added `cancelledRunner` tests asserting `isAvailable`, `branchExists`, and
+    `commitExists` each rethrow a cancelled process as cancellation (not `false`). Failed with
+    `false` before the fix.
+  - GREEN: `npx vitest run src/infrastructure/git/system-git-client.test.ts` (11 tests) passes,
+    including two new genuine-negative tests (absent branch / absent commit still return
+    `false`); typecheck/lint/format clean.
+  - Implementation: added a narrow `isCancellation` predicate and made all three probes rethrow
+    `DM_GIT_CANCELLED`/`DM_PROCESS_CANCELLED` while still returning `false` for genuine
+    probe-negative exit statuses.
+
 - [ ] **Task 6 / KGR-006 — Define transaction cancellation commit point.** (RED → GREEN pending)
 
 - [ ] **Task 7 / KGR-007 — Reject every recovery-source conflict.** (RED → GREEN pending)

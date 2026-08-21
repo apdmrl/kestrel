@@ -2,6 +2,8 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { createKestrelError } from "../../application/errors/kestrel-error.js";
+import type { ProcessResult, ProcessRunner } from "../../ports/process-runner.js";
 import { ExecaProcessRunner } from "../process/execa-process-runner.js";
 import { SystemGitClient } from "./system-git-client.js";
 
@@ -30,6 +32,23 @@ async function initRepo(path: string): Promise<void> {
   await git(path, ["init", "-b", "main"]);
   await git(path, ["config", "user.email", "test@example.com"]);
   await git(path, ["config", "user.name", "Test"]);
+}
+
+/** A runner whose every Git invocation is aborted (a cancelled process). */
+function cancelledRunner(): ProcessRunner {
+  return {
+    async run(): Promise<ProcessResult> {
+      throw createKestrelError({
+        code: "DM_PROCESS_CANCELLED",
+        category: "USER_ACTION_REQUIRED",
+        userMessage: "The Git command was cancelled",
+        suggestedActions: ["Run the command again when ready"],
+        retryability: "NO_RETRY",
+        recoveryStrategy: "USER_ACTION",
+        severity: "INFO",
+      });
+    },
+  };
 }
 
 async function setUpstreamWithFile(
@@ -138,5 +157,40 @@ describe("SystemGitClient", () => {
     expect(changes.commits).toHaveLength(0);
     expect(changes.filesChanged).toEqual([]);
     expect(changes.workingTreeState).toBe("CLEAN");
+  });
+
+  describe("cancellation preservation in predicates", () => {
+    it("rethrows cancellation from isAvailable instead of returning false", async () => {
+      const client = new SystemGitClient(dir, cancelledRunner());
+      await expect(client.isAvailable()).rejects.toMatchObject({
+        code: "DM_PROCESS_CANCELLED",
+      });
+    });
+
+    it("rethrows cancellation from branchExists instead of returning false", async () => {
+      const client = new SystemGitClient(dir, cancelledRunner());
+      await expect(client.branchExists("kestrel/x")).rejects.toMatchObject({
+        code: "DM_GIT_CANCELLED",
+      });
+    });
+
+    it("rethrows cancellation from commitExists instead of returning false", async () => {
+      const client = new SystemGitClient(dir, cancelledRunner());
+      await expect(client.commitExists("abc123")).rejects.toMatchObject({
+        code: "DM_GIT_CANCELLED",
+      });
+    });
+
+    it("still returns false for a genuinely absent branch", async () => {
+      const { working } = await setUpstreamWithFile("a.txt");
+      const client = new SystemGitClient(working, runner);
+      expect(await client.branchExists("kestrel/never-created")).toBe(false);
+    });
+
+    it("still returns false for a genuinely absent commit", async () => {
+      const { working } = await setUpstreamWithFile("a.txt");
+      const client = new SystemGitClient(working, runner);
+      expect(await client.commitExists("0000000000000000000000000000000000000000")).toBe(false);
+    });
   });
 });
