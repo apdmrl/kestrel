@@ -1510,6 +1510,41 @@ describe("kestrel end-to-end workflow", () => {
     await expect(stat(join(home, "index.json.lock"))).rejects.toThrow();
   }, 60_000);
 
+  it("refuses break-lock when the index points the sidecar outside the workspace", async () => {
+    searchCount = 0;
+    const recommendationId = await findRecommendationId();
+    const accept = await runCli(["mission", "accept", "--id", recommendationId]);
+    expect(accept.status).toBe(0);
+    const missionId = extractMissionId(accept.stdout);
+
+    // A corrupted/adversarial index points this mission at a sidecar OUTSIDE the
+    // managed workspace, which contains a stale `.lock` for the same mission.
+    const outsideDir = await mkdtemp(join(tmpdir(), "kestrel-outside-"));
+    await mkdir(join(outsideDir, "kestrel"), { recursive: true });
+    await writeStaleMissionLock(missionId, join(outsideDir, "kestrel"));
+    const outsideLock = join(outsideDir, "kestrel", ".lock");
+    expect(await stat(outsideLock)).toBeDefined();
+
+    // Rewrite the index so the mission's sidecarPath points at the outside dir.
+    const raw = JSON.parse(await readFile(join(home, "index.json"), "utf8")) as {
+      stateVersion: number;
+      entries: Array<{ missionId: string; sidecarPath: string }>;
+    };
+    for (const entry of raw.entries) {
+      if (entry.missionId === missionId) {
+        entry.sidecarPath = join(outsideDir, "kestrel");
+      }
+    }
+    await writeFile(join(home, "index.json"), JSON.stringify(raw, null, 2), "utf8");
+
+    const broke = await runCli(["mission", "break-lock", "--id", missionId]);
+    expect(broke.status).not.toBe(0);
+    expect(broke.stderr).toContain("DM_UNSAFE_PATH");
+    // The outside lock is never deleted.
+    await expect(stat(outsideLock)).resolves.toBeDefined();
+    await rm(outsideDir, { recursive: true, force: true });
+  }, 60_000);
+
   it("keeps both index entries when two child processes update different missions", async () => {
     searchCount = 0;
     const idA = await findRecommendationId();

@@ -24,7 +24,22 @@ Current phase: general-release-review fix pass — in progress
     select `.cmd` on Windows. Full `test/e2e/workflows.test.ts` (34 scenarios) passes on
     Linux; macOS/Windows CI evidence is pending (no CI access in this session).
 
-- [ ] **Task 2 / KGR-002 — Contain stale-lock recovery targets.** (RED → GREEN pending)
+- [ ] **Task 3 / KGR-003 — Serialize legacy recommendation migration.** (RED → GREEN pending)
+
+- [x] **Task 2 / KGR-002 — Contain stale-lock recovery targets.**
+  - RED: `src/infrastructure/recovery/trusted-lock-target.test.ts` — asserted the verifier
+    accepts a valid sidecar inside the workspace, rejects a sidecar outside the workspace,
+    rejects `..` traversal, rejects a symlink component redirecting elsewhere, and rejects a
+    path lexically inside but canonically outside. Failed on a missing module. Plus a built-CLI
+    E2E test that rewrites the index to point the sidecar outside the workspace and asserts
+    `mission break-lock` fails closed with `DM_UNSAFE_PATH` and never deletes the outside lock.
+  - GREEN: `npx vitest run src/infrastructure/recovery/trusted-lock-target.test.ts` (6 tests)
+    and the `break-lock` E2E scenarios (4) all pass; typecheck/lint/format clean.
+  - Implementation: added `verifyTrustedLockTarget` (resolve/relative containment, `lstat`
+    symlink walk, canonical `realpath` re-check) and made `FileMissionLock.breakStaleLock`
+    accept an optional expected mission id, failing closed on a mismatched lock. Wired both
+    into `bootstrap.missionBreakLock`.
+
 
 - [ ] **Task 3 / KGR-003 — Serialize legacy recommendation migration.** (RED → GREEN pending)
 

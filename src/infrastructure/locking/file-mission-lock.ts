@@ -241,7 +241,7 @@ export class FileMissionLock implements MissionLock {
     }
   }
 
-  async breakStaleLock(lockPath: string): Promise<void> {
+  async breakStaleLock(lockPath: string, expectedMissionId?: MissionId): Promise<void> {
     await mkdir(dirname(lockPath), { recursive: true });
     const guardPath = this.guardPath(lockPath);
     const guardToken = await this.acquireGuard(guardPath);
@@ -249,6 +249,21 @@ export class FileMissionLock implements MissionLock {
       const current = await this.readLock(lockPath);
       if (current === undefined) {
         return;
+      }
+      if (expectedMissionId !== undefined && current.missionId !== expectedMissionId) {
+        // The lock at this path belongs to a different mission: fail closed and
+        // never delete it. The target was already verified to be inside the
+        // managed workspace root by the caller.
+        throw createKestrelError({
+          code: "DM_UNSAFE_PATH",
+          category: "INVALID_INPUT",
+          userMessage: "The mission lock does not match the requested mission",
+          suggestedActions: ["Inspect the mission index and pending transactions"],
+          retryability: "NO_RETRY",
+          recoveryStrategy: "MANUAL_INTERVENTION",
+          severity: "ERROR",
+          debugContext: { path: lockPath, expectedMissionId, foundMissionId: current.missionId },
+        });
       }
       if (await this.isProcessAlive(current.pid, current.identity)) {
         throw lockedError(current.pid);

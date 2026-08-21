@@ -23,6 +23,7 @@ import { GitCredentialStore } from "../infrastructure/credentials/git-credential
 import { SystemClock } from "../infrastructure/system/system-clock.js";
 import { CryptoIdGenerator } from "../infrastructure/system/crypto-id-generator.js";
 import { FilesystemWorkspaceManager } from "../infrastructure/workspace/filesystem-workspace-manager.js";
+import { verifyTrustedLockTarget } from "../infrastructure/recovery/trusted-lock-target.js";
 import { SystemGitClient } from "../infrastructure/git/system-git-client.js";
 import { OctokitGateway } from "../infrastructure/github/octokit-gateway.js";
 import { GithubChallengeSource } from "../infrastructure/github/github-challenge-source.js";
@@ -64,6 +65,7 @@ import { snapshotRecommendation } from "../domain/recommendation/recommendation.
 import { parseChallengeId, parseMissionId } from "../domain/shared/identifiers.js";
 import type { ChallengeType } from "../domain/challenge/challenge.js";
 import type { Mission } from "../domain/mission/mission.js";
+import type { MissionId } from "../domain/shared/identifiers.js";
 import type { CommandHandlers } from "../cli/command-handlers.js";
 import type { ViewModel } from "../cli/presentation/view-models.js";
 
@@ -465,11 +467,19 @@ export async function bootstrap(
     },
     missionBreakLock: async ({ missionId }) => {
       const id = parseRequiredMissionId(missionId);
-      const sidecarPath = await resolveRecoverySidecar(id);
+      const candidate = await resolveRecoverySidecar(id);
+      // Fail closed: derive and verify a trusted mission location inside the
+      // managed workspace root before deleting anything. A raw index/intent
+      // sidecar path is never trusted as-is.
+      const trusted = await verifyTrustedLockTarget({
+        workspaceRoot: config.workspaceRoot,
+        missionId: id,
+        sidecarPath: candidate,
+      });
       // Recover the mission lock first, then the shared global index lock that
       // replay needs. breakStaleLock refuses any live lock.
-      await lock.breakStaleLock(join(sidecarPath, ".lock"));
-      await lock.breakStaleLock(join(config.home, "index.json.lock"));
+      await lock.breakStaleLock(trusted.lockPath, id);
+      await lock.breakStaleLock(join(config.home, "index.json.lock"), "index" as MissionId);
       return {
         kind: "verification",
         text: "Stale mission lock cleared for " + id,

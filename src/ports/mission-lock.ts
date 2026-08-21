@@ -8,5 +8,5 @@ export interface MissionLock {
     operation: string,
     action: () => Promise<T>,
   ): Promise<T>;
-  breakStaleLock(lockPath: string): Promise<void>;
+  breakStaleLock(lockPath: string, expectedMissionId?: MissionId): Promise<void>;
 }
