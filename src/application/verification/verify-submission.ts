@@ -187,6 +187,7 @@ export async function verifySubmission(
       expectedStateVersion: input.expectedStateVersion,
       targetMission: submitted.value,
       event: event.value,
+      ...(input.signal !== undefined ? { signal: input.signal } : {}),
     },
   );
   return { kind: "submitted", mission: submitted.value };

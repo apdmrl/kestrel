@@ -324,4 +324,63 @@ describe("commitMissionChange", () => {
     expect(d.journeyStore.appendCount).toBe(2);
     expect(await d.journal.listPending()).toHaveLength(0);
   });
+
+  describe("transaction cancellation commit point", () => {
+    it("rejects cancellation before the commit point without creating an intent", async () => {
+      const d = deps();
+      const controller = new AbortController();
+      controller.abort();
+      await expect(
+        commitMissionChange(d, { ...change(), signal: controller.signal }),
+      ).rejects.toMatchObject({ code: "DM_PROCESS_CANCELLED" });
+      expect(await d.journal.listPending()).toHaveLength(0);
+      expect(d.missionStore.saveCount).toBe(0);
+      expect(d.journeyStore.appendCount).toBe(0);
+    });
+
+    it("rejects cancellation that arrives while waiting for the lock", async () => {
+      const d = deps();
+      const controller = new AbortController();
+      const abortingLock: MissionLock = {
+        async withMissionLock<T>(
+          _lockPath: string,
+          _missionId: MissionId,
+          _operation: string,
+          action: () => Promise<T>,
+        ): Promise<T> {
+          controller.abort(); // a signal arrives during the lock wait
+          return action();
+        },
+        async breakStaleLock(_lockPath: string): Promise<void> {},
+      };
+      await expect(
+        commitMissionChange(
+          { ...d, lock: abortingLock },
+          { ...change(), signal: controller.signal },
+        ),
+      ).rejects.toMatchObject({ code: "DM_PROCESS_CANCELLED" });
+      expect(await d.journal.listPending()).toHaveLength(0);
+      expect(d.missionStore.saveCount).toBe(0);
+    });
+
+    it("commits the transaction once the point of no return is crossed even if cancelled", async () => {
+      const d = deps();
+      const controller = new AbortController();
+      // Simulate a signal arriving exactly at intent creation: the intent is
+      // written, and the abort must not abandon the durable phases.
+      const journal = d.journal as FakeJournal;
+      const originalCreate = journal.create.bind(journal);
+      journal.create = async (intent) => {
+        await originalCreate(intent);
+        controller.abort();
+      };
+      await expect(
+        commitMissionChange({ ...d, journal }, { ...change(), signal: controller.signal }),
+      ).resolves.toBeUndefined();
+      // The committed mutation is complete and unambiguous (not a forced 130).
+      expect(d.missionStore.saveCount).toBe(1);
+      expect(d.journeyStore.appendCount).toBe(1);
+      expect(await journal.listPending()).toHaveLength(0);
+    });
+  });
 });

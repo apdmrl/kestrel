@@ -85,6 +85,22 @@ Current phase: general-release-review fix pass — in progress
 
 - [ ] **Task 6 / KGR-006 — Define transaction cancellation commit point.** (RED → GREEN pending)
 
+- [x] **Task 6 / KGR-006 — Define transaction cancellation commit point.**
+  - RED: added three cancellation-commit-point tests to `commit-mission-change.test.ts`
+    (abort before the point of no return creates no intent; abort while waiting for the lock is
+    re-checked under the lock; abort at intent creation still commits the durable phases).
+    Failed before the precommit re-check was added.
+  - GREEN: `npx vitest run src/application/transactions src/application/verification
+    src/application/mission/prepare-mission.test.ts ...` (56 tests) and all seven `SIGINT` E2E
+    scenarios pass; typecheck/lint/format clean.
+  - Implementation: documented the cancellation state machine and made journal-intent creation
+    the explicit point of no return. `commitMissionChangeUnderLock` now re-checks cancellation
+    immediately before creating the intent (inside the held lock), so a signal that arrives
+    while waiting for the lock never creates a transaction. After the point of no return the
+    durable phases always complete. The signal is threaded from the verify-* use cases and
+    prepare into `MissionChange`. `cli/main.ts` no longer forces exit 130 for a completed
+    mutation (only force-exits on an actual error path).
+
 - [ ] **Task 7 / KGR-007 — Reject every recovery-source conflict.** (RED → GREEN pending)
 
 - [ ] **Task 8 / KGR-008 — Satisfy package contract.** (RED → GREEN pending)

@@ -334,6 +334,7 @@ export async function prepareMission(
         expectedStateVersion: version,
         targetMission: preparing.value,
         event: event.value,
+        ...(deps.signal !== undefined ? { signal: deps.signal } : {}),
       });
       current = preparing.value;
       version += 1;
@@ -397,6 +398,7 @@ export async function prepareMission(
       expectedStateVersion: version,
       targetMission: completed.value,
       event: event.value,
+      ...(deps.signal !== undefined ? { signal: deps.signal } : {}),
     });
     return completed.value;
   });

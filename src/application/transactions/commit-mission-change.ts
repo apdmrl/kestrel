@@ -31,18 +31,52 @@ export interface MissionChange {
   readonly targetMission: Mission;
   readonly event: JourneyEvent;
   readonly handoff?: AgentHandoff;
+  readonly signal?: AbortSignal;
+}
+
+function cancelledError() {
+  return createKestrelError({
+    code: "DM_PROCESS_CANCELLED",
+    category: "USER_ACTION_REQUIRED",
+    userMessage: "Operation cancelled",
+    suggestedActions: ["Run the command again when ready"],
+    retryability: "NO_RETRY",
+    recoveryStrategy: "USER_ACTION",
+    severity: "INFO",
+  });
 }
 
 /**
- * Persist a Mission state change and its Journey event as one recoverable unit
- * WITHOUT acquiring the mission lock. The caller must already hold the lock.
- * This is the single internal mutation primitive for nested workflows such as
- * mission preparation, which acquires the lock exactly once.
+ * Transaction cancellation contract (the explicit commit point):
+ *
+ *   state                  | outcome
+ *   -----------------------|-------------------------------------------------
+ *   abort before lock      | cancellation; no transaction is created
+ *   abort while waiting    | cancellation; re-checked under the lock; no intent
+ *   abort after lock,      | cancellation; re-checked immediately before intent
+ *     before intent        |
+ *   abort at intent        | intent creation is the point of no return; the
+ *     creation             | durable phases finish and the change is committed
+ *   abort after state/     | finishes recovery-safe persistence; committed
+ *     index/event phases   |
+ *   signal pending while   | the change is committed and reported as success
+ *     committing           | (never a forced exit 130 for a completed mutation)
+ *
+ * The explicit point of no return is journal-intent creation. Cancellation
+ * observed before it aborts the mutation cleanly; cancellation observed after it
+ * must not abandon a durable transaction, so the phases always run to
+ * completion and produce one unambiguous committed result.
  */
 export async function commitMissionChangeUnderLock(
   deps: CommitMissionDeps,
   change: MissionChange,
 ): Promise<void> {
+  // The explicit point of no return: journal intent creation. Cancellation
+  // observed here (inside the held lock, immediately before the intent) aborts
+  // the mutation; anything after this line finishes recovery-safe persistence.
+  if (change.signal?.aborted === true) {
+    throw cancelledError();
+  }
   try {
     await deps.journal.create({
       transactionId: change.transactionId,

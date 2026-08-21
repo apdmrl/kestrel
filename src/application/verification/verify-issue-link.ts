@@ -153,6 +153,7 @@ export async function verifyIssueLink(
       expectedStateVersion: input.expectedStateVersion,
       targetMission: linked.value,
       event: event.value,
+      ...(input.signal !== undefined ? { signal: input.signal } : {}),
     },
   );
   return { kind: "linked", mission: linked.value };

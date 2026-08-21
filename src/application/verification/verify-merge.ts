@@ -176,6 +176,7 @@ export async function verifyMerge(
       expectedStateVersion: input.expectedStateVersion,
       targetMission: merged.value,
       event: event.value,
+      ...(input.signal !== undefined ? { signal: input.signal } : {}),
     },
   );
   return { kind: "merged", mission: merged.value };

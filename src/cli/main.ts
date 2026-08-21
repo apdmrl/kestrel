@@ -45,8 +45,14 @@ export async function main(): Promise<void> {
   // resumable state preserved). Force a prompt exit so a background poll (e.g.
   // device flow) cannot keep the process alive; a second signal already forced
   // an immediate exit in the handler.
-  if (controller.signal.aborted) {
-    process.exit(typeof process.exitCode === "number" ? process.exitCode : 130);
+  //
+  // The commit point is journal intent creation: a signal observed after that
+  // point means a durable transaction finished and was committed, so the
+  // process must NOT be forced to exit 130 for an ordinary success. We only
+  // force-exit on a classified error path (process.exitCode was set, e.g. to
+  // 130 for a cancellation) and never overwrite a completed mutation's 0.
+  if (controller.signal.aborted && process.exitCode !== undefined) {
+    process.exit(process.exitCode);
   }
 }
 
