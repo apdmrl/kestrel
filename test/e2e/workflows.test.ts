@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { execFile, spawn } from "node:child_process";
 import { createServer, type Server } from "node:http";
 import { chmod, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
@@ -21,6 +21,95 @@ let noCredGitDir = "";
 let fixture = "";
 let cloneLog = "";
 let cloneStarted = "";
+let realGitPath = "";
+const remoteUrl = "https://github.com/octocat/hello-world.git";
+
+/** Locate the real `git` executable on PATH before any fake git dir shadows it. */
+function findRealGit(): string {
+  const pathSep = process.platform === "win32" ? ";" : ":";
+  const names = process.platform === "win32" ? ["git.exe", "git.cmd", "git.bat", "git"] : ["git"];
+  for (const dir of (process.env.PATH ?? "").split(pathSep)) {
+    if (dir.length === 0) {
+      continue;
+    }
+    for (const name of names) {
+      const candidate = join(dir, name);
+      if (existsSync(candidate)) {
+        return candidate;
+      }
+    }
+  }
+  throw new Error("real git executable not found on PATH");
+}
+
+/** Write the fake-git shim scripts and return their target directory. */
+async function createFakeGit(dir: string, needsCreds: boolean): Promise<void> {
+  const script = [
+    "#!/usr/bin/env node",
+    'const { spawnSync } = require("node:child_process");',
+    'const fs = require("node:fs");',
+    "const args = process.argv.slice(2);",
+    "const realGit = process.env.KESTREL_REAL_GIT;",
+    "function gateWait(file, started) {",
+    "  if (file === undefined || file === '') return Promise.resolve();",
+    "  if (started !== undefined && started !== '') fs.writeFileSync(started, '');",
+    "  return new Promise((resolve) => {",
+    "    (function tick() {",
+    "      fs.existsSync(file) ? resolve() : setImmediate(tick);",
+    "    })();",
+    "  });",
+    "}",
+    "(async () => {",
+    "  if (args[0] === 'credential' && args[1] === 'fill') {",
+    needsCreds
+      ? "    process.stdout.write('username=octocat\\npassword=FAKE_TOKEN_XYZ\\n');"
+      : "    // no credentials configured",
+    "    process.exit(0);",
+    "  }",
+    "  if (args[0] === 'config' && args[1] === '--get' && args[2] === 'credential.helper') {",
+    "    process.stdout.write('fake-helper\\n');",
+    "    process.exit(0);",
+    "  }",
+    "  if (args[0] === 'clone') {",
+    "    const target = args[2];",
+    "    const fixture = process.env.KESTREL_FIXTURE;",
+    "    let r = spawnSync(realGit, ['clone', '-q', fixture, target], { stdio: 'inherit' });",
+    "    if (r.status !== 0) process.exit(r.status === null ? 1 : r.status);",
+    "    r = spawnSync(realGit, ['-C', target, 'remote', 'set-url', 'origin', process.env.KESTREL_REMOTE_URL], { stdio: 'inherit' });",
+    "    if (r.status !== 0) process.exit(r.status === null ? 1 : r.status);",
+    "    const logPath = process.env.KESTREL_CLONE_LOG;",
+    "    if (logPath !== undefined && logPath !== '') fs.appendFileSync(logPath, 'clone\\n');",
+    "    await gateWait(process.env.KESTREL_CLONE_GATE, process.env.KESTREL_CLONE_STARTED);",
+    "    process.exit(0);",
+    "  }",
+    "  if (process.env.KESTREL_GIT_GATE !== undefined && args[0] === process.env.KESTREL_GIT_GATE_CMD) {",
+    "    await gateWait(process.env.KESTREL_GIT_GATE, process.env.KESTREL_GIT_GATE_STARTED);",
+    "  }",
+    "  const r = spawnSync(realGit, args, { stdio: 'inherit' });",
+    "  process.exit(r.status === null ? 1 : r.status);",
+    "})();",
+    "",
+  ].join("\n");
+  await writeFile(join(dir, "git"), script, "utf8");
+  // Windows shim: `.cmd` is found via PATHEXT when a bare `git` is spawned.
+  await writeFile(join(dir, "git.cmd"), '@echo off\r\nnode "%~dp0git" %*\r\n', "utf8");
+  await chmod(join(dir, "git"), 0o755);
+}
+
+/** Create an absent release-file gate; a child polls for it to be released. */
+async function createGate(tag: string): Promise<string> {
+  const path = join(home, tag + ".release");
+  await rm(path, { force: true });
+  return path;
+}
+
+/** Release a file gate deterministically (writes then removes the release file). */
+async function releaseGate(path: string): Promise<void> {
+  await writeFile(path, "x", "utf8").catch(() => undefined);
+  await rm(path, { force: true });
+}
+
+/** Wait for a file to exist (polled, no wall-clock sleeps). */
 
 /** Configurable pull-request fixture served by the fake GitHub server. */
 interface PrFixture {
@@ -68,6 +157,9 @@ function cliEnv(extraEnv: Record<string, string> = {}): Record<string, string> {
     GIT_CONFIG_GLOBAL: join(home, "empty-gitconfig"),
     GIT_TERMINAL_PROMPT: "0",
     KESTREL_CLONE_LOG: cloneLog,
+    KESTREL_REAL_GIT: realGitPath,
+    KESTREL_FIXTURE: fixture,
+    KESTREL_REMOTE_URL: remoteUrl,
     ...extraEnv,
   } as Record<string, string>;
 }
@@ -217,7 +309,7 @@ async function removeIndexEntry(missionId: string): Promise<void> {
 
 let barrierCounter = 0;
 
-/** Set up a deterministic FIFO recovery barrier and return its env for a child. */
+/** Set up a deterministic file-gate recovery barrier and return its env. */
 async function beginBarrier(
   tag: string,
   matchPrefix?: string,
@@ -228,9 +320,7 @@ async function beginBarrier(
 }> {
   const dir = join(home, "barrier-" + tag + "-" + barrierCounter++);
   await mkdir(dir, { recursive: true });
-  const release = join(dir, "release.fifo");
-  await rm(release, { force: true });
-  await execFileAsync("mkfifo", [release]);
+  const release = await createGate("barrier-" + tag);
   return {
     dir,
     release,
@@ -252,11 +342,7 @@ async function waitForMarker(dir: string, boundary: string): Promise<void> {
   );
 } /** Release a barrier without hanging if no process is waiting on it. */
 async function releaseBarrier(release: string): Promise<void> {
-  await execFileAsync("bash", [
-    "-c",
-    "timeout 2 bash -c 'printf x > " + release + "' 2>/dev/null || true",
-  ]).catch(() => undefined);
-  await rm(release, { force: true });
+  await releaseGate(release);
 }
 
 /** Return the missionId and sidecarPath of a pending transaction intent, if any. */
@@ -279,7 +365,7 @@ async function pendingIntent(): Promise<{ missionId: string; sidecarPath: string
 }
 
 /**
- * Create a FIFO gate that pauses the fake git wrapper before it runs the given
+ * Create a file-gate that pauses the fake git wrapper before it runs the given
  * subcommand, so a test can stop preparation at an exact checkpoint boundary
  * instead of racing a kill against fast local checkpoints.
  */
@@ -287,20 +373,19 @@ async function beginGitGate(
   cmd: string,
   tag: string,
 ): Promise<{ env: Record<string, string>; started: string; release: () => Promise<void> }> {
-  const fifo = join(home, "gate-" + tag + ".fifo");
+  const gate = join(home, "gate-" + tag + ".release");
   const started = join(home, "gate-" + tag + ".started");
-  await rm(fifo, { force: true });
+  await rm(gate, { force: true });
   await rm(started, { force: true });
-  await execFileAsync("mkfifo", [fifo]);
   return {
     env: {
-      KESTREL_GIT_GATE: fifo,
+      KESTREL_GIT_GATE: gate,
       KESTREL_GIT_GATE_CMD: cmd,
       KESTREL_GIT_GATE_STARTED: started,
     },
     started,
     release: async () => {
-      await execFileAsync("bash", ["-c", "printf x > " + fifo]);
+      await releaseGate(gate);
     },
   };
 }
@@ -512,63 +597,16 @@ beforeAll(async () => {
   await runGit(fixture, ["add", "."]);
   await runGit(fixture, ["commit", "-m", "initial"]);
 
+  realGitPath = findRealGit();
+
   fakeGitDir = await mkdtemp(join(tmpdir(), "kestrel-e2e-git-"));
-  await writeFile(
-    join(fakeGitDir, "git"),
-    [
-      "#!/usr/bin/env bash",
-      'if [ "$1" = "credential" ] && [ "$2" = "fill" ]; then',
-      "  printf 'username=octocat\\npassword=FAKE_TOKEN_XYZ\\n'",
-      "  exit 0",
-      "fi",
-      'if [ "$1" = "config" ] && [ "$2" = "--get" ] && [ "$3" = "credential.helper" ]; then',
-      "  printf 'fake-helper\\n'",
-      "  exit 0",
-      "fi",
-      'if [ "$1" = "clone" ]; then',
-      '  /usr/bin/git clone -q "' + fixture + '" "$3"',
-      '  /usr/bin/git -C "$3" remote set-url origin https://github.com/octocat/hello-world.git',
-      '  echo "clone" >> "${KESTREL_CLONE_LOG:-/dev/null}"',
-      '  if [ -n "${KESTREL_CLONE_GATE:-}" ]; then',
-      '    touch "$KESTREL_CLONE_STARTED"',
-      '    read -r _ < "$KESTREL_CLONE_GATE"',
-      "  fi",
-      "  exit 0",
-      "fi",
-      // Deterministic gate for a specific git subcommand, so tests can pause
-      // preparation at an exact checkpoint boundary instead of racing a kill.
-      'if [ -n "${KESTREL_GIT_GATE:-}" ] && [ "$1" = "${KESTREL_GIT_GATE_CMD:-}" ]; then',
-      '  touch "${KESTREL_GIT_GATE_STARTED:-/dev/null}"',
-      '  read -r _ < "$KESTREL_GIT_GATE"',
-      "fi",
-      'exec /usr/bin/git "$@"',
-      "",
-    ].join("\n"),
-    "utf8",
-  );
-  await chmod(join(fakeGitDir, "git"), 0o755);
+  await createFakeGit(fakeGitDir, true);
 
   cloneLog = join(home, "clone.log");
   cloneStarted = join(home, "clone.started");
 
   noCredGitDir = await mkdtemp(join(tmpdir(), "kestrel-e2e-nocred-"));
-  await writeFile(
-    join(noCredGitDir, "git"),
-    [
-      "#!/usr/bin/env bash",
-      'if [ "$1" = "credential" ] && [ "$2" = "fill" ]; then',
-      "  exit 0",
-      "fi",
-      'if [ "$1" = "config" ] && [ "$2" = "--get" ] && [ "$3" = "credential.helper" ]; then',
-      "  printf 'fake-helper\n'",
-      "  exit 0",
-      "fi",
-      'exec /usr/bin/git "$@"',
-      "",
-    ].join("\n"),
-    "utf8",
-  );
-  await chmod(join(noCredGitDir, "git"), 0o755);
+  await createFakeGit(noCredGitDir, false);
 
   server = createServer(async (req, res) => {
     const url = req.url ?? "";
@@ -1174,18 +1212,16 @@ describe("kestrel end-to-end workflow", () => {
       try {
         if (checkpointCount === 1) {
           // After WORKSPACE_CREATED, pause the clone (REPOSITORY_CLONED).
-          const fifo = join(home, "gate-cp1.fifo");
-          await rm(fifo, { force: true });
-          await execFileAsync("mkfifo", [fifo]);
+          const gateFile = await createGate("gate-cp1");
           gate = {
             env: {},
             started: cloneStarted,
             release: async () => {
-              await execFileAsync("bash", ["-c", "printf x > " + fifo]);
+              await releaseGate(gateFile);
             },
           };
           spawned = spawnCli(["mission", "prepare", "--id", missionId], {
-            KESTREL_CLONE_GATE: fifo,
+            KESTREL_CLONE_GATE: gateFile,
             KESTREL_CLONE_STARTED: cloneStarted,
           });
           await waitForFile(cloneStarted);
@@ -1358,12 +1394,11 @@ describe("kestrel end-to-end workflow", () => {
     const missionId = extractMissionId(accept.stdout);
     const sidecar = await findSidecarFor(missionId);
 
-    // Gate the winner's clone with a FIFO so it holds the lock mid-critical-
-    // section while the loser races it.
-    const gateFifo = join(home, "gate.fifo");
-    await execFileAsync("mkfifo", [gateFifo]);
+    // Gate the winner's clone with a release-file gate so it holds the lock
+    // mid-critical-section while the loser races it.
+    const gateFile = await createGate("gate");
     const winner = spawnCli(["mission", "prepare", "--id", missionId], {
-      KESTREL_CLONE_GATE: gateFifo,
+      KESTREL_CLONE_GATE: gateFile,
       KESTREL_CLONE_STARTED: cloneStarted,
     });
     await waitForFile(cloneStarted);
@@ -1375,11 +1410,11 @@ describe("kestrel end-to-end workflow", () => {
     expect(loser.status).not.toBe(0);
     expect(loser.stderr).toContain("DM_MISSION_LOCKED");
 
-    // Terminate the winner mid-critical-section, release the gate so the
-    // orphaned clone wrapper exits, and recover in a fresh process.
+    // Terminate the winner mid-critical-section, release the gate so any
+    // straggler reader exits, and recover in a fresh process.
     winner.child.kill("SIGKILL");
     await winner.result;
-    await execFileAsync("bash", ["-c", "printf x > " + gateFifo]);
+    await releaseGate(gateFile);
     const recoveredLock = await breakStaleLock(missionId);
     expect(recoveredLock.status).toBe(0);
 
@@ -1387,7 +1422,6 @@ describe("kestrel end-to-end workflow", () => {
     expect(recovered.status).toBe(0);
     expect(recovered.stdout).toContain("IN_PROGRESS");
     expect(await cloneCount()).toBe(1);
-    await rm(gateFifo, { force: true });
   }, 60_000);
 
   it("refuses to break a live mission lock", async () => {
@@ -1398,10 +1432,9 @@ describe("kestrel end-to-end workflow", () => {
     const missionId = extractMissionId(accept.stdout);
 
     // Hold the clone gate so the winner is mid-critical-section with a live lock.
-    const gateFifo = join(home, "live-gate.fifo");
-    await execFileAsync("mkfifo", [gateFifo]);
+    const gateFile = await createGate("live-gate");
     const winner = spawnCli(["mission", "prepare", "--id", missionId], {
-      KESTREL_CLONE_GATE: gateFifo,
+      KESTREL_CLONE_GATE: gateFile,
       KESTREL_CLONE_STARTED: cloneStarted,
     });
     try {
@@ -1413,8 +1446,7 @@ describe("kestrel end-to-end workflow", () => {
     } finally {
       winner.child.kill("SIGKILL");
       await winner.result;
-      await execFileAsync("bash", ["-c", "printf x > " + gateFifo]);
-      await rm(gateFifo, { force: true });
+      await releaseGate(gateFile);
     }
   }, 60_000);
 
@@ -1610,10 +1642,9 @@ describe("kestrel end-to-end workflow", () => {
     const missionId = extractMissionId(accept.stdout);
 
     // Gate the clone so the process is mid-critical-section, then SIGINT it.
-    const gateFifo = join(home, "cancel-gate.fifo");
-    await execFileAsync("mkfifo", [gateFifo]);
+    const gateFile = await createGate("cancel-gate");
     const child = spawnCli(["mission", "prepare", "--id", missionId], {
-      KESTREL_CLONE_GATE: gateFifo,
+      KESTREL_CLONE_GATE: gateFile,
       KESTREL_CLONE_STARTED: cloneStarted,
     });
     try {
@@ -1625,11 +1656,7 @@ describe("kestrel end-to-end workflow", () => {
       expect(result.stderr).toMatch(/DM_(GIT|PROCESS)_CANCELLED/);
     } finally {
       // Unblock any straggler reader without hanging if none is waiting.
-      await execFileAsync("bash", [
-        "-c",
-        "timeout 2 bash -c 'printf x > " + gateFifo + "' 2>/dev/null || true",
-      ]).catch(() => undefined);
-      await rm(gateFifo, { force: true });
+      await releaseGate(gateFile);
     }
 
     // Graceful cancellation released the lock: resume works without break-lock.
@@ -1687,10 +1714,9 @@ describe("kestrel end-to-end workflow", () => {
     expect(accept.status).toBe(0);
     const missionId = extractMissionId(accept.stdout);
 
-    const gateFifo = join(home, "git-cancel-gate.fifo");
-    await execFileAsync("mkfifo", [gateFifo]);
+    const gateFile = await createGate("git-cancel-gate");
     const child = spawnCli(["mission", "prepare", "--id", missionId], {
-      KESTREL_CLONE_GATE: gateFifo,
+      KESTREL_CLONE_GATE: gateFile,
       KESTREL_CLONE_STARTED: cloneStarted,
     });
     try {
@@ -1703,11 +1729,7 @@ describe("kestrel end-to-end workflow", () => {
     } finally {
       // No reader should remain (the git process was terminated). Unblock any
       // straggler without hanging the test if none is waiting to read.
-      await execFileAsync("bash", [
-        "-c",
-        "timeout 2 bash -c 'printf x > " + gateFifo + "' 2>/dev/null || true",
-      ]).catch(() => undefined);
-      await rm(gateFifo, { force: true });
+      await releaseGate(gateFile);
     }
 
     // The mission lock was released and the mission remains resumable.

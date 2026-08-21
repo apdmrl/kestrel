@@ -1,17 +1,50 @@
 # Kestrel v0.1 Implementation Progress
 
-> This file tracks the **release-blocker remediation** pass described in
-> `docs/kestrel/prompts/deepseek-kestrel-release-blockers.md`, executed strictly RED → GREEN
-> on top of the earlier final-review and post-review passes. The complete Node 24 gate exits
-> zero; known limitations are listed explicitly below.
+> This file tracks the **general-release-review fix pass** described in
+> `docs/kestrel/prompts/deepseek-kestrel-general-review-fixes.md` (KGR-001..KGR-011),
+> executed strictly RED → GREEN on top of the earlier release-blocker and final-review
+> passes.
 
-Current phase: release-blocker remediation — complete
-Current verification: green — `npm ci`, `check:runtime`, boundaries, lint, format:check,
-typecheck, `npm test` (**525 tests across 75 files, zero failures, zero skipped, exit 0**),
-build, `npm pack --dry-run` (417 files), `npm audit` (0 vulnerabilities) and
-`npm audit --omit=dev` (0 vulnerabilities) all pass under Node v24.19.0 / npm 11.17.0.
+Current phase: general-release-review fix pass — in progress
 
-## Release-blocker remediation tasks
+## General-release-review fix tasks (KGR-001..KGR-011)
+
+- [x] **Task 1 / KGR-001 — Make the release gate cross-platform.**
+  - RED: `test/portability/portability.test.ts` — asserted the build no longer shells out
+    to `rm -rf`, no common E2E/package helper invokes `mkfifo`/`timeout`/`bash`/`/usr/bin/git`,
+    the packaged-bin tests resolve the Windows `.cmd` shim, and the CI matrix runs Node 24 on
+    Ubuntu/macOS/Windows. Failed with 3 assertions before the fix.
+  - GREEN: `npm run build` (now `node scripts/clean.mjs dist && tsc`), `npm run boundaries`,
+    `npm run lint`, `npm run format:check`, `npm run typecheck`, and
+    `npx vitest run test/portability test/package` all pass.
+  - Implementation: added `scripts/clean.mjs` (`fs.rm`), replaced the POSIX FIFO recovery
+    barrier with a cross-platform file-gate (`FileRecoveryBarrier`), converted the bash
+    fake-git to a Node shim (+ `.cmd` shim), replaced `mkfifo`/`bash`/`timeout` in
+    `test/e2e/workflows.test.ts` with file-gate helpers, and made package bin resolution
+    select `.cmd` on Windows. Full `test/e2e/workflows.test.ts` (34 scenarios) passes on
+    Linux; macOS/Windows CI evidence is pending (no CI access in this session).
+
+- [ ] **Task 2 / KGR-002 — Contain stale-lock recovery targets.** (RED → GREEN pending)
+
+- [ ] **Task 3 / KGR-003 — Serialize legacy recommendation migration.** (RED → GREEN pending)
+
+- [ ] **Task 4 / KGR-004 — Complete authentication cancellation.** (RED → GREEN pending)
+
+- [ ] **Task 5 / KGR-005 — Preserve cancellation through Git predicates.** (RED → GREEN pending)
+
+- [ ] **Task 6 / KGR-006 — Define transaction cancellation commit point.** (RED → GREEN pending)
+
+- [ ] **Task 7 / KGR-007 — Reject every recovery-source conflict.** (RED → GREEN pending)
+
+- [ ] **Task 8 / KGR-008 — Satisfy package contract.** (RED → GREEN pending)
+
+- [ ] **Task 9 / KGR-009 — Fail closed on malformed process identity.** (RED → GREEN pending)
+
+- [ ] **Task 10 / KGR-010 — Add SIGTERM acceptance coverage.** (RED → GREEN pending)
+
+- [ ] **Task 11 / KGR-011 — Make verification claims reproducible.** (RED → GREEN pending)
+
+## Earlier pass: release-blocker remediation
 
 - [x] Task 1 — Stable Linux process identity for lock ownership. Liveness compares the
       recorded `bootId` (`/proc/sys/kernel/random/boot_id`) and `/proc/<pid>/stat` field 22

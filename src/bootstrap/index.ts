@@ -13,7 +13,7 @@ import { JsonlJourneyStore } from "../infrastructure/persistence/jsonl-journey-s
 import { FileSystemAgentHandoffStore } from "../infrastructure/persistence/file-system-agent-handoff-store.js";
 import { FileMissionLock } from "../infrastructure/locking/file-mission-lock.js";
 import { FileTransactionJournal } from "../infrastructure/transactions/file-transaction-journal.js";
-import { FifoRecoveryBarrier } from "../infrastructure/transactions/fifo-recovery-barrier.js";
+import { FileRecoveryBarrier } from "../infrastructure/transactions/file-recovery-barrier.js";
 import {
   resetRecoveryBarrier,
   setRecoveryBarrier,
@@ -164,7 +164,7 @@ export async function bootstrap(
     process.env.KESTREL_RECOVERY_BARRIER_RELEASE !== undefined
   ) {
     setRecoveryBarrier(
-      new FifoRecoveryBarrier(
+      new FileRecoveryBarrier(
         process.env.KESTREL_RECOVERY_BARRIER_MARKER_DIR,
         process.env.KESTREL_RECOVERY_BARRIER_RELEASE,
         process.env.KESTREL_RECOVERY_BARRIER_MATCH,
