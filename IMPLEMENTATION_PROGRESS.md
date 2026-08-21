@@ -103,6 +103,17 @@ Current phase: general-release-review fix pass — in progress
 
 - [ ] **Task 7 / KGR-007 — Reject every recovery-source conflict.** (RED → GREEN pending)
 
+- [x] **Task 7 / KGR-007 — Reject every recovery-source conflict.**
+  - RED: added a built-CLI E2E test with two pending intents for the same mission at different
+    locations; `break-lock` incorrectly succeeded (picked one via `find()`). Also added a
+    dedup scenario (index + duplicate same-target intents).
+  - GREEN: the `break-lock` E2E scenarios (5) all pass, including the new conflict rejection
+    and the same-target dedup; typecheck/lint/format clean.
+  - Implementation: `resolveRecoverySidecar` now collects every matching index entry and every
+    matching pending intent, canonicalizes each path (`realpath` when present, else `resolve`),
+    deduplicates, and requires exactly one unique location — otherwise throws the conflicting-
+    locations error. No `find()` selects an arbitrary intent.
+
 - [ ] **Task 8 / KGR-008 — Satisfy package contract.** (RED → GREEN pending)
 
 - [ ] **Task 9 / KGR-009 — Fail closed on malformed process identity.** (RED → GREEN pending)

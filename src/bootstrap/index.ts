@@ -1,5 +1,6 @@
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import { realpath } from "node:fs/promises";
 import { Octokit } from "octokit";
 import { createOAuthDeviceAuth } from "@octokit/auth-oauth-device";
 import { FileSystemMissionStore } from "../infrastructure/persistence/file-system-mission-store.js";
@@ -316,26 +317,43 @@ export async function bootstrap(
       severity: "ERROR",
     });
 
+  const canonicalizePath = async (path: string): Promise<string> => {
+    const resolved = resolve(path);
+    try {
+      return await realpath(resolved);
+    } catch {
+      return resolved;
+    }
+  };
+
   /**
    * Resolve the exact sidecar for a recovery target from validated index data or
-   * a validated matching pending intent. Never accepts a filesystem path from
-   * the user and rejects conflicting locations between the two sources.
+   * validated matching pending intents. Never accepts a filesystem path from
+   * the user. Every matching source is collected and canonicalized, and the
+   * recovery requires exactly one unique location; `find()` is never used to
+   * select an arbitrary intent, so two conflicting sources cannot silently pick
+   * a winner based on directory enumeration order.
    */
   const resolveRecoverySidecar = async (missionId: string): Promise<string> => {
     const { index } = await indexStore.get();
-    const indexEntry = index.entries.find((e) => e.missionId === missionId);
+    const indexPaths = index.entries
+      .filter((entry) => entry.missionId === missionId)
+      .map((entry) => entry.sidecarPath);
     const intents = await journal.listPending();
-    const intent = intents.find((i) => i.missionId === missionId);
-    const indexPath = indexEntry?.sidecarPath;
-    const intentPath = intent?.sidecarPath;
-    if (indexPath !== undefined && intentPath !== undefined && indexPath !== intentPath) {
-      throw conflictingLocations();
-    }
-    const path = indexPath ?? intentPath;
-    if (path === undefined) {
+    const intentPaths = intents
+      .filter((intent) => intent.missionId === missionId)
+      .map((intent) => intent.sidecarPath);
+    const candidates = [...indexPaths, ...intentPaths];
+    if (candidates.length === 0) {
       throw noMission("No mission found to break a stale lock for");
     }
-    return path;
+    // Canonicalize every source (realpath when present, else a lexical resolve)
+    // so syntactically different paths to the same target are treated as one.
+    const unique = [...new Set(await Promise.all(candidates.map(canonicalizePath)))];
+    if (unique.length > 1) {
+      throw conflictingLocations();
+    }
+    return unique[0] as string;
   };
 
   const loadRecommendation = async (recommendationId: string) => {

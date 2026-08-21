@@ -1565,6 +1565,72 @@ describe("kestrel end-to-end workflow", () => {
     await rm(outsideDir, { recursive: true, force: true });
   }, 60_000);
 
+  it("rejects break-lock when two pending intents name different locations", async () => {
+    searchCount = 0;
+    const recommendationId = await findRecommendationId();
+    const accept = await runCli(["mission", "accept", "--id", recommendationId]);
+    expect(accept.status).toBe(0);
+    const missionId = extractMissionId(accept.stdout);
+    const sidecar = await findSidecarFor(missionId);
+    await writeStaleMissionLock(missionId, sidecar);
+    // One pending intent at the real sidecar.
+    await writePendingIntent(missionId, sidecar, "tx-conflict-a");
+
+    // A second pending intent for the SAME mission at a DIFFERENT location.
+    const otherDir = await mkdtemp(join(tmpdir(), "kestrel-other-"));
+    await mkdir(join(otherDir, "kestrel"), { recursive: true });
+    await writeStaleMissionLock(missionId, join(otherDir, "kestrel"));
+    const txDir = join(home, "transactions");
+    await mkdir(txDir, { recursive: true });
+    await writeFile(
+      join(txDir, "tx-conflict-b.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        transactionId: "tx-conflict-b",
+        eventId: "evt-conflict-b",
+        missionId,
+        sidecarPath: join(otherDir, "kestrel"),
+        expectedStateVersion: 0,
+        targetMission: readPersistedMission(sidecar).mission,
+        event: {
+          schemaVersion: 1,
+          eventId: "evt-conflict-b",
+          missionId,
+          type: "AgentHandoffRecorded",
+          occurredAt: "2026-08-15T10:00:00Z",
+          payload: {},
+        },
+        phase: "PREPARED",
+      }),
+      "utf8",
+    );
+
+    const broke = await runCli(["mission", "break-lock", "--id", missionId]);
+    expect(broke.status).not.toBe(0);
+    expect(broke.stderr).toMatch(/disagree|conflict/i);
+    // Neither lock is broken: the conflicting sources are never resolved.
+    await expect(stat(join(sidecar, ".lock"))).resolves.toBeDefined();
+    await expect(stat(join(otherDir, "kestrel", ".lock"))).resolves.toBeDefined();
+    await rm(otherDir, { recursive: true, force: true });
+  }, 60_000);
+
+  it("breaks a stale lock when recovery sources all agree on one canonical location", async () => {
+    searchCount = 0;
+    const recommendationId = await findRecommendationId();
+    const accept = await runCli(["mission", "accept", "--id", recommendationId]);
+    expect(accept.status).toBe(0);
+    const missionId = extractMissionId(accept.stdout);
+    const sidecar = await findSidecarFor(missionId);
+    await writeStaleMissionLock(missionId, sidecar);
+    // The index entry plus two duplicate intents all name the same sidecar.
+    await writePendingIntent(missionId, sidecar, "tx-dup-a");
+    await writePendingIntent(missionId, sidecar, "tx-dup-b");
+
+    const broke = await runCli(["mission", "break-lock", "--id", missionId]);
+    expect(broke.status).toBe(0);
+    await expect(stat(join(sidecar, ".lock"))).rejects.toThrow();
+  }, 60_000);
+
   it("keeps both index entries when two child processes update different missions", async () => {
     searchCount = 0;
     const idA = await findRecommendationId();
