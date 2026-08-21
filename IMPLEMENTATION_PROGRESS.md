@@ -24,8 +24,6 @@ Current phase: general-release-review fix pass — in progress
     select `.cmd` on Windows. Full `test/e2e/workflows.test.ts` (34 scenarios) passes on
     Linux; macOS/Windows CI evidence is pending (no CI access in this session).
 
-- [ ] **Task 3 / KGR-003 — Serialize legacy recommendation migration.** (RED → GREEN pending)
-
 - [x] **Task 2 / KGR-002 — Contain stale-lock recovery targets.**
   - RED: `src/infrastructure/recovery/trusted-lock-target.test.ts` — asserted the verifier
     accepts a valid sidecar inside the workspace, rejects a sidecar outside the workspace,
@@ -40,8 +38,18 @@ Current phase: general-release-review fix pass — in progress
     accept an optional expected mission id, failing closed on a mismatched lock. Wired both
     into `bootstrap.missionBreakLock`.
 
-
-- [ ] **Task 3 / KGR-003 — Serialize legacy recommendation migration.** (RED → GREEN pending)
+- [x] **Task 3 / KGR-003 — Serialize legacy recommendation migration.**
+  - RED: added adversarial tests to `file-system-recommendation-store.test.ts` for an older
+    writer replacing `recommendation.json` mid-migration, restore-on-failure then idempotent
+    recovery, orphaned-staging recovery on the next bootstrap, and two concurrent migrators
+    converging. Failed before the atomic-claim implementation.
+  - GREEN: `npx vitest run src/infrastructure/persistence/file-system-recommendation-store.test.ts`
+    (13 tests) and the E2E per-id-upgrade scenario pass; typecheck/lint/format clean.
+  - Implementation: `migrateLegacyRecommendation` now atomically renames the legacy pathname to
+    a uniquely owned `*.staging` file before parsing, deletes only that owned staging file after
+    the snapshot is durably confirmed, restores/preserves claimed evidence on failure (never
+    overwriting a recreated `recommendation.json`), and recovers orphaned staging files
+    idempotently on the next bootstrap.
 
 - [ ] **Task 4 / KGR-004 — Complete authentication cancellation.** (RED → GREEN pending)
 

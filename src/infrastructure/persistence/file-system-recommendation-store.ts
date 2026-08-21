@@ -1,5 +1,6 @@
-import { mkdir, rm } from "node:fs/promises";
-import { join } from "node:path";
+import { randomUUID } from "node:crypto";
+import { lstat, mkdir, readdir, rename, rm } from "node:fs/promises";
+import { basename, dirname, join } from "node:path";
 import { z } from "zod";
 import { createKestrelError } from "../../application/errors/kestrel-error.js";
 import type { RecommendationSnapshot } from "../../domain/recommendation/recommendation.js";
@@ -139,15 +140,48 @@ export class FileSystemRecommendationStore implements RecommendationStore {
  * file is already backed up by the reader. The `onDiagnostic` callback (defaults
  * to a no-op) receives a safe message for presentation on stderr.
  */
-export async function migrateLegacyRecommendation(
-  legacyPath: string,
+function isEnoent(error: unknown): boolean {
+  return (
+    typeof error === "object" && error !== null && (error as { code?: string }).code === "ENOENT"
+  );
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** A uniquely owned staging name derived from the legacy pathname. */
+function stagingNameFor(legacyPath: string): string {
+  return legacyPath + "." + randomUUID() + ".staging";
+}
+
+/** Match only staging files that belong to this exact legacy pathname. */
+function stagingPatternFor(legacyPath: string): RegExp {
+  return new RegExp("^" + escapeRegExp(basename(legacyPath)) + "\\.(.*)\\.staging$");
+}
+
+export interface MigrationHooks {
+  /** Test seam fired immediately after the legacy file is claimed (renamed). */
+  readonly afterClaim?: (stagingPath: string) => Promise<void> | void;
+}
+
+/**
+ * Migrate a single owned staging file: parse, validate, install per-id, and
+ * delete ONLY that staging file once the snapshot is durably confirmed.
+ * On failure the staging evidence is preserved (and, when a restore target is
+ * supplied and the legacy pathname is still absent, safely restored).
+ */
+async function processStagingFile(
+  stagingPath: string,
   store: RecommendationStore,
-  onDiagnostic: (message: string) => void = () => undefined,
+  onDiagnostic: (message: string) => void,
+  restoreTo?: string,
 ): Promise<boolean> {
   let envelope;
   try {
-    envelope = await readValidatedJson(legacyPath, storedRecommendationSchema);
+    envelope = await readValidatedJson(stagingPath, storedRecommendationSchema);
   } catch {
+    // Corrupt staging was already backed up by the reader (evidence preserved).
     onDiagnostic("Legacy recommendation was corrupt and was left in place; run find to refresh.");
     return false;
   }
@@ -157,15 +191,102 @@ export async function migrateLegacyRecommendation(
   const result = fromPersistedRecommendationSnapshot(envelope.recommendation);
   if (!result.ok || envelope.recommendationId !== result.value.challenge.id) {
     onDiagnostic("Legacy recommendation was inconsistent and was left in place for manual review.");
+    await restoreOrPreserve(stagingPath, restoreTo, onDiagnostic);
     return false;
   }
   try {
     await store.save(result.value);
   } catch {
     onDiagnostic("Legacy recommendation could not be migrated and was left in place.");
+    await restoreOrPreserve(stagingPath, restoreTo, onDiagnostic);
     return false;
   }
-  // The identical snapshot is now confirmed installed; consume the legacy file.
-  await rm(legacyPath);
+  // The identical snapshot is now durably confirmed installed; remove ONLY this
+  // owned staging file. A concurrently recreated recommendation.json is never
+  // touched here.
+  await rm(stagingPath);
   return true;
+}
+
+/** Restore the staging file to the legacy pathname if it is still absent. */
+async function restoreOrPreserve(
+  stagingPath: string,
+  restoreTo: string | undefined,
+  onDiagnostic: (message: string) => void,
+): Promise<void> {
+  if (restoreTo === undefined) {
+    return; // orphan recovery: leave the staging file as evidence.
+  }
+  let legacyExists = true;
+  try {
+    await lstat(restoreTo);
+  } catch (error) {
+    if (isEnoent(error)) {
+      legacyExists = false;
+    }
+  }
+  if (legacyExists) {
+    // An older writer recreated recommendation.json: never overwrite it; keep
+    // the claimed evidence in the staging file.
+    onDiagnostic(
+      "A newer legacy recommendation appeared during migration; migrated evidence is preserved in a staging file.",
+    );
+    return;
+  }
+  await rename(stagingPath, restoreTo).catch(() => {
+    onDiagnostic("Could not restore the legacy recommendation file after a failed migration.");
+  });
+}
+
+/**
+ * Migrate the legacy single-latest recommendation file (used before the per-id
+ * `recommendations/` layout) into the per-id store. Returns true when a legacy
+ * snapshot was validated, installed identically, and consumed.
+ *
+ * The migration is serialized against concurrent writers and other migrators by
+ * an atomic claim: the legacy pathname is first RENAMED to a uniquely owned
+ * staging name, and the original pathname is never deleted directly. The owned
+ * staging file is removed only after an identical snapshot is durably confirmed
+ * installed. On any failure the claimed evidence is preserved (restored to the
+ * legacy pathname when it is still absent) and a safe stderr diagnostic is
+ * emitted, so evidence is never destroyed and a concurrently recreated
+ * `recommendation.json` is never deleted. Any orphaned staging file left by a
+ * previously crashed migration is recovered idempotently on the next call.
+ */
+export async function migrateLegacyRecommendation(
+  legacyPath: string,
+  store: RecommendationStore,
+  onDiagnostic: (message: string) => void = () => undefined,
+  hooks: MigrationHooks = {},
+): Promise<boolean> {
+  // 1. Recover any orphaned staging file from a previously crashed migration.
+  let recovered = false;
+  const parent = dirname(legacyPath);
+  const pattern = stagingPatternFor(legacyPath);
+  for (const entry of await readdir(parent).catch(() => [])) {
+    if (!pattern.test(entry)) {
+      continue;
+    }
+    const stagingPath = join(parent, entry);
+    if (await processStagingFile(stagingPath, store, onDiagnostic)) {
+      recovered = true;
+    }
+  }
+
+  // 2. Claim the live legacy file atomically, or stop if none is present.
+  const stagingPath = stagingNameFor(legacyPath);
+  try {
+    await rename(legacyPath, stagingPath);
+  } catch (error) {
+    if (isEnoent(error)) {
+      return recovered;
+    }
+    onDiagnostic("Legacy recommendation could not be claimed for migration.");
+    return recovered;
+  }
+  if (hooks.afterClaim !== undefined) {
+    await hooks.afterClaim(stagingPath);
+  }
+  const migrated = await processStagingFile(stagingPath, store, onDiagnostic, legacyPath);
+  return migrated || recovered;
 }

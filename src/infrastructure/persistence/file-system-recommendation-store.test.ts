@@ -11,6 +11,7 @@ import type { Challenge } from "../../domain/challenge/challenge.js";
 import type { ChallengeId } from "../../domain/shared/identifiers.js";
 import type { IsoDateTime } from "../../domain/shared/time.js";
 import type { RecommendationSnapshot } from "../../domain/recommendation/recommendation.js";
+import type { RecommendationStore } from "../../ports/recommendation-store.js";
 import {
   FileSystemRecommendationStore,
   migrateLegacyRecommendation,
@@ -205,5 +206,140 @@ describe("migrateLegacyRecommendation", () => {
     await expect(stat(legacyPath)).resolves.toBeDefined();
     expect((await store.load(challenge.id))?.confidence).toBe(0.9);
     expect(messages.length).toBeGreaterThan(0);
+  });
+
+  it("never deletes a recommendation.json recreated by an older writer during migration", async () => {
+    const legacyPath = join(dir, "recommendation.json");
+    const store = new FileSystemRecommendationStore(join(dir, "recommendations"));
+    const original = makeRecommendation(makeChallenge("challenge-a", "Fix crash on startup"), 0.9);
+    await writeFile(
+      legacyPath,
+      JSON.stringify({
+        schemaVersion: 1,
+        recommendationId: "challenge-a",
+        recommendation: toPersistedRecommendation(original),
+      }),
+      "utf8",
+    );
+
+    const racingStore: RecommendationStore = {
+      save: async (snap) => {
+        // An older concurrent writer overwrites recommendation.json while the
+        // migration holds its owned staging copy.
+        const recreated = makeRecommendation(
+          makeChallenge("challenge-b", "Add documentation"),
+          0.7,
+        );
+        await writeFile(
+          legacyPath,
+          JSON.stringify({
+            schemaVersion: 1,
+            recommendationId: "challenge-b",
+            recommendation: toPersistedRecommendation(recreated),
+          }),
+          "utf8",
+        );
+        await store.save(snap);
+      },
+      load: (id) => store.load(id),
+    };
+
+    await migrateLegacyRecommendation(legacyPath, racingStore);
+
+    // The concurrently recreated legacy file survives; no staging residue.
+    await expect(stat(legacyPath)).resolves.toBeDefined();
+    expect((await readdir(dir)).filter((e) => e.endsWith(".staging"))).toEqual([]);
+    // The originally claimed snapshot was still installed per-id.
+    expect((await store.load("challenge-a" as ChallengeId))?.confidence).toBe(0.9);
+  });
+
+  it("restores the legacy file when a later migration step fails, then recovers on the next call", async () => {
+    const legacyPath = join(dir, "recommendation.json");
+    const store = new FileSystemRecommendationStore(join(dir, "recommendations"));
+    const original = makeRecommendation(makeChallenge("challenge-a", "Fix crash on startup"), 0.9);
+    await writeFile(
+      legacyPath,
+      JSON.stringify({
+        schemaVersion: 1,
+        recommendationId: "challenge-a",
+        recommendation: toPersistedRecommendation(original),
+      }),
+      "utf8",
+    );
+
+    // A store whose save fails the first time simulates a migration failure
+    // after the legacy file has been claimed.
+    let failFirst = true;
+    const flakyStore: RecommendationStore = {
+      save: async (snap) => {
+        if (failFirst) {
+          failFirst = false;
+          throw new Error("transient write failure");
+        }
+        await store.save(snap);
+      },
+      load: (id) => store.load(id),
+    };
+    const firstDiag: string[] = [];
+    expect(
+      await migrateLegacyRecommendation(legacyPath, flakyStore, (m) => firstDiag.push(m)),
+    ).toBe(false);
+    // On failure the claimed legacy evidence is restored to its original path.
+    await expect(stat(legacyPath)).resolves.toBeDefined();
+    expect(firstDiag.length).toBeGreaterThan(0);
+
+    // A later bootstrap (idempotent recovery) completes the migration.
+    expect(await migrateLegacyRecommendation(legacyPath, store)).toBe(true);
+    await expect(stat(legacyPath)).rejects.toThrow();
+    expect((await store.load("challenge-a" as ChallengeId))?.confidence).toBe(0.9);
+  });
+
+  it("recovers an orphaned staging file left by a crashed migration on the next bootstrap", async () => {
+    const legacyPath = join(dir, "recommendation.json");
+    const store = new FileSystemRecommendationStore(join(dir, "recommendations"));
+    const original = makeRecommendation(makeChallenge("challenge-a", "Fix crash on startup"), 0.9);
+    // Simulate a crash immediately after the atomic claim: only an owned
+    // staging file exists; the original legacy pathname is gone.
+    const stagingPath = legacyPath + ".crashed-token.staging";
+    await writeFile(
+      stagingPath,
+      JSON.stringify({
+        schemaVersion: 1,
+        recommendationId: "challenge-a",
+        recommendation: toPersistedRecommendation(original),
+      }),
+      "utf8",
+    );
+
+    expect(await migrateLegacyRecommendation(legacyPath, store)).toBe(true);
+    // The orphaned staging evidence was recovered and consumed; per-id installed.
+    expect((await readdir(dir)).filter((e) => e.endsWith(".staging"))).toEqual([]);
+    expect((await store.load("challenge-a" as ChallengeId))?.confidence).toBe(0.9);
+  });
+
+  it("serializes two concurrent migrators so only one claim wins and both converge", async () => {
+    const legacyPath = join(dir, "recommendation.json");
+    const store = new FileSystemRecommendationStore(join(dir, "recommendations"));
+    const original = makeRecommendation(makeChallenge("challenge-a", "Fix crash on startup"), 0.9);
+    await writeFile(
+      legacyPath,
+      JSON.stringify({
+        schemaVersion: 1,
+        recommendationId: "challenge-a",
+        recommendation: toPersistedRecommendation(original),
+      }),
+      "utf8",
+    );
+
+    await Promise.all([
+      migrateLegacyRecommendation(legacyPath, store),
+      migrateLegacyRecommendation(legacyPath, store),
+    ]);
+
+    // Exactly one per-id snapshot, no leftover legacy or staging residue.
+    await expect(stat(legacyPath)).rejects.toThrow();
+    expect((await readdir(dir)).filter((e) => e.endsWith(".staging"))).toEqual([]);
+    expect(await readdir(join(dir, "recommendations"))).toEqual(["challenge-a.json"]);
+    expect((await store.load("challenge-a" as ChallengeId))?.confidence).toBe(0.9);
   });
 });
