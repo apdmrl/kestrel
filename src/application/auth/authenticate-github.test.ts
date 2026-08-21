@@ -66,7 +66,7 @@ class AccountInsensitiveStore implements CredentialStore {
 }
 
 class FakeGateway implements GitHubGateway {
-  viewerFn: (token: string) => GitHubViewer = () => {
+  viewerFn: (token: string, signal?: AbortSignal) => GitHubViewer | Promise<GitHubViewer> = () => {
     throw new Error("unexpected getViewer");
   };
   pollFn: (signal?: AbortSignal) => GitHubToken = () => ({
@@ -74,9 +74,11 @@ class FakeGateway implements GitHubGateway {
     account: "octocat",
   });
   deviceFlowCalls = 0;
+  capturedDeviceSignal: AbortSignal | undefined;
 
-  async beginDeviceFlow(): Promise<DeviceFlowAuthorization> {
+  async beginDeviceFlow(signal?: AbortSignal): Promise<DeviceFlowAuthorization> {
     this.deviceFlowCalls += 1;
+    this.capturedDeviceSignal = signal;
     return authorization;
   }
 
@@ -84,8 +86,8 @@ class FakeGateway implements GitHubGateway {
     return this.pollFn(signal);
   }
 
-  async getViewer(token: string): Promise<GitHubViewer> {
-    return this.viewerFn(token);
+  async getViewer(token: string, _signal?: AbortSignal): Promise<GitHubViewer> {
+    return this.viewerFn(token, _signal);
   }
 
   async getPullRequest(): Promise<never> {
@@ -245,5 +247,76 @@ describe("authenticateGitHub", () => {
     expect(store.deleted).toContain("octocat");
     expect(result).toEqual({ account: "octocat", token: "fresh-token" });
     expect(store.stored).toEqual([{ service: "github", account: "octocat", token: "fresh-token" }]);
+  });
+
+  it("passes the cancellation signal into cached-token validation", async () => {
+    const store = new FakeCredentialStore();
+    store.creds.set("github:octocat", { service: "github", account: "octocat", token: "cached" });
+    const controller = new AbortController();
+    const gateway = new FakeGateway();
+    let receivedSignal: AbortSignal | undefined;
+    gateway.viewerFn = (_token, signal) => {
+      receivedSignal = signal;
+      return Promise.resolve({ login: "octocat", id: 1 });
+    };
+
+    const result = await authenticateGitHub(deps(store, gateway), {
+      account: "octocat",
+      signal: controller.signal,
+    });
+    expect(receivedSignal).toBe(controller.signal);
+    expect(result.token).toBe("cached");
+    expect(gateway.deviceFlowCalls).toBe(0);
+  });
+
+  it("aborts a hanging cached-token validation on signal without mutating credentials", async () => {
+    const store = new FakeCredentialStore();
+    store.creds.set("github:octocat", { service: "github", account: "octocat", token: "cached" });
+    const controller = new AbortController();
+    const gateway = new FakeGateway();
+    gateway.viewerFn = (_token, signal) =>
+      new Promise((_resolve, reject) => {
+        const cancel = (): void =>
+          reject(
+            createKestrelError({
+              code: "DM_PROCESS_CANCELLED",
+              category: "USER_ACTION_REQUIRED",
+              userMessage: "cancelled",
+              suggestedActions: ["retry"],
+              retryability: "NO_RETRY",
+              recoveryStrategy: "USER_ACTION",
+              severity: "INFO",
+            }),
+          );
+        if (signal?.aborted === true) {
+          cancel();
+          return;
+        }
+        signal?.addEventListener("abort", cancel, { once: true });
+      });
+
+    const attempt = authenticateGitHub(deps(store, gateway), {
+      account: "octocat",
+      signal: controller.signal,
+    });
+    controller.abort();
+    await expect(attempt).rejects.toMatchObject({ code: "DM_PROCESS_CANCELLED" });
+    // The cached credential is neither deleted nor replaced on cancellation.
+    expect(store.creds.get("github:octocat")?.token).toBe("cached");
+    expect(store.deleted).toEqual([]);
+    expect(store.stored).toEqual([]);
+  });
+
+  it("passes the cancellation signal into device-flow initialization", async () => {
+    const store = new FakeCredentialStore();
+    const controller = new AbortController();
+    const gateway = new FakeGateway();
+    gateway.pollFn = () => ({ token: "fresh-token", account: "octocat" });
+    const result = await authenticateGitHub(deps(store, gateway), {
+      account: "octocat",
+      signal: controller.signal,
+    });
+    expect(gateway.capturedDeviceSignal).toBe(controller.signal);
+    expect(result.token).toBe("fresh-token");
   });
 });

@@ -135,6 +135,14 @@ let devicePollCount = 0;
 let searchHold = false;
 let searchArrived = false;
 let releaseSearchHold: (() => void) | undefined;
+/** When true, /user (cached-token validation) waits until released. */
+let userHold = false;
+let userArrived = false;
+let releaseUserHold: (() => void) | undefined;
+/** When true, /login/device/code (device-flow initialization) waits until released. */
+let deviceCodeHold = false;
+let deviceCodeArrived = false;
+let releaseDeviceCodeHold: (() => void) | undefined;
 /** When true, pull-request responses wait until the gate is released. */
 let pullsHold = false;
 let pullsArrived = false;
@@ -623,6 +631,12 @@ beforeAll(async () => {
       return;
     }
     if (url.startsWith("/login/device/code")) {
+      if (deviceCodeHold) {
+        deviceCodeArrived = true;
+        await new Promise<void>((resolve) => {
+          releaseDeviceCodeHold = resolve;
+        });
+      }
       res.end(
         JSON.stringify({
           device_code: "device-code-secret",
@@ -725,6 +739,12 @@ beforeAll(async () => {
       return;
     }
     if (url.startsWith("/user")) {
+      if (userHold) {
+        userArrived = true;
+        await new Promise<void>((resolve) => {
+          releaseUserHold = resolve;
+        });
+      }
       res.end(JSON.stringify({ login: "octocat", id: 1 }));
       return;
     }
@@ -1739,6 +1759,64 @@ describe("kestrel end-to-end workflow", () => {
       searchHold = false;
       releaseSearchHold?.();
     }
+  }, 60_000);
+
+  it("cancels a hanging cached-token validation with SIGINT (exit 130, no mutation)", async () => {
+    searchCount = 0;
+    // A successful find stores a cached credential through the fake git helper.
+    const seeded = await runCli(["--json", "find", "--mood", "QUICK_WIN"], {
+      PATH: noCredGitDir + ":" + process.env.PATH,
+      GITHUB_CLIENT_ID: "test-client-id",
+    });
+    expect(seeded.status).toBe(0);
+
+    // Now hold the /user endpoint so cached-token validation hangs.
+    userHold = true;
+    userArrived = false;
+    releaseUserHold = undefined;
+    const child = spawnCli(["--json", "find", "--mood", "QUICK_WIN"], {
+      PATH: noCredGitDir + ":" + process.env.PATH,
+      GITHUB_CLIENT_ID: "test-client-id",
+    });
+    try {
+      await waitFor(() => userArrived, "cached-token validation arrived");
+      child.child.kill("SIGINT");
+      const result = await child.result;
+      expect(result.status).toBe(130);
+      expect(result.stderr).toMatch(/DM_(GITHUB_AUTH_CANCELLED|PROCESS_CANCELLED)/);
+      // No secrets, and no partial state was persisted by the cancelled command.
+      expect(result.stdout + result.stderr).not.toContain("FAKE_TOKEN_XYZ");
+      expect(result.stdout + result.stderr).not.toContain("DEVICE_FLOW_ACCESS_TOKEN");
+    } finally {
+      userHold = false;
+      releaseUserHold?.();
+    }
+    const after = await runCli(["journey"]);
+    expect(after.status).toBe(0);
+  }, 60_000);
+
+  it("cancels a hanging device-flow initialization with SIGINT (exit 130, no mutation)", async () => {
+    deviceCodeHold = true;
+    deviceCodeArrived = false;
+    releaseDeviceCodeHold = undefined;
+    const child = spawnCli(["--json", "find", "--mood", "QUICK_WIN"], {
+      PATH: noCredGitDir + ":" + process.env.PATH,
+      GITHUB_CLIENT_ID: "test-client-id",
+    });
+    try {
+      await waitFor(() => deviceCodeArrived, "device-flow initialization arrived");
+      child.child.kill("SIGINT");
+      const result = await child.result;
+      expect(result.status).toBe(130);
+      expect(result.stderr).toMatch(/DM_(GITHUB_AUTH_CANCELLED|PROCESS_CANCELLED)/);
+      expect(result.stdout + result.stderr).not.toContain("DEVICE_FLOW_ACCESS_TOKEN");
+      expect(result.stdout + result.stderr).not.toContain("device-code-secret");
+    } finally {
+      deviceCodeHold = false;
+      releaseDeviceCodeHold?.();
+    }
+    const after = await runCli(["journey"]);
+    expect(after.status).toBe(0);
   }, 60_000);
 
   it("cancels an in-flight git process with SIGINT (terminated, not manually released)", async () => {

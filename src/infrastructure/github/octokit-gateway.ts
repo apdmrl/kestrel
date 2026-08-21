@@ -65,6 +65,13 @@ function cancelledError() {
   });
 }
 
+/** Rejects as soon as the signal aborts; used to promptly cancel the flow. */
+function abortPromise(signal: AbortSignal): Promise<never> {
+  return new Promise((_resolve, reject) => {
+    signal.addEventListener("abort", () => reject(cancelledError()), { once: true });
+  });
+}
+
 function authRequiredError() {
   return createKestrelError({
     code: "DM_GITHUB_AUTH_REQUIRED",
@@ -87,14 +94,43 @@ export class OctokitGateway implements GitHubGateway {
     private readonly deviceAuthFactory: DeviceAuthFactory,
   ) {}
 
-  async beginDeviceFlow(): Promise<DeviceFlowAuthorization> {
+  async beginDeviceFlow(signal?: AbortSignal): Promise<DeviceFlowAuthorization> {
     if (this.clientId.trim().length === 0) {
       throw authRequiredError();
     }
     let resolveVerification!: (value: DeviceFlowAuthorization) => void;
-    const verificationPromise = new Promise<DeviceFlowAuthorization>((resolve) => {
+    let rejectVerification!: (error: unknown) => void;
+    const verificationPromise = new Promise<DeviceFlowAuthorization>((resolve, reject) => {
       resolveVerification = resolve;
+      rejectVerification = reject;
     });
+    if (signal !== undefined) {
+      // A cancellation while initialization is still awaiting its verification
+      // data must unblock `beginDeviceFlow` (which awaits onVerification) so the
+      // caller can unwind gracefully instead of hanging on a detached promise.
+      signal.addEventListener("abort", () => rejectVerification(cancelledError()), { once: true });
+    }
+
+    // Wrap the underlying Octokit request so that a cancellation signal reaches
+    // the real HTTP request: an aborted device flow aborts the in-flight fetch
+    // rather than merely racing a detached promise and leaving a live request.
+    // The wrapper preserves the octokit request's `endpoint`/`defaults`, which
+    // the device-flow library reads to derive the OAuth base URL.
+    const baseRequest = this.octokit.request as unknown as {
+      (route: string, options?: Record<string, unknown>): Promise<unknown>;
+      endpoint?: unknown;
+      defaults?: unknown;
+    };
+    const request = (route: string, options?: Record<string, unknown>): Promise<unknown> => {
+      if (signal?.aborted === true) {
+        return Promise.reject(cancelledError());
+      }
+      return baseRequest(route, {
+        ...(options ?? {}),
+        ...(signal !== undefined ? { request: { ...(options?.request ?? {}), signal } } : {}),
+      });
+    };
+    Object.assign(request, { endpoint: baseRequest.endpoint, defaults: baseRequest.defaults });
 
     this.strategy = this.deviceAuthFactory({
       clientType: "oauth-app",
@@ -104,7 +140,7 @@ export class OctokitGateway implements GitHubGateway {
       // api.github.com, or the local/test endpoint) instead of defaulting to
       // github.com and bypassing GITHUB_API_URL. The narrow OctokitLike view
       // hides endpoint metadata the device flow needs, so assert it here.
-      request: this.octokit.request as DeviceAuthRequest,
+      request: request as DeviceAuthRequest,
       onVerification: (verification) => {
         resolveVerification({
           deviceCode: verification.device_code,
@@ -116,15 +152,19 @@ export class OctokitGateway implements GitHubGateway {
       },
     });
 
-    this.pendingAuth = (async () => {
+    const work = (async () => {
       const strategy = this.strategy;
       if (strategy === undefined) {
         throw cancelledError();
       }
       const authentication = await strategy({ type: "oauth" });
-      const viewer = await this.getViewer(authentication.token);
+      const viewer = await this.getViewer(authentication.token, signal);
       return { token: authentication.token, account: viewer.login };
-    })().catch((error) => {
+    })();
+
+    this.pendingAuth = (
+      signal === undefined ? work : Promise.race([work, abortPromise(signal)])
+    ).catch((error) => {
       throw mapGitHubError(error);
     });
 

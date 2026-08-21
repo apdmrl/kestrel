@@ -113,6 +113,44 @@ describe("OctokitGateway", () => {
     });
   });
 
+  it("aborts device-flow initialization when the signal passed to beginDeviceFlow fires", async () => {
+    const { factory } = fakeDeviceAuthFactory();
+    const gateway = new OctokitGateway(new FakeOctokit(), "client-id", factory);
+    const controller = new AbortController();
+    await gateway.beginDeviceFlow(controller.signal);
+    const poll = gateway.pollForToken("device-code");
+    controller.abort();
+    await expect(poll).rejects.toMatchObject({ code: "DM_GITHUB_AUTH_CANCELLED" });
+  });
+
+  it("makes the device-flow request abort once the begin signal fires", async () => {
+    let capturedRequest: unknown;
+    const factory: DeviceAuthFactory = (options) => {
+      capturedRequest = options.request;
+      options.onVerification({
+        device_code: "d",
+        user_code: "A",
+        verification_uri: "u",
+        expires_in: 900,
+        interval: 5,
+      });
+      return () => new Promise<{ token: string }>(() => undefined);
+    };
+    const gateway = new OctokitGateway(new FakeOctokit(), "client-id", factory);
+    const controller = new AbortController();
+    await gateway.beginDeviceFlow(controller.signal);
+    const request = capturedRequest as (
+      route: string,
+      opts?: Record<string, unknown>,
+    ) => Promise<unknown>;
+    const poll = gateway.pollForToken("device-code");
+    controller.abort();
+    await expect(poll).rejects.toMatchObject({ code: "DM_GITHUB_AUTH_CANCELLED" });
+    await expect(request("GET /user")).rejects.toMatchObject({
+      code: "DM_GITHUB_AUTH_CANCELLED",
+    });
+  });
+
   it("rejects device flow when no client id is configured", async () => {
     const gateway = new OctokitGateway(new FakeOctokit(), "", fakeDeviceAuthFactory().factory);
     await expect(gateway.beginDeviceFlow()).rejects.toMatchObject({

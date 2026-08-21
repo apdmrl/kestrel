@@ -42,7 +42,7 @@ export interface MergeInfo {
 
 /** Provider-neutral GitHub API boundary (device flow, identity, and verification). */
 export interface GitHubGateway {
-  beginDeviceFlow(): Promise<DeviceFlowAuthorization>;
+  beginDeviceFlow(signal?: AbortSignal): Promise<DeviceFlowAuthorization>;
   pollForToken(deviceCode: string, signal?: AbortSignal): Promise<GitHubToken>;
   getViewer(token: string, signal?: AbortSignal): Promise<GitHubViewer>;
   getPullRequest(

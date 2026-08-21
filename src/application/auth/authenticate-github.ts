@@ -47,7 +47,7 @@ export async function authenticateGitHub(
   const cached = await deps.credentialStore.get("github", input.account);
   if (cached !== undefined) {
     try {
-      const viewer = await deps.gateway.getViewer(cached.token);
+      const viewer = await deps.gateway.getViewer(cached.token, input.signal);
       if (viewer.login === cached.account) {
         return { account: cached.account, token: cached.token };
       }
@@ -65,7 +65,7 @@ export async function authenticateGitHub(
     throw deviceFlowRequiresInteractiveError();
   }
 
-  const authorization = await deps.gateway.beginDeviceFlow();
+  const authorization = await deps.gateway.beginDeviceFlow(input.signal);
   if (input.onAuthorization !== undefined) {
     await input.onAuthorization(authorization);
   }

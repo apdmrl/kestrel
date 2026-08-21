@@ -53,6 +53,23 @@ Current phase: general-release-review fix pass — in progress
 
 - [ ] **Task 4 / KGR-004 — Complete authentication cancellation.** (RED → GREEN pending)
 
+- [x] **Task 4 / KGR-004 — Complete authentication cancellation.**
+  - RED: added unit tests asserting the cancellation signal reaches cached-token `getViewer`
+    and device-flow `beginDeviceFlow`, that a hanging cached-token validation aborts on signal
+    without deleting/storing credentials, and that the octokit device-flow request wrapper
+    aborts once the begin signal fires. Plus two built-CLI E2E scenarios (hanging `/user`
+    cached-token validation and hanging `/login/device/code` initialization) asserting exit
+    130, a classified cancellation code, and no secret/partial-state mutation. Failed before
+    the signal was threaded through.
+  - GREEN: `npx vitest run src/application/auth src/infrastructure/github/octokit-gateway.test.ts`
+    (20 tests) and the seven `SIGINT` E2E scenarios pass; typecheck/lint/format clean.
+  - Implementation: `authenticateGitHub` passes `input.signal` into cached `getViewer` and
+    `beginDeviceFlow`; the gateway port and `OctokitGateway.beginDeviceFlow` now accept a
+    signal, wrap the octokit request so an abort reaches the real HTTP request (preserving
+    `endpoint`/`defaults` for OAuth base-URL derivation), reject the verification promise and
+    the pending flow on abort, so a hang is cancelled end to end rather than left as a live
+    request.
+
 - [ ] **Task 5 / KGR-005 — Preserve cancellation through Git predicates.** (RED → GREEN pending)
 
 - [ ] **Task 6 / KGR-006 — Define transaction cancellation commit point.** (RED → GREEN pending)
