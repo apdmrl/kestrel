@@ -589,7 +589,11 @@ function extractRecommendationId(stdout: string): string {
 /** Run find and return the stable recommendation id shown to the user. */
 async function findRecommendationId(): Promise<string> {
   const find = await runCli(["find", "--mood", "QUICK_WIN"]);
-  expect(find.status).toBe(0);
+  if (find.status !== 0) {
+    throw new Error(
+      "DIAG find exited " + find.status + " stderr:\n" + find.stderr + "\nstdout:\n" + find.stdout,
+    );
+  }
   return extractRecommendationId(find.stdout);
 }
 
