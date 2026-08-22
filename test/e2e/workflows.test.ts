@@ -3,7 +3,7 @@ import { execFile, spawn } from "node:child_process";
 import { createServer, type Server } from "node:http";
 import { chmod, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { promisify } from "node:util";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -154,13 +154,18 @@ interface CliResult {
   stderr: string;
 }
 
+/** Prepend a directory to PATH using the platform path delimiter. */
+function prependToPath(dir: string): string {
+  return dir + delimiter + (process.env.PATH ?? "");
+}
+
 function cliEnv(extraEnv: Record<string, string> = {}): Record<string, string> {
   return {
     ...process.env,
     KESTREL_HOME: home,
     KESTREL_WORKSPACE: workspace,
     GITHUB_API_URL: serverUrl,
-    PATH: fakeGitDir + ":" + process.env.PATH,
+    PATH: prependToPath(fakeGitDir),
     GIT_CONFIG_NOSYSTEM: "1",
     GIT_CONFIG_GLOBAL: join(home, "empty-gitconfig"),
     GIT_TERMINAL_PROMPT: "0",
@@ -848,7 +853,7 @@ describe("kestrel end-to-end workflow", () => {
 
   it("fails non-interactive authentication immediately without a cached credential", async () => {
     const result = await runCli(["--no-interactive", "find", "--mood", "QUICK_WIN"], {
-      PATH: noCredGitDir + ":" + process.env.PATH,
+      PATH: prependToPath(noCredGitDir),
     });
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("DM_GITHUB_AUTH_REQUIRED");
@@ -928,7 +933,7 @@ describe("kestrel end-to-end workflow", () => {
 
   it("keeps --json stdout machine-readable during interactive device authorization", async () => {
     const result = await runCli(["--json", "find", "--mood", "QUICK_WIN"], {
-      PATH: noCredGitDir + ":" + process.env.PATH,
+      PATH: prependToPath(noCredGitDir),
       GITHUB_CLIENT_ID: "test-client-id",
     });
     expect(result.status).toBe(0);
@@ -953,7 +958,7 @@ describe("kestrel end-to-end workflow", () => {
 
   it("preserves interactive device guidance on stderr in plain mode", async () => {
     const result = await runCli(["find", "--mood", "QUICK_WIN"], {
-      PATH: noCredGitDir + ":" + process.env.PATH,
+      PATH: prependToPath(noCredGitDir),
       GITHUB_CLIENT_ID: "test-client-id",
     });
     expect(result.status).toBe(0);
@@ -1677,7 +1682,7 @@ describe("kestrel end-to-end workflow", () => {
     devicePending = true;
     try {
       const polling = spawnCli(["--json", "find", "--mood", "QUICK_WIN"], {
-        PATH: noCredGitDir + ":" + process.env.PATH,
+        PATH: prependToPath(noCredGitDir),
         GITHUB_CLIENT_ID: "test-client-id",
       });
       await waitFor(async () => devicePollCount >= 2, "device polling started");
@@ -1799,7 +1804,7 @@ describe("kestrel end-to-end workflow", () => {
     devicePollCount = 0;
     try {
       const child = spawnCli(["--json", "find", "--mood", "QUICK_WIN"], {
-        PATH: noCredGitDir + ":" + process.env.PATH,
+        PATH: prependToPath(noCredGitDir),
         GITHUB_CLIENT_ID: "test-client-id",
       });
       await waitFor(async () => devicePollCount >= 1, "device polling started");
@@ -1839,7 +1844,7 @@ describe("kestrel end-to-end workflow", () => {
     searchCount = 0;
     // A successful find stores a cached credential through the fake git helper.
     const seeded = await runCli(["--json", "find", "--mood", "QUICK_WIN"], {
-      PATH: noCredGitDir + ":" + process.env.PATH,
+      PATH: prependToPath(noCredGitDir),
       GITHUB_CLIENT_ID: "test-client-id",
     });
     expect(seeded.status).toBe(0);
@@ -1849,7 +1854,7 @@ describe("kestrel end-to-end workflow", () => {
     userArrived = false;
     releaseUserHold = undefined;
     const child = spawnCli(["--json", "find", "--mood", "QUICK_WIN"], {
-      PATH: noCredGitDir + ":" + process.env.PATH,
+      PATH: prependToPath(noCredGitDir),
       GITHUB_CLIENT_ID: "test-client-id",
     });
     try {
@@ -1874,7 +1879,7 @@ describe("kestrel end-to-end workflow", () => {
     deviceCodeArrived = false;
     releaseDeviceCodeHold = undefined;
     const child = spawnCli(["--json", "find", "--mood", "QUICK_WIN"], {
-      PATH: noCredGitDir + ":" + process.env.PATH,
+      PATH: prependToPath(noCredGitDir),
       GITHUB_CLIENT_ID: "test-client-id",
     });
     try {

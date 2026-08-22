@@ -97,6 +97,34 @@ describe("cross-platform release gate", () => {
     }
   });
 
+  it("composes PATH with the platform delimiter in common E2E helpers", async () => {
+    // On Windows PATH entries are separated by `;`, on POSIX by `:`. A hard-coded
+    // `":"` concatenation silently prevents the fake/no-credential Git shim from
+    // being selected on Windows runners, so the common E2E gate must always use
+    // `node:path`'s platform delimiter (`delim`).
+    const files = (
+      await Promise.all(["test/e2e", "test/package"].map((dir) => listFiles(join(root, dir))))
+    ).flat();
+    const offenders: string[] = [];
+    for (const file of files) {
+      if (file.endsWith(".test.ts") && file.includes("portability")) {
+        continue;
+      }
+      const content = await readFile(file, "utf8");
+      if (/\+ *":" *\+/.test(content)) {
+        offenders.push(`${file}: composes PATH with a hard-coded ":"`);
+      }
+      if (/\+ *";" *\+/.test(content)) {
+        offenders.push(`${file}: composes PATH with a hard-coded ";"`);
+      }
+      if (/[.:]+ *\+ *"?PATH"?/.test(content) && content.includes("process.env.PATH")) {
+        // Any bare `dir + <literal> + process.env.PATH` is a portability hazard.
+        offenders.push(`${file}: concatenates a PATH entry with a literal separator`);
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
   it("keeps the CI matrix running on all three OS families under Node 24", () => {
     const ci = readFileSync(join(root, ".github/workflows/ci.yml"), "utf8");
     expect(ci).toContain("ubuntu-latest");
