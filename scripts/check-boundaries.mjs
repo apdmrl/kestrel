@@ -9,7 +9,7 @@
 // module code, and legitimately import the test runner and temporary tooling.
 
 import { readFileSync, readdirSync, statSync } from "node:fs";
-import { dirname, join, relative, resolve, sep } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const LAYERS = ["domain", "application", "ports", "infrastructure", "cli", "bootstrap"];
@@ -45,6 +45,59 @@ const DOMAIN_BANNED = [
 ];
 
 const TS_EXTENSIONS = new Set([".ts", ".tsx", ".mts", ".cts"]);
+
+/**
+ * Normalize a repository-relative path to a single POSIX-style representation.
+ *
+ * Windows reports native paths with backslash separators (e.g. `cli\main.ts`)
+ * while allowlists, exceptions, and fixtures use forward slashes (e.g.
+ * `cli/main.ts`). Every repo-relative source/import path must be normalized
+ * here before layer classification, allowlist/exception checks, equality and
+ * prefix comparisons, and diagnostics so decisions are identical on every OS.
+ */
+export function toPosix(path) {
+  return path.split("\\").join("/");
+}
+
+/** Classify a repository-relative path (either slash style) into a layer name. */
+export function classifyLayer(rel) {
+  const normalized = toPosix(rel);
+  if (normalized === "" || normalized.startsWith("..") || normalized.includes("../")) {
+    return null;
+  }
+  const first = normalized.split("/")[0];
+  return LAYERS.includes(first) ? first : null;
+}
+
+/**
+ * Decide whether a relative import is a boundary violation, independent of the
+ * filesystem. Both paths are repository-relative and may use either slash
+ * style; they are normalized before any comparison. Returns a violation object
+ * or null.
+ */
+export function evaluateRelativeImport(fromRel, targetRel, specifier) {
+  const from = toPosix(fromRel);
+  const target = toPosix(targetRel);
+  if (ENTRY_POINT_FILES.has(from)) {
+    return null;
+  }
+  const layer = classifyLayer(from);
+  if (layer === null) {
+    return null;
+  }
+  const targetLayer = classifyLayer(target);
+  if (targetLayer === null || targetLayer === layer) {
+    return null;
+  }
+  if (ALLOWED_TARGETS[layer].has(targetLayer)) {
+    return null;
+  }
+  return {
+    file: from,
+    specifier,
+    rule: 'layer "' + layer + '" may not import layer "' + targetLayer + '"',
+  };
+}
 
 function isTestFile(filePath) {
   return /\.(test|spec)\.(ts|tsx|mts|cts|js|mjs)$/.test(filePath);
@@ -94,12 +147,7 @@ export function listSourceFiles(root) {
 
 /** Return the layer name for a file, or null when the file is not inside a layer. */
 export function layerOf(filePath, root) {
-  const rel = relative(root, filePath);
-  if (rel === "" || rel.startsWith("..") || rel.includes(".." + sep)) {
-    return null;
-  }
-  const first = rel.split(sep)[0];
-  return LAYERS.includes(first) ? first : null;
+  return classifyLayer(toPosix(relative(root, filePath)));
 }
 
 /** Resolve a relative import specifier to the target layer, or null. */
@@ -138,14 +186,14 @@ export function scan(root) {
   const absRoot = resolve(root);
   const violations = [];
   for (const file of listSourceFiles(absRoot)) {
-    const layer = layerOf(file, absRoot);
+    const rel = toPosix(relative(absRoot, file));
+    const layer = classifyLayer(rel);
     if (layer === null) {
       continue;
     }
-    if (ENTRY_POINT_FILES.has(relative(absRoot, file))) {
+    if (ENTRY_POINT_FILES.has(rel)) {
       continue;
     }
-    const allowed = ALLOWED_TARGETS[layer];
     let source;
     try {
       source = readFileSync(file, "utf8");
@@ -154,17 +202,15 @@ export function scan(root) {
     }
     for (const specifier of extractSpecifiers(source)) {
       if (specifier.startsWith(".")) {
-        const target = resolveTargetLayer(specifier, file, absRoot);
-        if (target !== null && target !== layer && !allowed.has(target)) {
-          violations.push({
-            file: relative(absRoot, file),
-            specifier,
-            rule: 'layer "' + layer + '" may not import layer "' + target + '"',
-          });
+        const abs = resolve(dirname(file), specifier);
+        const targetRel = toPosix(relative(absRoot, abs));
+        const violation = evaluateRelativeImport(rel, targetRel, specifier);
+        if (violation !== null) {
+          violations.push(violation);
         }
       } else if (layer === "domain" && isDomainBanned(specifier)) {
         violations.push({
-          file: relative(absRoot, file),
+          file: rel,
           specifier,
           rule: 'layer "domain" may not import "' + specifier + '"',
         });
