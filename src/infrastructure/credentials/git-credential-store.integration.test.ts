@@ -53,7 +53,7 @@ describe("GitCredentialStore integration with the real process runner", () => {
       const shim = [
         "#!/usr/bin/env node",
         'const { exit } = require("node:process");',
-        'const args = process.argv.slice(2);',
+        "const args = process.argv.slice(2);",
         'if (args[0] === "credential" && args[1] === "fill") {',
         '  process.stdout.write("username=octocat\\npassword=REAL_TOKEN_123\\n");',
         "  exit(0);",

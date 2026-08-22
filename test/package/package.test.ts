@@ -34,10 +34,7 @@ function runNpm(
   args: string[],
   options: { cwd?: string; encoding?: "utf8"; stdio?: "pipe" | "ignore"; env?: NodeJS.ProcessEnv },
 ): { status: number | null; stdout: string; stderr: string; error?: Error } {
-  const spawnArgs =
-    process.platform === "win32"
-      ? ["/c", "npm", ...args]
-      : args;
+  const spawnArgs = process.platform === "win32" ? ["/c", "npm", ...args] : args;
   const result =
     process.platform === "win32"
       ? spawnSync("cmd.exe", spawnArgs, { ...options, encoding: "utf8" })
@@ -81,10 +78,11 @@ beforeAll(() => {
   tarball = first?.filename ?? "";
   packedFiles = (first?.files ?? []).map((f) => f.path);
   prefix = mkdtempSync(join(tmpdir(), "kestrel-pkg-"));
-  const install = runNpm(
-    ["install", "--prefix", prefix, join(root, tarball), "--ignore-scripts"],
-    { cwd: root, stdio: "ignore", env },
-  );
+  const install = runNpm(["install", "--prefix", prefix, join(root, tarball), "--ignore-scripts"], {
+    cwd: root,
+    stdio: "ignore",
+    env,
+  });
   if (install.status !== 0) {
     throw new Error("npm install of the tarball failed");
   }
