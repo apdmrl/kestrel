@@ -25,6 +25,31 @@ function installedBin(): string {
   );
 }
 
+/**
+ * Run npm as a child process. On Windows `npm` resolves to `npm.cmd`, which
+ * Node's spawn cannot execute directly (ENOENT) and must be launched through
+ * the Windows command interpreter.
+ */
+function runNpm(
+  args: string[],
+  options: { cwd?: string; encoding?: "utf8"; stdio?: "pipe" | "ignore"; env?: NodeJS.ProcessEnv },
+): { status: number | null; stdout: string; stderr: string; error?: Error } {
+  const spawnArgs =
+    process.platform === "win32"
+      ? ["/c", "npm", ...args]
+      : args;
+  const result =
+    process.platform === "win32"
+      ? spawnSync("cmd.exe", spawnArgs, { ...options, encoding: "utf8" })
+      : spawnSync("npm", spawnArgs, { ...options, encoding: "utf8" });
+  return {
+    status: result.status,
+    stdout: String(result.stdout ?? ""),
+    stderr: String(result.stderr ?? ""),
+    ...(result.error !== undefined ? { error: result.error } : {}),
+  };
+}
+
 function runInstalled(
   args: string[],
   spawnEnv: NodeJS.ProcessEnv,
@@ -47,7 +72,7 @@ function runInstalled(
 }
 
 beforeAll(() => {
-  const pack = spawnSync("npm", ["pack", "--json"], { cwd: root, encoding: "utf8", env });
+  const pack = runNpm(["pack", "--json"], { cwd: root, encoding: "utf8", env });
   const parsed = JSON.parse(pack.stdout) as Array<{
     filename: string;
     files: Array<{ path: string }>;
@@ -56,8 +81,7 @@ beforeAll(() => {
   tarball = first?.filename ?? "";
   packedFiles = (first?.files ?? []).map((f) => f.path);
   prefix = mkdtempSync(join(tmpdir(), "kestrel-pkg-"));
-  const install = spawnSync(
-    "npm",
+  const install = runNpm(
     ["install", "--prefix", prefix, join(root, tarball), "--ignore-scripts"],
     { cwd: root, stdio: "ignore", env },
   );
@@ -76,19 +100,24 @@ afterAll(() => {
 });
 
 describe("packaged kestrel", () => {
-  it("runs --version from a clean install", () => {
+  // The first `cmd.exe /c kestrel.cmd` spawn on Windows is a cold start
+  // (shell setup + first node boot) that can exceed Vitest's default 5s
+  // timeout; give the spawned-CLI tests explicit headroom.
+  const CLI_TIMEOUT_MS = 30_000;
+
+  it("runs --version from a clean install", { timeout: CLI_TIMEOUT_MS }, () => {
     const result = runInstalled(["--version"], { ...process.env });
     expect(result.status).toBe(0);
     expect(result.stdout.trim()).toBe("0.1.0");
   });
 
-  it("runs --help from a clean install", () => {
+  it("runs --help from a clean install", { timeout: CLI_TIMEOUT_MS }, () => {
     const result = runInstalled(["--help"], { ...process.env });
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("kestrel");
   });
 
-  it("runs an empty journey from a clean install", () => {
+  it("runs an empty journey from a clean install", { timeout: CLI_TIMEOUT_MS }, () => {
     const result = runInstalled(["--json", "journey"], {
       ...process.env,
       KESTREL_HOME: join(prefix, "home"),
