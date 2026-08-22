@@ -91,7 +91,7 @@ Current phase: general-release-review fix pass — in progress
     re-checked under the lock; abort at intent creation still commits the durable phases).
     Failed before the precommit re-check was added.
   - GREEN: `npx vitest run src/application/transactions src/application/verification
-    src/application/mission/prepare-mission.test.ts ...` (56 tests) and all seven `SIGINT` E2E
+src/application/mission/prepare-mission.test.ts ...` (56 tests) and all seven `SIGINT` E2E
     scenarios pass; typecheck/lint/format clean.
   - Implementation: documented the cancellation state machine and made journal-intent creation
     the explicit point of no return. `commitMissionChangeUnderLock` now re-checks cancellation
@@ -133,7 +133,7 @@ Current phase: general-release-review fix pass — in progress
     a live pid is treated as unknown/live (fail closed, never stale) while a well-formed,
     verified mismatch remains stale. Failed (`false` for malformed) before the fix.
   - GREEN: `npx vitest run src/infrastructure/system/process-liveness.test.ts
-    src/infrastructure/locking/file-mission-lock.test.ts` (37 tests) pass; typecheck/lint/format
+src/infrastructure/locking/file-mission-lock.test.ts` (37 tests) pass; typecheck/lint/format
     clean.
   - Implementation: added `isWellFormedIdentity` (UUID-shaped boot id + decimal start ticks)
     and made `defaultIsProcessAlive` treat a malformed/unreadable owner identity as unknown/live,

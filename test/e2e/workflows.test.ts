@@ -1611,6 +1611,10 @@ describe("kestrel end-to-end workflow", () => {
     // Neither lock is broken: the conflicting sources are never resolved.
     await expect(stat(join(sidecar, ".lock"))).resolves.toBeDefined();
     await expect(stat(join(otherDir, "kestrel", ".lock"))).resolves.toBeDefined();
+    // Remove the synthetic intents so a later bootstrap replay in this shared
+    // home is not polluted by a conflicting intent pointing at the deleted dir.
+    await rm(join(txDir, "tx-conflict-a.json"), { force: true });
+    await rm(join(txDir, "tx-conflict-b.json"), { force: true });
     await rm(otherDir, { recursive: true, force: true });
   }, 60_000);
 
@@ -1629,6 +1633,10 @@ describe("kestrel end-to-end workflow", () => {
     const broke = await runCli(["mission", "break-lock", "--id", missionId]);
     expect(broke.status).toBe(0);
     await expect(stat(join(sidecar, ".lock"))).rejects.toThrow();
+    // Remove the synthetic duplicate intents so they do not replay in later tests.
+    const txDir = join(home, "transactions");
+    await rm(join(txDir, "tx-dup-a.json"), { force: true });
+    await rm(join(txDir, "tx-dup-b.json"), { force: true });
   }, 60_000);
 
   it("keeps both index entries when two child processes update different missions", async () => {
@@ -1966,9 +1974,11 @@ describe("kestrel end-to-end workflow", () => {
     const resumed = await runCli(["mission", "resume", "--id", missionId]);
     expect(resumed.status).toBe(0);
     expect(resumed.stdout).toContain("IN_PROGRESS");
-    // No duplicate preparation-started event from the cancelled attempt.
-    const types = await readJourneyTypes();
-    expect(types.filter((t) => t === "MissionPreparationStarted")).toHaveLength(1);
+    // No duplicate preparation-started event for THIS mission from the
+    // cancelled attempt (the shared journey holds events for every test's
+    // missions, so filter by this mission id).
+    const myEvents = (await readJourneyEvents()).filter((e) => e.missionId === missionId);
+    expect(myEvents.filter((e) => e.type === "MissionPreparationStarted")).toHaveLength(1);
   }, 60_000);
 
   it("cancels a blocked submission verification with SIGINT (exit 130)", async () => {
