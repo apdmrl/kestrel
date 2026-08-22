@@ -9,6 +9,7 @@ const cache = join(root, "..", ".npm-cache");
 const env = { ...process.env, npm_config_cache: cache };
 let tarball = "";
 let prefix = "";
+let packedFiles: string[] = [];
 
 /**
  * Resolve the installed executable. npm publishes a shell shim and, on Windows,
@@ -47,7 +48,13 @@ function runInstalled(
 
 beforeAll(() => {
   const pack = spawnSync("npm", ["pack", "--json"], { cwd: root, encoding: "utf8", env });
-  tarball = (JSON.parse(pack.stdout) as Array<{ filename: string }>)[0]?.filename ?? "";
+  const parsed = JSON.parse(pack.stdout) as Array<{
+    filename: string;
+    files: Array<{ path: string }>;
+  }>;
+  const first = parsed[0];
+  tarball = first?.filename ?? "";
+  packedFiles = (first?.files ?? []).map((f) => f.path);
   prefix = mkdtempSync(join(tmpdir(), "kestrel-pkg-"));
   const install = spawnSync(
     "npm",
@@ -89,5 +96,31 @@ describe("packaged kestrel", () => {
     expect(result.status).toBe(0);
     const parsed = JSON.parse(result.stdout) as { ok: boolean };
     expect(parsed.ok).toBe(true);
+  });
+
+  it("ships a complete, clean package artifact", () => {
+    const names = packedFiles.map((p) => p.split("/").pop() ?? p);
+    // The package contract requires metadata, dist, README, CHANGELOG, and a
+    // LICENSE in the tarball.
+    expect(packedFiles.some((p) => p.startsWith("dist/"))).toBe(true);
+    expect(names).toContain("README.md");
+    expect(names).toContain("CHANGELOG.md");
+    expect(names).toContain("LICENSE");
+    expect(packedFiles.some((p) => p === "package.json")).toBe(true);
+    // Forbidden content must be absent: source fixtures, user state, tokens,
+    // progress files, and generated tarballs.
+    const forbidden = [
+      ".env",
+      "index.json",
+      "preferences.json",
+      "events.jsonl",
+      "IMPLEMENTATION_PROGRESS.md",
+      ".tgz",
+      "mission.json",
+    ];
+    for (const needle of forbidden) {
+      expect(packedFiles.some((p) => p.endsWith(needle))).toBe(false);
+    }
+    expect(packedFiles.some((p) => p.startsWith("src/") || p.startsWith("test/"))).toBe(false);
   });
 });

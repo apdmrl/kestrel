@@ -116,6 +116,16 @@ Current phase: general-release-review fix pass — in progress
 
 - [ ] **Task 8 / KGR-008 — Satisfy package contract.** (RED → GREEN pending)
 
+- [x] **Task 8 / KGR-008 — Satisfy package contract.**
+  - RED: added a package-content test to `test/package/package.test.ts` asserting the tarball
+    ships `dist`, README, CHANGELOG, a LICENSE, and package.json, and excludes source fixtures,
+    user state, tokens, progress files, and generated tarballs. Failed on the missing LICENSE
+    (and earlier the missing packaged `--help`, added in Task 1).
+  - GREEN: `npx vitest run test/package/package.test.ts` (4 tests) passes; lint/format clean.
+  - Implementation: created `LICENSE` (MIT, copyright owner `apdmrl <apdmrl@gmail.com>`, chosen
+    by the user) and added it to `package.json` `files`. The packaged `--version`, `--help`, and
+    empty `--json journey` all run from a clean install outside the source tree.
+
 - [ ] **Task 9 / KGR-009 — Fail closed on malformed process identity.** (RED → GREEN pending)
 
 - [ ] **Task 10 / KGR-010 — Add SIGTERM acceptance coverage.** (RED → GREEN pending)
