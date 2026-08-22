@@ -25,7 +25,14 @@ function run(args: string[]): CliResult {
 }
 
 beforeAll(() => {
-  spawnSync("npm", ["run", "build"], { cwd: root });
+  // On Windows `npm` is `npm.cmd` and requires the command interpreter.
+  const build =
+    process.platform === "win32"
+      ? spawnSync("cmd.exe", ["/c", "npm", "run", "build"], { cwd: root })
+      : spawnSync("npm", ["run", "build"], { cwd: root });
+  if (build.status !== 0) {
+    throw new Error("npm run build failed:\n" + (build.stderr?.toString() ?? ""));
+  }
 });
 
 afterAll(async () => {

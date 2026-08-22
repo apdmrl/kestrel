@@ -9,6 +9,13 @@ const execFileAsync = promisify(execFile);
 const root = process.cwd();
 const distMain = join(root, "dist", "cli", "main.js");
 
+/** Run npm. On Windows `npm` is `npm.cmd` and needs the command interpreter. */
+async function runNpm(args: string[]): Promise<void> {
+  await (process.platform === "win32"
+    ? execFileAsync("cmd.exe", ["/c", "npm", ...args], { cwd: root, timeout: 120_000 })
+    : execFileAsync("npm", args, { cwd: root, timeout: 120_000 }));
+}
+
 function runCli(
   args: string[],
   env: Record<string, string> = {},
@@ -36,7 +43,7 @@ function runCli(
 
 describe("built CLI", () => {
   beforeAll(async () => {
-    await execFileAsync("npm", ["run", "build"], { cwd: root, timeout: 120_000 });
+    await runNpm(["run", "build"]);
   }, 120_000);
 
   it("exposes the complete v0.1 command hierarchy", async () => {

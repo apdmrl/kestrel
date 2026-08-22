@@ -683,7 +683,10 @@ async function findRepo(): Promise<string> {
 }
 
 beforeAll(async () => {
-  await execFileAsync("npm", ["run", "build"], { cwd: root, encoding: "utf8" });
+  // On Windows `npm` is `npm.cmd` and requires the command interpreter.
+  await (process.platform === "win32"
+    ? execFileAsync("cmd.exe", ["/c", "npm", "run", "build"], { cwd: root, encoding: "utf8" })
+    : execFileAsync("npm", ["run", "build"], { cwd: root, encoding: "utf8" }));
 
   home = await mkdtemp(join(tmpdir(), "kestrel-e2e-home-"));
   workspace = await mkdtemp(join(tmpdir(), "kestrel-e2e-ws-"));
