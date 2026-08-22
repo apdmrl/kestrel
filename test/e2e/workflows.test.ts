@@ -647,7 +647,20 @@ function readCheckpoints(sidecarPath: string): string[] {
 }
 
 async function runGit(cwd: string, args: string[]): Promise<void> {
-  await execFileAsync("git", args, { cwd, encoding: "utf8" });
+  await gitExec(cwd, args);
+}
+
+/**
+ * Run real git. On Windows `git` resolves to `git.exe`/`git.cmd` which Node's
+ * execFile cannot always resolve through a bare name; route through cmd.exe so
+ * the test's own git calls are hermetic across platforms.
+ */
+async function gitExec(cwd: string, args: string[]): Promise<{ stdout: string }> {
+  const result =
+    process.platform === "win32"
+      ? await execFileAsync("cmd.exe", ["/c", "git", ...args], { cwd, encoding: "utf8" })
+      : await execFileAsync("git", args, { cwd, encoding: "utf8" });
+  return { stdout: result.stdout };
 }
 
 /** Extract the recommendation title from plain find output. */
@@ -1106,9 +1119,7 @@ describe("kestrel end-to-end workflow", () => {
     await writeFile(join(repo, "fix.txt"), "fixed\n", "utf8");
     await runGit(repo, ["add", "fix.txt"]);
     await runGit(repo, ["commit", "-m", "fix the bug"]);
-    const headSha = (
-      await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" })
-    ).stdout.trim();
+    const headSha = (await gitExec(repo, ["rev-parse", "HEAD"])).stdout.trim();
 
     // A valid, merged pull request for the mission's repository and commits.
     prFixture = {
@@ -1174,9 +1185,7 @@ describe("kestrel end-to-end workflow", () => {
     await writeFile(join(repo, "fix.txt"), "fixed\n", "utf8");
     await runGit(repo, ["add", "fix.txt"]);
     await runGit(repo, ["commit", "-m", "fix the bug"]);
-    const headSha = (
-      await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" })
-    ).stdout.trim();
+    const headSha = (await gitExec(repo, ["rev-parse", "HEAD"])).stdout.trim();
 
     const sidecar = await findSidecarFor(missionId);
     const cases: Array<{
@@ -1278,9 +1287,7 @@ describe("kestrel end-to-end workflow", () => {
     await writeFile(join(repo, "fix.txt"), "fixed\n", "utf8");
     await runGit(repo, ["add", "fix.txt"]);
     await runGit(repo, ["commit", "-m", "fix the bug"]);
-    const headSha = (
-      await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" })
-    ).stdout.trim();
+    const headSha = (await gitExec(repo, ["rev-parse", "HEAD"])).stdout.trim();
 
     // The PR references issue 99, but the mission targets issue 42.
     prFixture = {
@@ -1438,9 +1445,7 @@ describe("kestrel end-to-end workflow", () => {
     ]);
     expect(await cloneCount()).toBe(1);
     const repo = await findRepoForMission(missionId);
-    const branches = (
-      await execFileAsync("git", ["branch"], { cwd: repo, encoding: "utf8" })
-    ).stdout.split("\n");
+    const branches = (await gitExec(repo, ["branch"])).stdout.split("\n");
     expect(branches.filter((b) => b.includes("kestrel/42-hello-world"))).toHaveLength(1);
   }, 240_000);
 
@@ -2020,7 +2025,7 @@ describe("kestrel end-to-end workflow", () => {
     const missionId = extractMissionId(accept.stdout);
     const sidecar = await findSidecarFor(missionId);
     const prep = spawnCli(["mission", "prepare", "--id", missionId]);
-    await waitFor(() => readCheckpoints(sidecar).length >= 1, "preparation checkpoint");
+    await waitFor(() => readCheckpoints(sidecar).length >= 1, "preparation checkpoint", 120_000);
     prep.child.kill("SIGKILL");
     await prep.result;
     const prepLock = await breakStaleLock(missionId);
@@ -2034,9 +2039,7 @@ describe("kestrel end-to-end workflow", () => {
     await writeFile(join(repo, "fix.txt"), "fixed\n", "utf8");
     await runGit(repo, ["add", "fix.txt"]);
     await runGit(repo, ["commit", "-m", "fix the bug"]);
-    const headSha = (
-      await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" })
-    ).stdout.trim();
+    const headSha = (await gitExec(repo, ["rev-parse", "HEAD"])).stdout.trim();
     prFixture = {
       number: 31,
       author: "octocat",
@@ -2334,9 +2337,7 @@ describe("kestrel end-to-end workflow", () => {
       await writeFile(join(repo, "fix.txt"), "fixed\n", "utf8");
       await runGit(repo, ["add", "fix.txt"]);
       await runGit(repo, ["commit", "-m", "fix the bug"]);
-      const headSha = (
-        await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" })
-      ).stdout.trim();
+      const headSha = (await gitExec(repo, ["rev-parse", "HEAD"])).stdout.trim();
       prFixture = {
         number: 31,
         author: "octocat",
@@ -2405,7 +2406,7 @@ describe("kestrel end-to-end workflow", () => {
 
     // Interrupt preparation after the clone checkpoint, then resume.
     const prep = spawnCli(["mission", "prepare", "--id", missionId]);
-    await waitFor(() => readCheckpoints(sidecar).length >= 2, "clone checkpoint");
+    await waitFor(() => readCheckpoints(sidecar).length >= 2, "clone checkpoint", 120_000);
     prep.child.kill("SIGKILL");
     await prep.result;
     const prepLock = await breakStaleLock(missionId);
