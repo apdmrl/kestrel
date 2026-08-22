@@ -1385,6 +1385,10 @@ describe("kestrel end-to-end workflow", () => {
           await waitForFile(gate.started);
         } else {
           spawned = spawnCli(["mission", "prepare", "--id", missionId]);
+          // Each pure-local checkpoint (4-7) is crashed as soon as it is
+          // observed. On Windows every cycle re-spawns a full CLI and runs real
+          // git through the shim, which is slow; give the poll enough headroom
+          // so a genuinely progressing child is never misjudged as stuck.
           await waitFor(
             () => {
               try {
@@ -1397,6 +1401,7 @@ describe("kestrel end-to-end workflow", () => {
               }
             },
             "checkpoint " + checkpointCount + " recorded",
+            120_000,
           );
         }
 
@@ -1437,7 +1442,7 @@ describe("kestrel end-to-end workflow", () => {
       await execFileAsync("git", ["branch"], { cwd: repo, encoding: "utf8" })
     ).stdout.split("\n");
     expect(branches.filter((b) => b.includes("kestrel/42-hello-world"))).toHaveLength(1);
-  }, 120_000);
+  }, 240_000);
 
   it("recovers pending transaction intents at every phase without duplicates", async () => {
     // A real crash leaves the transaction intent in one of the intermediate
@@ -2056,7 +2061,7 @@ describe("kestrel end-to-end workflow", () => {
     prFixture = undefined;
     // No partial submission mutation: the mission stays IN_PROGRESS/NONE.
     expect((await readPersistedMission(sidecar)).mission.submissionVerification).toBe("NONE");
-  }, 60_000);
+  }, 240_000);
 
   // POSIX-signal delivery semantics: `child.kill("SIGINT")`/`SIGTERM` deliver a
   // catchable signal that runs the CLI's graceful handler and exits 130. On
@@ -2440,7 +2445,7 @@ describe("kestrel end-to-end workflow", () => {
     expect(completed.stdout).toContain("COMPLETED");
     expect(await readFile(join(repo, "user-notes.md"), "utf8")).toBe("my notes\n");
     expect(await readFile(join(repo, "README.md"), "utf8")).toBe("modified by user\n");
-  }, 60_000);
+  }, 240_000);
 
   it("classifies corrupt middle and tail journey records and recovers stably", async () => {
     searchCount = 0;
