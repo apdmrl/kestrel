@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { verifyTrustedLockTarget } from "./trusted-lock-target.js";
+import { verifyTrustedLockTarget, type PathCanonicalizer } from "./trusted-lock-target.js";
 import type { MissionId } from "../../domain/shared/identifiers.js";
 
 const MISSION_ID = "m-1" as MissionId;
@@ -93,5 +93,68 @@ describe("verifyTrustedLockTarget", () => {
     });
     // The derived lock path is exactly the intended `.lock` under the sidecar.
     expect(result.lockPath).toBe(join(sidecar, ".lock"));
+  });
+
+  describe("canonical root-alias agreement (macOS /var vs /private/var)", () => {
+    // Deterministic model of macOS temporary paths: `/var/...` is a symlink
+    // alias of `/private/var/...`. Both lexical forms are the SAME canonical
+    // root and must agree. No macOS filesystem is required.
+    const varToPrivateVar: PathCanonicalizer = async (p) => p.replace(/^\/var\//, "/private/var/");
+
+    it("accepts two lexical aliases that resolve to one canonical root", async () => {
+      const result = await verifyTrustedLockTarget({
+        workspaceRoot: "/var/kestrel-ws",
+        missionId: MISSION_ID,
+        sidecarPath: "/private/var/kestrel-ws/mission-abc/kestrel",
+        canonicalize: varToPrivateVar,
+      });
+      expect(result.sidecarPath).toBe("/private/var/kestrel-ws/mission-abc/kestrel");
+      expect(result.lockPath).toBe("/private/var/kestrel-ws/mission-abc/kestrel/.lock");
+    });
+
+    it("rejects a genuinely different canonical root despite a shared alias", async () => {
+      await expect(
+        verifyTrustedLockTarget({
+          workspaceRoot: "/var/ws-a",
+          missionId: MISSION_ID,
+          sidecarPath: "/other/ws-b/mission/kestrel",
+          canonicalize: varToPrivateVar,
+        }),
+      ).rejects.toMatchObject({ code: "DM_UNSAFE_PATH" });
+    });
+
+    it("accepts a sidecar reached through a real symlinked workspace alias of one root", async () => {
+      const real = await tempDir();
+      const alias = await tempDir();
+      await rm(alias, { recursive: true, force: true });
+      await symlink(real, alias); // alias -> real, like /var -> /private/var
+      const sidecar = join(real, "mission-abc", "kestrel");
+      await mkdir(sidecar, { recursive: true });
+      // workspaceRoot is the alias (raw) form; sidecar is the canonical form.
+      const result = await verifyTrustedLockTarget({
+        workspaceRoot: alias,
+        missionId: MISSION_ID,
+        sidecarPath: sidecar,
+      });
+      expect(result.sidecarPath).toBe(sidecar);
+      expect(result.lockPath).toBe(join(sidecar, ".lock"));
+    });
+
+    it("still rejects a raw symlink component even under one canonical root", async () => {
+      const real = await tempDir();
+      const root = await tempDir();
+      const sidecarReal = join(real, "kestrel");
+      await mkdir(sidecarReal, { recursive: true });
+      const link = join(root, "mission-link");
+      await symlink(real, link);
+      await expect(
+        verifyTrustedLockTarget({
+          workspaceRoot: root,
+          missionId: MISSION_ID,
+          sidecarPath: join(link, "kestrel"),
+          canonicalize: varToPrivateVar,
+        }),
+      ).rejects.toMatchObject({ code: "DM_UNSAFE_PATH" });
+    });
   });
 });

@@ -71,45 +71,61 @@ export interface TrustedLockTarget {
   readonly lockPath: string;
 }
 
+/** Path canonicalizer injected by tests; production uses the real `realpath`. */
+export type PathCanonicalizer = (path: string) => Promise<string>;
+
+export interface VerifyTrustedLockTargetOptions {
+  readonly canonicalize?: PathCanonicalizer;
+}
+
 /**
  * Derive and verify a trusted mission lock target for destructive stale-lock
  * recovery. A raw `sidecarPath` from index/journal JSON is never trusted:
  *
- * - the resolved sidecar must be lexically contained in the managed workspace
- *   root (using `resolve`/`relative`, never a raw `startsWith`);
- * - every existing component on the path is walked with `lstat` and any
+ * - canonical containment is the single source of truth for root agreement:
+ *   BOTH the workspace root and the sidecar are canonicalized (realpath) before
+ *   comparison, so two lexical aliases of one directory (e.g. `/var/...` and
+ *   `/private/var/...` on macOS) agree, while a genuine escape is rejected.
+ *   A raw `resolve()` output is never compared against a `realpath()` output;
+ * - when the raw root and raw target are lexically nested, every existing
+ *   component on the target path is additionally walked with `lstat` and any
  *   symlink / reparse component is rejected, so a link is never followed to
  *   delete a target elsewhere;
- * - canonical containment is re-checked with `realpath` so a path that is
- *   lexically inside but canonically outside (via a symlink) is rejected.
+ * - canonical containment still rejects a path that is lexically inside but
+ *   canonically outside (via a symlink).
  *
- * The returned lock path is always `<sidecar>/.lock` beneath the trusted sidecar.
- * This fails closed: any uncertainty resolves to DM_UNSAFE_PATH and the lock is
- * never touched.
+ * The returned lock path is always `<sidecar>/.lock` beneath the canonical
+ * sidecar. This fails closed: any uncertainty resolves to DM_UNSAFE_PATH and
+ * the lock is never touched.
  */
-export async function verifyTrustedLockTarget(opts: {
-  workspaceRoot: string;
-  missionId: MissionId;
-  sidecarPath: string;
-}): Promise<TrustedLockTarget> {
-  const root = resolve(opts.workspaceRoot);
-  const target = resolve(opts.sidecarPath);
-  if (!isWithin(root, target)) {
-    throw unsafeRecoveryPathError(target, "sidecar escapes the managed workspace root");
+export async function verifyTrustedLockTarget(
+  opts: {
+    workspaceRoot: string;
+    missionId: MissionId;
+    sidecarPath: string;
+  } & VerifyTrustedLockTargetOptions,
+): Promise<TrustedLockTarget> {
+  const canonicalize = opts.canonicalize ?? realpathOrResolve;
+  const rootRaw = resolve(opts.workspaceRoot);
+  const targetRaw = resolve(opts.sidecarPath);
+
+  // Raw symlink/reparse rejection applies only when the raw forms are lexically
+  // nested; when they are distinct aliases the canonical containment below is
+  // authoritative.
+  if (isWithin(rootRaw, targetRaw)) {
+    await assertNoSymlinkComponents(rootRaw, targetRaw);
   }
 
-  await assertNoSymlinkComponents(root, target);
-
-  const rootReal = await realpathOrResolve(root);
-  const targetReal = await realpathOrResolve(target);
-  if (!isWithin(rootReal, targetReal)) {
-    throw unsafeRecoveryPathError(target, "sidecar resolves outside the managed workspace root");
+  const rootCanon = await canonicalize(rootRaw);
+  const targetCanon = await canonicalize(targetRaw);
+  if (!isWithin(rootCanon, targetCanon)) {
+    throw unsafeRecoveryPathError(targetRaw, "sidecar resolves outside the managed workspace root");
   }
 
-  const lockPath = join(target, ".lock");
-  if (!isWithin(target, lockPath)) {
+  const lockPath = join(targetCanon, ".lock");
+  if (!isWithin(targetCanon, lockPath)) {
     throw unsafeRecoveryPathError(lockPath, "lock path is not beneath the trusted sidecar");
   }
 
-  return { sidecarPath: target, lockPath };
+  return { sidecarPath: targetCanon, lockPath };
 }
