@@ -1,4 +1,7 @@
 import { execa } from "execa";
+import { existsSync } from "node:fs";
+import { platform } from "node:os";
+import { isAbsolute, join } from "node:path";
 import { createKestrelError } from "../../application/errors/kestrel-error.js";
 import type {
   ProcessResult,
@@ -13,6 +16,38 @@ function bound(text: string): string {
     return text;
   }
   return text.slice(0, MAX_OUTPUT_LENGTH) + "\n...[output truncated]";
+}
+
+/**
+ * Whether an executable name resolves to a file on PATH (or an absolute path).
+ * A missing executable manifests as an ENOENT spawn error on POSIX but as a
+ * plain exit-code-1 result on Windows, so existence is checked explicitly to
+ * classify it as NOT_FOUND consistently across platforms.
+ */
+export function executableExists(executable: string): boolean {
+  const win = platform() === "win32";
+  if (isAbsolute(executable) || executable.includes("/") || (win && executable.includes("\\"))) {
+    return existsSync(executable);
+  }
+  const pathSep = win ? ";" : ":";
+  const pathExts = win
+    ? (process.env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM").split(";").filter((e) => e.length > 0)
+    : [""];
+  for (const dir of (process.env.PATH ?? "").split(pathSep)) {
+    if (dir.length === 0) {
+      continue;
+    }
+    const base = join(dir, executable);
+    for (const ext of pathExts) {
+      if (existsSync(base + ext)) {
+        return true;
+      }
+    }
+    if (!win && existsSync(base)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function notFoundError() {
@@ -66,6 +101,9 @@ function failedError(cause: unknown) {
 
 export class ExecaProcessRunner implements ProcessRunner {
   async run(options: RunProcessOptions): Promise<ProcessResult> {
+    if (!executableExists(options.executable)) {
+      throw notFoundError();
+    }
     let result;
     try {
       result = await execa(options.executable, [...options.args], {

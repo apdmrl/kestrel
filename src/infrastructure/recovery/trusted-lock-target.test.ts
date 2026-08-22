@@ -102,6 +102,11 @@ describe("verifyTrustedLockTarget", () => {
     const varToPrivateVar: PathCanonicalizer = async (p) => p.replace(/^\/var\//, "/private/var/");
 
     it("accepts two lexical aliases that resolve to one canonical root", async () => {
+      // The alias mapping below is a POSIX path model (/var vs /private/var);
+      // the real-symlink test covers the same property cross-platform.
+      if (process.platform === "win32") {
+        return;
+      }
       const result = await verifyTrustedLockTarget({
         workspaceRoot: "/var/kestrel-ws",
         missionId: MISSION_ID,
@@ -113,6 +118,9 @@ describe("verifyTrustedLockTarget", () => {
     });
 
     it("rejects a genuinely different canonical root despite a shared alias", async () => {
+      if (process.platform === "win32") {
+        return;
+      }
       await expect(
         verifyTrustedLockTarget({
           workspaceRoot: "/var/ws-a",
