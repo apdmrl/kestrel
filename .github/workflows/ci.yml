@@ -7,6 +7,9 @@ on:
 jobs:
   test:
     runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
     strategy:
       fail-fast: false
       matrix:
@@ -18,5 +21,48 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
-      - run: npm run check
-      - run: npm run build
+      - name: Capture environment versions
+        run: |
+          echo "node: $(node --version)" > env-versions.txt
+          echo "npm: $(npm --version)" >> env-versions.txt
+          echo "platform: ${{ runner.os }}" >> env-versions.txt
+          (uname -a 2>/dev/null || echo "uname unavailable") >> env-versions.txt
+      - name: Boundary check
+        run: npm run boundaries
+      - name: Lint
+        run: npm run lint
+      - name: Format check
+        run: npm run format:check
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Tests (JUnit + verbose)
+        run: |
+          set -o pipefail
+          npm test -- --reporter=verbose --reporter=junit --outputFile=junit.xml 2>&1 | tee test-output.log
+      - name: Extract failed test names
+        if: always()
+        run: |
+          node -e '
+            const fs = require("fs");
+            const xml = fs.existsSync("junit.xml") ? fs.readFileSync("junit.xml", "utf8") : "";
+            const re = /<testcase classname="([^"]+)" name="([^"]+)"[^>]*>\s*<failure/g;
+            const out = [];
+            let m;
+            while ((m = re.exec(xml))) out.push(m[1] + " :: " + m[2]);
+            fs.writeFileSync("failed-tests.txt", out.join("\n") + (out.length ? "" : ""));
+            console.log(out.length + " failing test case(s) recorded.");
+          '
+      - name: Upload test artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ matrix.os }}-${{ github.run_attempt }}
+          path: |
+            junit.xml
+            test-output.log
+            failed-tests.txt
+            env-versions.txt
+            e2e-cli-failures.log
+          if-no-files-found: ignore
+      - name: Build
+        run: npm run build

@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { execFile, spawn } from "node:child_process";
 import { createServer, type Server } from "node:http";
 import {
+  appendFile,
   chmod,
   mkdir,
   mkdtemp,
@@ -183,8 +184,40 @@ function cliEnv(extraEnv: Record<string, string> = {}): Record<string, string> {
     KESTREL_REAL_GIT: realGitPath,
     KESTREL_FIXTURE: fixture,
     KESTREL_REMOTE_URL: remoteUrl,
+    KESTREL_RECOVERY_DIAGNOSTICS: "1",
     ...extraEnv,
   } as Record<string, string>;
+}
+
+const diagnosticLog = join(root, "e2e-cli-failures.log");
+
+/** Redact secrets from a diagnostic string. */
+function sanitize(text: string): string {
+  return text
+    .replace(/FAKE_TOKEN_[A-Z0-9]+/g, "REDACTED")
+    .replace(/(password|token|access_token|secret)\s*[=:]\s*\S+/gi, "$1=REDACTED")
+    .replace(/Bearer\s+\S+/gi, "Bearer REDACTED");
+}
+
+/** Best-effort capture of every non-zero CLI result's sanitized stderr. */
+async function recordCliFailure(
+  args: string[],
+  result: Pick<CliResult, "status" | "stdout" | "stderr">,
+): Promise<void> {
+  if (result.status === 0) {
+    return;
+  }
+  const entry =
+    "command: node " +
+    args.join(" ") +
+    "\nstatus: " +
+    String(result.status) +
+    "\nstdout:\n" +
+    sanitize(result.stdout) +
+    "\nstderr:\n" +
+    sanitize(result.stderr) +
+    "\n=====\n";
+  await appendFile(diagnosticLog, entry, "utf8").catch(() => undefined);
 }
 
 function runCli(args: string[], extraEnv: Record<string, string> = {}): Promise<CliResult> {
@@ -193,14 +226,19 @@ function runCli(args: string[], extraEnv: Record<string, string> = {}): Promise<
     encoding: "utf8",
     timeout: 30_000,
     env: cliEnv(extraEnv),
-  }).then(
-    ({ stdout, stderr }) => ({ status: 0, stdout: String(stdout), stderr: String(stderr) }),
-    (error) => ({
-      status: (error as { code?: unknown }).code as number | null,
-      stdout: String((error as { stdout?: unknown }).stdout ?? ""),
-      stderr: String((error as { stderr?: unknown }).stderr ?? ""),
-    }),
-  );
+  })
+    .then(
+      ({ stdout, stderr }) => ({ status: 0, stdout: String(stdout), stderr: String(stderr) }),
+      (error) => ({
+        status: (error as { code?: unknown }).code as number | null,
+        stdout: String((error as { stdout?: unknown }).stdout ?? ""),
+        stderr: String((error as { stderr?: unknown }).stderr ?? ""),
+      }),
+    )
+    .then((result) => {
+      void recordCliFailure(args, result);
+      return result;
+    });
 }
 
 /** Spawn the built CLI as a child process so the test can terminate it mid-flight. */

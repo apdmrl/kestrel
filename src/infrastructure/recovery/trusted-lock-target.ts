@@ -119,6 +119,22 @@ export async function verifyTrustedLockTarget(
   const rootCanon = await canonicalize(rootRaw);
   const targetCanon = await canonicalize(targetRaw);
   if (!isWithin(rootCanon, targetCanon)) {
+    if (process.env.KESTREL_RECOVERY_DIAGNOSTICS === "1") {
+      // Non-secret, path-only diagnostics for cross-platform containment bugs.
+      process.stderr.write(
+        "[kestrel-recovery-diagnostic] missionId=" +
+          String(opts.missionId) +
+          " rootRaw=" +
+          rootRaw +
+          " targetRaw=" +
+          targetRaw +
+          " rootCanon=" +
+          rootCanon +
+          " targetCanon=" +
+          targetCanon +
+          "\n",
+      );
+    }
     throw unsafeRecoveryPathError(targetRaw, "sidecar resolves outside the managed workspace root");
   }
 
