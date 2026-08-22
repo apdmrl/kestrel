@@ -35,6 +35,7 @@ export interface RecordAgentHandoffInput {
   readonly lockPath: string;
   readonly expectedStateVersion: number;
   readonly hypothesis?: string;
+  readonly signal?: AbortSignal;
 }
 
 function sha256Hex(text: string): string {
@@ -110,6 +111,7 @@ export async function recordAgentHandoff(
       targetMission: input.mission,
       event: event.value,
       handoff: handoff.value,
+      ...(input.signal !== undefined ? { signal: input.signal } : {}),
     },
   );
   return handoff.value;

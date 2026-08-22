@@ -31,6 +31,7 @@ export interface CompleteMissionInput {
   readonly sidecarPath: string;
   readonly lockPath: string;
   readonly expectedStateVersion: number;
+  readonly signal?: AbortSignal;
 }
 
 function evidenceBlockedError(reasons: readonly string[]) {
@@ -136,6 +137,7 @@ export async function completeMission(
       expectedStateVersion: input.expectedStateVersion,
       targetMission: completed.value,
       event: event.value,
+      ...(input.signal !== undefined ? { signal: input.signal } : {}),
     },
   );
 

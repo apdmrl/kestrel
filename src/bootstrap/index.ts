@@ -504,6 +504,7 @@ export async function bootstrap(
           recommendation,
           mode: preferences.explicit.defaultMode,
           workspaceRoot,
+          ...(options.signal !== undefined ? { signal: options.signal } : {}),
         },
       );
       return missionView(mission);
@@ -566,7 +567,7 @@ export async function bootstrap(
           missionStore,
           journeyStore,
           indexStore,
-          git: gitFactory(repositoryPath),
+          git: gitFactory(repositoryPath, options.signal),
           idGenerator,
           clock,
         },
@@ -575,6 +576,7 @@ export async function bootstrap(
           sidecarPath: resolved.sidecarPath,
           lockPath: resolved.lockPath,
           expectedStateVersion: resolved.version,
+          ...(options.signal !== undefined ? { signal: options.signal } : {}),
         },
       );
       return missionView(completed);
@@ -592,6 +594,7 @@ export async function bootstrap(
           lockPath: resolved.lockPath,
           expectedStateVersion: resolved.version,
           reason,
+          ...(options.signal !== undefined ? { signal: options.signal } : {}),
         },
       );
       return missionView(abandoned);
@@ -616,6 +619,7 @@ export async function bootstrap(
           lockPath: resolved.lockPath,
           expectedStateVersion: resolved.version,
           ...(hypothesis !== undefined ? { hypothesis } : {}),
+          ...(options.signal !== undefined ? { signal: options.signal } : {}),
         },
       );
       return {

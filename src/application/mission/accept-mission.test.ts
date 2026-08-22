@@ -232,4 +232,78 @@ describe("acceptMission", () => {
       }),
     ).rejects.toThrow();
   });
+
+  describe("transaction commit point", () => {
+    it("rejects cancellation before the commit point without creating an intent/state/event", async () => {
+      const d = deps();
+      const controller = new AbortController();
+      controller.abort();
+      await expect(
+        acceptMission(d, {
+          recommendation: makeRecommendation(),
+          mode: "GUIDED",
+          workspaceRoot: "/tmp/ws",
+          signal: controller.signal,
+        }),
+      ).rejects.toMatchObject({ code: "DM_PROCESS_CANCELLED" });
+      expect(d.journal.intents.size).toBe(0);
+      expect(d.missionStore.saved).toHaveLength(0);
+      expect(d.journeyStore.events).toHaveLength(0);
+    });
+
+    it("rejects cancellation while waiting for the lock without creating an intent/state/event", async () => {
+      const d = deps();
+      const controller = new AbortController();
+      const abortingLock: MissionLock = {
+        async withMissionLock<T>(
+          _p: string,
+          _m: MissionId,
+          _o: string,
+          action: () => Promise<T>,
+        ): Promise<T> {
+          controller.abort();
+          return action();
+        },
+        async breakStaleLock(_p: string): Promise<void> {},
+      };
+      await expect(
+        acceptMission(
+          { ...d, lock: abortingLock },
+          {
+            recommendation: makeRecommendation(),
+            mode: "GUIDED",
+            workspaceRoot: "/tmp/ws",
+            signal: controller.signal,
+          },
+        ),
+      ).rejects.toMatchObject({ code: "DM_PROCESS_CANCELLED" });
+      expect(d.journal.intents.size).toBe(0);
+      expect(d.missionStore.saved).toHaveLength(0);
+      expect(d.journeyStore.events).toHaveLength(0);
+    });
+
+    it("commits once the point of no return is crossed even if cancelled", async () => {
+      const d = deps();
+      const controller = new AbortController();
+      const journal = d.journal as FakeJournal;
+      const originalCreate = journal.create.bind(journal);
+      journal.create = async (intent) => {
+        await originalCreate(intent);
+        controller.abort();
+      };
+      const mission = await acceptMission(
+        { ...d, journal },
+        {
+          recommendation: makeRecommendation(),
+          mode: "GUIDED",
+          workspaceRoot: "/tmp/ws",
+          signal: controller.signal,
+        },
+      );
+      expect(mission.status).toBe("ACCEPTED");
+      expect(d.missionStore.saved).toHaveLength(1);
+      expect(d.journeyStore.events).toHaveLength(1);
+      expect(journal.intents.size).toBe(0);
+    });
+  });
 });

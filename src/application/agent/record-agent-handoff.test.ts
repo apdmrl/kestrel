@@ -72,10 +72,12 @@ function acceptedMission(): Mission {
 }
 
 class FakeMissionStore implements MissionStore {
+  saveCount = 0;
   async get(): Promise<StoredMission | undefined> {
     return undefined;
   }
   async save(_p: string, mission: Mission, v: number): Promise<StoredMission> {
+    this.saveCount += 1;
     return { mission, version: v + 1 };
   }
 }
@@ -92,7 +94,10 @@ class FakeJourneyStore implements JourneyStore {
   }
 }
 class FakeJournal implements TransactionJournal {
-  async create(): Promise<void> {}
+  intents = new Map<string, boolean>();
+  async create(_intent?: unknown): Promise<void> {
+    this.intents.set("t", true);
+  }
   async advancePhase(): Promise<void> {}
   async get() {
     return undefined;
@@ -100,7 +105,9 @@ class FakeJournal implements TransactionJournal {
   async listPending() {
     return [];
   }
-  async remove(): Promise<void> {}
+  async remove(): Promise<void> {
+    this.intents.clear();
+  }
 }
 class NoopLock implements MissionLock {
   async withMissionLock<T>(
@@ -177,5 +184,91 @@ describe("recordAgentHandoff", () => {
     });
     expect(first.handoffId).not.toBe(second.handoffId);
     expect(first.renderedPromptHash).not.toBe(second.renderedPromptHash);
+  });
+
+  describe("transaction commit point", () => {
+    function abortingLock(controller: AbortController): MissionLock {
+      return {
+        async withMissionLock<T>(
+          _p: string,
+          _m: MissionId,
+          _o: string,
+          action: () => Promise<T>,
+        ): Promise<T> {
+          controller.abort();
+          return action();
+        },
+        async breakStaleLock(_p: string): Promise<void> {},
+      };
+    }
+
+    it("rejects an already-aborted handoff before creating an intent/state/event", async () => {
+      const saved: AgentHandoff[] = [];
+      const d = deps(saved);
+      const controller = new AbortController();
+      controller.abort();
+      await expect(
+        recordAgentHandoff(d, {
+          mission: acceptedMission(),
+          sidecarPath: "/tmp/ws/m1/kestrel",
+          lockPath: "/tmp/ws/m1/kestrel/.lock",
+          expectedStateVersion: 0,
+          signal: controller.signal,
+        }),
+      ).rejects.toMatchObject({ code: "DM_PROCESS_CANCELLED" });
+      expect(d.journal.intents.size).toBe(0);
+      expect(d.missionStore.saveCount).toBe(0);
+      expect(d.journeyStore.events).toHaveLength(0);
+      expect(saved).toHaveLength(0);
+    });
+
+    it("rejects a handoff cancelled while waiting for the lock without mutation", async () => {
+      const saved: AgentHandoff[] = [];
+      const d = deps(saved);
+      const controller = new AbortController();
+      await expect(
+        recordAgentHandoff(
+          { ...d, lock: abortingLock(controller) },
+          {
+            mission: acceptedMission(),
+            sidecarPath: "/tmp/ws/m1/kestrel",
+            lockPath: "/tmp/ws/m1/kestrel/.lock",
+            expectedStateVersion: 0,
+            signal: controller.signal,
+          },
+        ),
+      ).rejects.toMatchObject({ code: "DM_PROCESS_CANCELLED" });
+      expect(d.journal.intents.size).toBe(0);
+      expect(d.missionStore.saveCount).toBe(0);
+      expect(d.journeyStore.events).toHaveLength(0);
+      expect(saved).toHaveLength(0);
+    });
+
+    it("commits a handoff once the point of no return is crossed even if cancelled", async () => {
+      const saved: AgentHandoff[] = [];
+      const d = deps(saved);
+      const controller = new AbortController();
+      const journal = d.journal as FakeJournal;
+      const originalCreate = journal.create.bind(journal);
+      journal.create = async (intent) => {
+        await originalCreate(intent);
+        controller.abort();
+      };
+      const handoff = await recordAgentHandoff(
+        { ...d, journal },
+        {
+          mission: acceptedMission(),
+          sidecarPath: "/tmp/ws/m1/kestrel",
+          lockPath: "/tmp/ws/m1/kestrel/.lock",
+          expectedStateVersion: 0,
+          signal: controller.signal,
+        },
+      );
+      expect(handoff.schemaVersion).toBe(1);
+      expect(saved).toHaveLength(1);
+      expect(d.missionStore.saveCount).toBe(1);
+      expect(d.journeyStore.events.some((e) => e.type === "AgentHandoffRecorded")).toBe(true);
+      expect(journal.intents.size).toBe(0);
+    });
   });
 });

@@ -122,10 +122,12 @@ class FakeGit implements GitClient {
 }
 
 class FakeMissionStore implements MissionStore {
+  saveCount = 0;
   async get(): Promise<StoredMission | undefined> {
     return undefined;
   }
   async save(_p: string, mission: Mission, v: number): Promise<StoredMission> {
+    this.saveCount += 1;
     return { mission, version: v + 1 };
   }
 }
@@ -142,7 +144,10 @@ class FakeJourneyStore implements JourneyStore {
   }
 }
 class FakeJournal implements TransactionJournal {
-  async create(): Promise<void> {}
+  intents = new Map<string, boolean>();
+  async create(_intent?: unknown): Promise<void> {
+    this.intents.set("t", true);
+  }
   async advancePhase(): Promise<void> {}
   async get() {
     return undefined;
@@ -150,7 +155,9 @@ class FakeJournal implements TransactionJournal {
   async listPending() {
     return [];
   }
-  async remove(): Promise<void> {}
+  async remove(): Promise<void> {
+    this.intents.clear();
+  }
 }
 class NoopLock implements MissionLock {
   async withMissionLock<T>(
@@ -279,5 +286,85 @@ describe("completeMission", () => {
         expectedStateVersion: 0,
       }),
     ).rejects.toMatchObject({ code: "DM_EVIDENCE_BLOCKED" });
+  });
+
+  describe("transaction commit point", () => {
+    it("rejects cancellation before the commit point without creating an intent/state/event", async () => {
+      const git = new FakeGit();
+      const d = deps(git);
+      const controller = new AbortController();
+      controller.abort();
+      await expect(
+        completeMission(d, {
+          mission: inProgressMission(),
+          sidecarPath: "/tmp/ws/m1/kestrel",
+          lockPath: "/tmp/ws/m1/kestrel/.lock",
+          expectedStateVersion: 0,
+          signal: controller.signal,
+        }),
+      ).rejects.toMatchObject({ code: "DM_PROCESS_CANCELLED" });
+      expect(d.journal.intents.size).toBe(0);
+      expect(d.missionStore.saveCount).toBe(0);
+      expect(d.journeyStore.events).toHaveLength(0);
+    });
+
+    it("rejects cancellation while waiting for the lock without creating an intent/state/event", async () => {
+      const git = new FakeGit();
+      const d = deps(git);
+      const controller = new AbortController();
+      const abortingLock: MissionLock = {
+        async withMissionLock<T>(
+          _p: string,
+          _m: MissionId,
+          _o: string,
+          action: () => Promise<T>,
+        ): Promise<T> {
+          controller.abort();
+          return action();
+        },
+        async breakStaleLock(_p: string): Promise<void> {},
+      };
+      await expect(
+        completeMission(
+          { ...d, lock: abortingLock },
+          {
+            mission: inProgressMission(),
+            sidecarPath: "/tmp/ws/m1/kestrel",
+            lockPath: "/tmp/ws/m1/kestrel/.lock",
+            expectedStateVersion: 0,
+            signal: controller.signal,
+          },
+        ),
+      ).rejects.toMatchObject({ code: "DM_PROCESS_CANCELLED" });
+      expect(d.journal.intents.size).toBe(0);
+      expect(d.missionStore.saveCount).toBe(0);
+      expect(d.journeyStore.events).toHaveLength(0);
+    });
+
+    it("commits once the point of no return is crossed even if cancelled", async () => {
+      const git = new FakeGit();
+      const d = deps(git);
+      const controller = new AbortController();
+      const journal = d.journal as FakeJournal;
+      const originalCreate = journal.create.bind(journal);
+      journal.create = async (intent) => {
+        await originalCreate(intent);
+        controller.abort();
+      };
+      const mission = await completeMission(
+        { ...d, journal },
+        {
+          mission: inProgressMission(),
+          sidecarPath: "/tmp/ws/m1/kestrel",
+          lockPath: "/tmp/ws/m1/kestrel/.lock",
+          expectedStateVersion: 0,
+          signal: controller.signal,
+        },
+      );
+      expect(mission.status).toBe("COMPLETED");
+      expect(d.missionStore.saveCount).toBe(1);
+      expect(d.journeyStore.events.some((e) => e.type === "MissionCompleted")).toBe(true);
+      expect(journal.intents.size).toBe(0);
+    });
   });
 });

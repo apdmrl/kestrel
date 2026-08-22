@@ -26,6 +26,7 @@ export interface AbandonMissionInput {
   readonly lockPath: string;
   readonly expectedStateVersion: number;
   readonly reason: string;
+  readonly signal?: AbortSignal;
 }
 
 /** Abandon a non-terminal active mission transactionally. */
@@ -79,6 +80,7 @@ export async function abandonMission(
       expectedStateVersion: input.expectedStateVersion,
       targetMission: abandoned.value,
       event: event.value,
+      ...(input.signal !== undefined ? { signal: input.signal } : {}),
     },
   );
   return abandoned.value;

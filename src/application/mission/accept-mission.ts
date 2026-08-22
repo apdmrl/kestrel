@@ -32,6 +32,7 @@ export interface AcceptMissionInput {
   readonly mode: DeveloperMode;
   readonly workspaceRoot: string;
   readonly idempotencyKey?: EventId;
+  readonly signal?: AbortSignal;
 }
 
 function must<T>(result: DomainResult<T>): T {
@@ -107,6 +108,7 @@ export async function acceptMission(
       expectedStateVersion: 0,
       targetMission: mission,
       event,
+      ...(input.signal !== undefined ? { signal: input.signal } : {}),
     },
   );
 

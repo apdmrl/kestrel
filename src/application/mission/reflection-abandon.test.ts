@@ -83,10 +83,12 @@ function inProgressMission(): Mission {
 }
 
 class FakeMissionStore implements MissionStore {
+  saveCount = 0;
   async get(): Promise<StoredMission | undefined> {
     return undefined;
   }
   async save(_p: string, mission: Mission, v: number): Promise<StoredMission> {
+    this.saveCount += 1;
     return { mission, version: v + 1 };
   }
 }
@@ -103,7 +105,10 @@ class FakeJourneyStore implements JourneyStore {
   }
 }
 class FakeJournal implements TransactionJournal {
-  async create(): Promise<void> {}
+  intents = new Map<string, boolean>();
+  async create(_intent?: unknown): Promise<void> {
+    this.intents.set("t", true);
+  }
   async advancePhase(): Promise<void> {}
   async get() {
     return undefined;
@@ -111,7 +116,9 @@ class FakeJournal implements TransactionJournal {
   async listPending() {
     return [];
   }
-  async remove(): Promise<void> {}
+  async remove(): Promise<void> {
+    this.intents.clear();
+  }
 }
 class NoopLock implements MissionLock {
   async withMissionLock<T>(
@@ -202,5 +209,113 @@ describe("reflection and abandonment", () => {
         reason: "again",
       }),
     ).rejects.toMatchObject({ code: "DM_ILLEGAL_TRANSITION" });
+  });
+
+  describe("transaction commit point", () => {
+    function abortingLock(controller: AbortController): MissionLock {
+      return {
+        async withMissionLock<T>(
+          _p: string,
+          _m: MissionId,
+          _o: string,
+          action: () => Promise<T>,
+        ): Promise<T> {
+          controller.abort();
+          return action();
+        },
+        async breakStaleLock(_p: string): Promise<void> {},
+      };
+    }
+
+    it("rejects an already-aborted reflection before creating an intent/state/event", async () => {
+      const d = deps();
+      const controller = new AbortController();
+      controller.abort();
+      await expect(
+        addReflection(d, {
+          ...input(inProgressMission()),
+          reflection: { lesson: "root cause was X" },
+          signal: controller.signal,
+        }),
+      ).rejects.toMatchObject({ code: "DM_PROCESS_CANCELLED" });
+      expect(d.journal.intents.size).toBe(0);
+      expect(d.missionStore.saveCount).toBe(0);
+      expect(d.journeyStore.events).toHaveLength(0);
+    });
+
+    it("rejects a reflection cancelled while waiting for the lock without mutation", async () => {
+      const d = deps();
+      const controller = new AbortController();
+      await expect(
+        addReflection(
+          { ...d, lock: abortingLock(controller) },
+          {
+            ...input(inProgressMission()),
+            reflection: { lesson: "root cause was X" },
+            signal: controller.signal,
+          },
+        ),
+      ).rejects.toMatchObject({ code: "DM_PROCESS_CANCELLED" });
+      expect(d.journal.intents.size).toBe(0);
+      expect(d.missionStore.saveCount).toBe(0);
+      expect(d.journeyStore.events).toHaveLength(0);
+    });
+
+    it("rejects an already-aborted abandonment before creating an intent/state/event", async () => {
+      const d = deps();
+      const controller = new AbortController();
+      controller.abort();
+      await expect(
+        abandonMission(d, {
+          ...input(inProgressMission()),
+          reason: "lost interest",
+          signal: controller.signal,
+        }),
+      ).rejects.toMatchObject({ code: "DM_PROCESS_CANCELLED" });
+      expect(d.journal.intents.size).toBe(0);
+      expect(d.missionStore.saveCount).toBe(0);
+      expect(d.journeyStore.events).toHaveLength(0);
+    });
+
+    it("rejects an abandonment cancelled while waiting for the lock without mutation", async () => {
+      const d = deps();
+      const controller = new AbortController();
+      await expect(
+        abandonMission(
+          { ...d, lock: abortingLock(controller) },
+          {
+            ...input(inProgressMission()),
+            reason: "lost interest",
+            signal: controller.signal,
+          },
+        ),
+      ).rejects.toMatchObject({ code: "DM_PROCESS_CANCELLED" });
+      expect(d.journal.intents.size).toBe(0);
+      expect(d.missionStore.saveCount).toBe(0);
+      expect(d.journeyStore.events).toHaveLength(0);
+    });
+
+    it("commits an abandonment once the point of no return is crossed even if cancelled", async () => {
+      const d = deps();
+      const controller = new AbortController();
+      const journal = d.journal as FakeJournal;
+      const originalCreate = journal.create.bind(journal);
+      journal.create = async (intent) => {
+        await originalCreate(intent);
+        controller.abort();
+      };
+      const mission = await abandonMission(
+        { ...d, journal },
+        {
+          ...input(inProgressMission()),
+          reason: "lost interest",
+          signal: controller.signal,
+        },
+      );
+      expect(mission.status).toBe("ABANDONED");
+      expect(d.missionStore.saveCount).toBe(1);
+      expect(d.journeyStore.events.some((e) => e.type === "MissionAbandoned")).toBe(true);
+      expect(journal.intents.size).toBe(0);
+    });
   });
 });

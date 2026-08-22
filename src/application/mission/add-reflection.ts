@@ -28,6 +28,7 @@ export interface AddReflectionInput {
   readonly lockPath: string;
   readonly expectedStateVersion: number;
   readonly reflection: CreateReflectionInput;
+  readonly signal?: AbortSignal;
 }
 
 /** Record an immutable reflection snapshot without blocking completion. */
@@ -93,6 +94,7 @@ export async function addReflection(
       expectedStateVersion: input.expectedStateVersion,
       targetMission: updated.value,
       event: event.value,
+      ...(input.signal !== undefined ? { signal: input.signal } : {}),
     },
   );
   return updated.value;
