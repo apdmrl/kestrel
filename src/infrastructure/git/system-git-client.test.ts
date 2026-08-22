@@ -61,6 +61,8 @@ async function setUpstreamWithFile(
   await git(upstream, ["add", fileName]);
   await git(upstream, ["commit", "-m", "base"]);
   await new SystemGitClient(dir, runner).clone(upstream, working);
+  await git(working, ["config", "user.email", "test@example.com"]);
+  await git(working, ["config", "user.name", "Test"]);
   await git(working, ["remote", "set-url", "origin", "https://github.com/octocat/hello-world.git"]);
   return { upstream, working };
 }
