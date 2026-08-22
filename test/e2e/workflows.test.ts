@@ -1917,6 +1917,60 @@ describe("kestrel end-to-end workflow", () => {
     expect(resumed.stdout).toContain("IN_PROGRESS");
   }, 60_000);
 
+  it("cancels a blocked discovery request with SIGTERM (exit 130)", async () => {
+    searchCount = 0;
+    searchHold = true;
+    searchArrived = false;
+    releaseSearchHold = undefined;
+    const discovery = spawnCli(["find", "--mood", "QUICK_WIN"]);
+    try {
+      await waitFor(() => searchArrived, "search request arrived");
+      discovery.child.kill("SIGTERM");
+      const result = await discovery.result;
+      expect(result.status).toBe(130);
+      expect(result.stderr).toContain("DM_PROCESS_CANCELLED");
+    } finally {
+      searchHold = false;
+      releaseSearchHold?.();
+    }
+  }, 60_000);
+
+  it("cancels preparation with SIGTERM while holding the lock, then resumes without duplicates", async () => {
+    searchCount = 0;
+    await rm(cloneStarted, { force: true });
+    const recommendationId = await findRecommendationId();
+    const accept = await runCli(["mission", "accept", "--id", recommendationId]);
+    expect(accept.status).toBe(0);
+    const missionId = extractMissionId(accept.stdout);
+    const sidecar = await findSidecarFor(missionId);
+
+    // Hold the clone gate so the process is mid-critical-section holding the lock.
+    const gateFile = await createGate("sigterm-gate");
+    const child = spawnCli(["mission", "prepare", "--id", missionId], {
+      KESTREL_CLONE_GATE: gateFile,
+      KESTREL_CLONE_STARTED: cloneStarted,
+    });
+    try {
+      await waitForFile(cloneStarted);
+      await waitForFile(join(sidecar, ".lock"));
+      child.child.kill("SIGTERM");
+      const result = await child.result;
+      expect(result.status).toBe(130);
+      expect(result.stderr).toMatch(/DM_(GIT|PROCESS)_CANCELLED/);
+    } finally {
+      await releaseGate(gateFile);
+    }
+
+    // The lock was released, no partial mutation, and resume succeeds.
+    await expect(stat(join(sidecar, ".lock"))).rejects.toThrow();
+    const resumed = await runCli(["mission", "resume", "--id", missionId]);
+    expect(resumed.status).toBe(0);
+    expect(resumed.stdout).toContain("IN_PROGRESS");
+    // No duplicate preparation-started event from the cancelled attempt.
+    const types = await readJourneyTypes();
+    expect(types.filter((t) => t === "MissionPreparationStarted")).toHaveLength(1);
+  }, 60_000);
+
   it("cancels a blocked submission verification with SIGINT (exit 130)", async () => {
     searchCount = 0;
     const recommendationId = await findRecommendationId();

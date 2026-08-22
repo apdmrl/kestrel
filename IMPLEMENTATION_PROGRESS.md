@@ -143,6 +143,17 @@ Current phase: general-release-review fix pass — in progress
 
 - [ ] **Task 10 / KGR-010 — Add SIGTERM acceptance coverage.** (RED → GREEN pending)
 
+- [x] **Task 10 / KGR-010 — Add SIGTERM acceptance coverage.**
+  - GREEN: added two built-CLI SIGTERM scenarios to `test/e2e/workflows.test.ts` — a blocked
+    discovery request and a preparation holding the mission lock — each asserting exit 130,
+    classified cancellation output, lock release, no partial mutation, no duplicate
+    preparation event, and successful resume. Both pass.
+  - GREEN: `npx vitest run test/e2e/workflows.test.ts -t "SIGTERM"` (2 tests) and the SIGINT
+    scenarios pass; typecheck/lint/format clean.
+  - Implementation: no production change was required — `cli/main.ts` already handles SIGTERM
+    through the same shared cancellation controller as SIGINT; this task added the missing
+    acceptance coverage.
+
 - [ ] **Task 11 / KGR-011 — Make verification claims reproducible.** (RED → GREEN pending)
 
 ## Earlier pass: release-blocker remediation
