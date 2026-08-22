@@ -1625,6 +1625,108 @@ describe("kestrel end-to-end workflow", () => {
     await rm(linkDir, { recursive: true, force: true });
   }, 60_000);
 
+  it("refuses break-lock when a candidate outside the workspace self-declares its own root", async () => {
+    searchCount = 0;
+    const recommendationId = await findRecommendationId();
+    const accept = await runCli(["mission", "accept", "--id", recommendationId]);
+    expect(accept.status).toBe(0);
+    const missionId = extractMissionId(accept.stdout);
+    const sidecar = await findSidecarFor(missionId);
+
+    // An attacker-controlled sidecar OUTSIDE the configured workspace root A.
+    const outsideRoot = await mkdtemp(join(tmpdir(), "kestrel-selfauth-"));
+    const outsideSidecar = join(outsideRoot, "kestrel");
+    await mkdir(outsideSidecar, { recursive: true });
+    // Copy the real persisted mission but declare the OUTSIDE directory (not the
+    // configured workspace root A) as the acceptanceContext.workspaceRoot — a
+    // self-authenticating identity that must never establish the trust root.
+    const real = JSON.parse(await readFile(join(sidecar, "mission.json"), "utf8")) as {
+      mission: { id: string; acceptanceContext: { workspaceRoot: string } };
+    };
+    real.mission.id = missionId;
+    real.mission.acceptanceContext.workspaceRoot = outsideRoot;
+    await writeFile(join(outsideSidecar, "mission.json"), JSON.stringify(real), "utf8");
+    // A stale lock for the requested mission at the outside sidecar.
+    await writeStaleMissionLock(missionId, outsideSidecar);
+    const outsideLock = join(outsideSidecar, ".lock");
+
+    // Point the index at the attacker's outside sidecar.
+    const raw = JSON.parse(await readFile(join(home, "index.json"), "utf8")) as {
+      entries: Array<{ missionId: string; sidecarPath: string }>;
+    };
+    for (const entry of raw.entries) {
+      if (entry.missionId === missionId) {
+        entry.sidecarPath = outsideSidecar;
+      }
+    }
+    await writeFile(join(home, "index.json"), JSON.stringify(raw, null, 2), "utf8");
+
+    const before = await readFile(outsideLock, "utf8");
+    const broke = await runCli(["mission", "break-lock", "--id", missionId]);
+    expect(broke.status).not.toBe(0);
+    expect(broke.stderr).toContain("DM_UNSAFE_PATH");
+    // The outside stale lock is byte-for-byte untouched.
+    await expect(stat(outsideLock)).resolves.toBeDefined();
+    expect(await readFile(outsideLock, "utf8")).toBe(before);
+
+    // Restore a clean shared-home state for later tests.
+    for (const entry of raw.entries) {
+      if (entry.missionId === missionId) {
+        entry.sidecarPath = sidecar;
+      }
+    }
+    await writeFile(join(home, "index.json"), JSON.stringify(raw, null, 2), "utf8");
+    await rm(join(sidecar, ".lock"), { force: true });
+    await rm(outsideRoot, { recursive: true, force: true });
+  }, 60_000);
+
+  it("refuses break-lock when a candidate mission id does not match the requested id", async () => {
+    searchCount = 0;
+    const recommendationId = await findRecommendationId();
+    const accept = await runCli(["mission", "accept", "--id", recommendationId]);
+    expect(accept.status).toBe(0);
+    const missionId = extractMissionId(accept.stdout);
+    const sidecar = await findSidecarFor(missionId);
+
+    const outsideRoot = await mkdtemp(join(tmpdir(), "kestrel-idmismatch-"));
+    const outsideSidecar = join(outsideRoot, "kestrel");
+    await mkdir(outsideSidecar, { recursive: true });
+    const real = JSON.parse(await readFile(join(sidecar, "mission.json"), "utf8")) as {
+      mission: { id: string; acceptanceContext: { workspaceRoot: string } };
+    };
+    // A DIFFERENT mission id can never establish a trust root.
+    real.mission.id = "another-mission-id";
+    real.mission.acceptanceContext.workspaceRoot = outsideRoot;
+    await writeFile(join(outsideSidecar, "mission.json"), JSON.stringify(real), "utf8");
+    await writeStaleMissionLock(missionId, outsideSidecar);
+    const outsideLock = join(outsideSidecar, ".lock");
+
+    const raw = JSON.parse(await readFile(join(home, "index.json"), "utf8")) as {
+      entries: Array<{ missionId: string; sidecarPath: string }>;
+    };
+    for (const entry of raw.entries) {
+      if (entry.missionId === missionId) {
+        entry.sidecarPath = outsideSidecar;
+      }
+    }
+    await writeFile(join(home, "index.json"), JSON.stringify(raw, null, 2), "utf8");
+
+    const broke = await runCli(["mission", "break-lock", "--id", missionId]);
+    expect(broke.status).not.toBe(0);
+    expect(broke.stderr).toContain("DM_UNSAFE_PATH");
+    await expect(stat(outsideLock)).resolves.toBeDefined();
+
+    // Restore a clean shared-home state for later tests.
+    for (const entry of raw.entries) {
+      if (entry.missionId === missionId) {
+        entry.sidecarPath = sidecar;
+      }
+    }
+    await writeFile(join(home, "index.json"), JSON.stringify(raw, null, 2), "utf8");
+    await rm(join(sidecar, ".lock"), { force: true });
+    await rm(outsideRoot, { recursive: true, force: true });
+  }, 60_000);
+
   it("rebreaks a stale lock using the persisted identity after KESTREL_WORKSPACE changes", async () => {
     searchCount = 0;
     const recommendationId = await findRecommendationId();

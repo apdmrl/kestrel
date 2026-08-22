@@ -1,5 +1,5 @@
 import { homedir } from "node:os";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { realpath } from "node:fs/promises";
 import { Octokit } from "octokit";
 import { createOAuthDeviceAuth } from "@octokit/auth-oauth-device";
@@ -24,7 +24,10 @@ import { GitCredentialStore } from "../infrastructure/credentials/git-credential
 import { SystemClock } from "../infrastructure/system/system-clock.js";
 import { CryptoIdGenerator } from "../infrastructure/system/crypto-id-generator.js";
 import { FilesystemWorkspaceManager } from "../infrastructure/workspace/filesystem-workspace-manager.js";
-import { verifyTrustedLockTarget } from "../infrastructure/recovery/trusted-lock-target.js";
+import {
+  verifyTrustedLockTarget,
+  unsafeRecoveryPathError,
+} from "../infrastructure/recovery/trusted-lock-target.js";
 import { SystemGitClient } from "../infrastructure/git/system-git-client.js";
 import { OctokitGateway } from "../infrastructure/github/octokit-gateway.js";
 import { GithubChallengeSource } from "../infrastructure/github/github-challenge-source.js";
@@ -332,28 +335,18 @@ export async function bootstrap(
   };
 
   /**
-   * Derive the immutable persisted mission workspace identity from the first
-   * candidate that has a readable persisted mission state. A mission is accepted
-   * under a concrete workspace root; recovery must validate and delete against
-   * that persisted root, not the currently configured `KESTREL_WORKSPACE`, so a
-   * config change between acceptance and recovery neither wrongly rejects a
-   * legitimate mission nor validates against the wrong root.
+   * Return the canonical managed owning root implied by a sidecar path geometry,
+   * or `undefined` when the path is not a managed sidecar. A real sidecar is
+   * always `<workspaceRoot>/<missionDir>/kestrel`, so the owning root is exactly
+   * `dirname(dirname(sidecarPath))` and the sidecar basename is `kestrel`.
+   * Deriving the owning root from the path GEOMETRY (never from following the
+   * path to read a self-declared field) is what breaks the circular trust chain.
    */
-  const derivePersistedWorkspaceRoot = async (
-    candidates: string[],
-  ): Promise<string | undefined> => {
-    for (const raw of candidates) {
-      try {
-        const stored = await missionStore.get(raw);
-        const persisted = stored?.mission.acceptanceContext.workspaceRoot;
-        if (typeof persisted === "string" && persisted.length > 0) {
-          return resolve(persisted);
-        }
-      } catch {
-        // A corrupt/unreadable persisted mission falls back to the configured root.
-      }
+  const expectedOwningRoot = (sidecarPath: string): string | undefined => {
+    if (basename(sidecarPath) !== "kestrel") {
+      return undefined;
     }
-    return undefined;
+    return resolve(dirname(dirname(sidecarPath)));
   };
 
   /**
@@ -364,10 +357,14 @@ export async function bootstrap(
    * intent, so two conflicting sources cannot silently pick a winner based on
    * directory enumeration order.
    *
-   * Each raw source is preserved and validated for symlink/reparse components
-   * BEFORE deduplication or canonicalization, so a link that resolves to another
-   * in-root (or out-of-root) mission is rejected rather than silently erased by
-   * `realpath`. Only validated sources are canonicalized.
+   * The managed workspace identity is established independently of any
+   * untrusted recovery candidate. A candidate's persisted mission may only
+   * contribute a workspace root when its OWN sidecar geometry (exactly
+   * `<root>/<missionDir>/kestrel`) equals its persisted `acceptanceContext`
+   * root AND its persisted mission id matches the requested `--id`. A candidate
+   * that self-declares an arbitrary root (e.g. an outside directory) is
+   * self-authenticating and fails closed with `DM_UNSAFE_PATH`. Only validated,
+   * mutually agreeing sources are canonicalized.
    */
   const resolveRecoverySidecar = async (
     missionId: MissionId,
@@ -384,10 +381,61 @@ export async function bootstrap(
     if (candidates.length === 0) {
       throw noMission("No mission found to break a stale lock for");
     }
-    // Derive and cross-check the persisted mission workspace identity; fall back
-    // to the configured root when no persisted identity can be read.
-    const persistedRoot = await derivePersistedWorkspaceRoot(candidates);
-    const workspaceRoot = persistedRoot ?? config.workspaceRoot;
+
+    // Establish the independently trusted mission-to-workspace identity. A
+    // mission.json reached through an untrusted candidate cannot authenticate
+    // that candidate or declare its own trusted root.
+    const trustedRoots = new Set<string>();
+    let sawAuthentic = false;
+    for (const raw of candidates) {
+      const owningRoot = expectedOwningRoot(raw);
+      let stored;
+      try {
+        stored = await missionStore.get(raw);
+      } catch {
+        stored = undefined; // corrupt/unreadable persisted identity: no evidence
+      }
+      const persistedId = stored?.mission.id;
+      if (stored === undefined || persistedId === undefined) {
+        continue; // no readable identity: contributes no trust root
+      }
+      if (persistedId !== missionId) {
+        throw unsafeRecoveryPathError(
+          raw,
+          "recovery candidate mission identity does not match the requested mission",
+        );
+      }
+      const persistedRoot = stored.mission.acceptanceContext.workspaceRoot;
+      if (
+        owningRoot === undefined ||
+        typeof persistedRoot !== "string" ||
+        persistedRoot.length === 0
+      ) {
+        throw unsafeRecoveryPathError(
+          raw,
+          "recovery candidate does not follow the managed sidecar layout",
+        );
+      }
+      if (resolve(persistedRoot) !== owningRoot) {
+        throw unsafeRecoveryPathError(
+          raw,
+          "recovery candidate declares a self-authenticating workspace root",
+        );
+      }
+      trustedRoots.add(owningRoot);
+      sawAuthentic = true;
+    }
+
+    let workspaceRoot: string;
+    if (sawAuthentic) {
+      if (trustedRoots.size > 1) {
+        throw conflictingLocations();
+      }
+      workspaceRoot = [...trustedRoots][0] as string;
+    } else {
+      workspaceRoot = config.workspaceRoot;
+    }
+
     // Preserve each raw source through validation: reject any symlink/reparse
     // component BEFORE canonicalization/deduplication. A source lexically within
     // the trust root is walked with lstat so a link to another mission is caught
