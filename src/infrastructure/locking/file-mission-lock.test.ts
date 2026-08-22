@@ -123,6 +123,11 @@ describe("FileMissionLock", () => {
   it("classifies a live pid with a mismatched identity as stale (pid reuse)", async () => {
     // process.pid is alive, but the lock names a well-formed identity that does
     // not match the current process, so the pid must have been recycled.
+    // Only platforms exposing a readable process identity can verify a mismatch;
+    // elsewhere a live pid is conservatively preserved (fail closed).
+    if (readProcessIdentity(process.pid) === undefined) {
+      return;
+    }
     await writeLock(
       identityLockContent(process.pid, {
         bootId: "00000000-0000-0000-0000-000000000000",

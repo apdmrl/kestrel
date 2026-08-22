@@ -1,6 +1,16 @@
-import { mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  realpath,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, sep } from "node:path";
+import { join, relative, sep } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { MissionId } from "../../domain/shared/identifiers.js";
 import type { RepositoryIdentity } from "../../domain/challenge/repository-identity.js";
@@ -15,6 +25,17 @@ const repository: RepositoryIdentity = {
 };
 
 let dir: string;
+
+/**
+ * The manager hands hooks canonical (realpath-resolved) paths rooted at the
+ * canonical workspace root. On platforms where the temp root is a symlink alias
+ * (macOS /var -> /private/var) the raw plan paths differ from those canonical
+ * paths, so hooks must compare against the canonical form to fire deterministically.
+ */
+async function canonicalPlanPath(dir: string, target: string): Promise<string> {
+  const dirReal = await realpath(dir);
+  return join(dirReal, relative(dir, target));
+}
 
 beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), "kestrel-ws-"));
@@ -120,7 +141,7 @@ describe("FilesystemWorkspaceManager", () => {
     const plan = manager.planWorkspace(dir, missionId, repository, 42);
     const hookManager = new FilesystemWorkspaceManager({
       beforeCreateDirectory: async (path) => {
-        if (path === join(plan.sidecarPath, "handoffs")) {
+        if (path === (await canonicalPlanPath(dir, join(plan.sidecarPath, "handoffs")))) {
           // Swap the sidecar for a symlink to the outside before handoffs is created.
           await rm(plan.sidecarPath, { recursive: true, force: true });
           await symlink(outside, plan.sidecarPath);
@@ -142,7 +163,7 @@ describe("FilesystemWorkspaceManager", () => {
       beforeDirectoryCreation: async (path) => {
         // Fire AFTER the parent chain was validated, immediately before the
         // mkdir that this hook precedes: the exact race window.
-        if (!swapped && path === plan.sidecarPath) {
+        if (!swapped && path === (await canonicalPlanPath(dir, plan.sidecarPath))) {
           swapped = true;
           await rm(plan.missionDirectory, { recursive: true, force: true });
           await symlink(outside, plan.missionDirectory);
@@ -168,7 +189,7 @@ describe("FilesystemWorkspaceManager", () => {
     const plan = manager.planWorkspace(dir, missionId, repository, 42);
     const hookManager = new FilesystemWorkspaceManager({
       beforeDirectoryCreation: async (path) => {
-        if (path === plan.sidecarPath) {
+        if (path === (await canonicalPlanPath(dir, plan.sidecarPath))) {
           await rm(plan.missionDirectory, { recursive: true, force: true });
           await symlink(outside, plan.missionDirectory);
         }

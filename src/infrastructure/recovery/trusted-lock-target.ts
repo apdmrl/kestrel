@@ -138,10 +138,13 @@ export async function verifyTrustedLockTarget(
     throw unsafeRecoveryPathError(targetRaw, "sidecar resolves outside the managed workspace root");
   }
 
-  const lockPath = join(targetCanon, ".lock");
-  if (!isWithin(targetCanon, lockPath)) {
+  // Return the raw resolved forms (not the canonical aliases) so the caller
+  // continues to address the exact path it derived; canonical containment was
+  // the validation, not the return value.
+  const lockPath = join(targetRaw, ".lock");
+  if (!isWithin(targetRaw, lockPath)) {
     throw unsafeRecoveryPathError(lockPath, "lock path is not beneath the trusted sidecar");
   }
 
-  return { sidecarPath: targetCanon, lockPath };
+  return { sidecarPath: targetRaw, lockPath };
 }
