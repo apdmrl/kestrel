@@ -156,6 +156,15 @@ Current phase: general-release-review fix pass — in progress
 
 - [ ] **Task 11 / KGR-011 — Make verification claims reproducible.** (RED → GREEN pending)
 
+- [x] **Task 11 / KGR-011 — Make verification claims reproducible.**
+  - Added `scripts/repeat-recovery.mjs` — a narrow repeat harness for the exact seven-checkpoint
+    plus three-transaction recovery matrix. It runs only those scenarios, defaults to 3 repeats,
+    fails fast on the first failing run, and preserves every run's output under
+    `.recovery-repeat/run-<n>.log`. Verified: `node scripts/repeat-recovery.mjs 2` ran 2x green.
+  - Updated `docs/state-and-recovery.md`, `IMPLEMENTATION_PROGRESS.md`, and `CHANGELOG.md` to
+    describe the cross-platform file-gate barrier (not FIFO) and to reference the repeat harness
+    instead of an unsupported "three consecutive runs" claim.
+
 ## Earlier pass: release-blocker remediation
 
 - [x] Task 1 — Stable Linux process identity for lock ownership. Liveness compares the
@@ -173,12 +182,14 @@ Current phase: general-release-review fix pass — in progress
       Git/process execution (via the underlying fetch/exec cancel signal), each exiting 130
       with a classified error and no partial state. Cancellation is also checked immediately
       before final state/transaction commits.
-- [x] Task 4 — Exact recovery boundaries proven. A FIFO barrier (active only under
-      `NODE_ENV=test` with dedicated env vars; production no-op) pauses after each of the
+- [x] Task 4 — Exact recovery boundaries proven. A cross-platform file-gate barrier (active only
+      under `NODE_ENV=test` with dedicated env vars; production no-op) pauses after each of the
       seven persisted preparation checkpoints and after each of the three transaction phases
       (`PREPARED`, `STATE_WRITTEN`, `EVENT_APPENDED`), each interrupted by a real crash,
       recovered via the product `break-lock`, resumed, and asserted to converge with
-      at-most-once side effects. The matrix passed three consecutive runs.
+      at-most-once side effects. The exact matrix is reproducible on demand with
+      `node scripts/repeat-recovery.mjs [count]`, which runs only those scenarios, fails fast,
+      and preserves per-run logs under `.recovery-repeat/`.
 - [x] Task 5 — Package integration gate stabilized with an explicit 60s hook timeout; both
       packaged-binary tests remain enabled and pass under full-suite contention.
 - [x] Task 6 — Legacy recommendation migration made identity-safe and observable. The
