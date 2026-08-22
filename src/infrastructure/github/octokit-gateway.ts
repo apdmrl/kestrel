@@ -68,6 +68,12 @@ function cancelledError() {
 /** Rejects as soon as the signal aborts; used to promptly cancel the flow. */
 function abortPromise(signal: AbortSignal): Promise<never> {
   return new Promise((_resolve, reject) => {
+    // An already-aborted signal never fires a future "abort" event, so reject
+    // immediately instead of registering a listener that will never run.
+    if (signal.aborted === true) {
+      reject(cancelledError());
+      return;
+    }
     signal.addEventListener("abort", () => reject(cancelledError()), { once: true });
   });
 }
@@ -98,17 +104,25 @@ export class OctokitGateway implements GitHubGateway {
     if (this.clientId.trim().length === 0) {
       throw authRequiredError();
     }
+    // A pre-aborted signal must reject promptly, before registering listeners or
+    // starting any device-flow work. The device-auth factory is never invoked.
+    if (signal?.aborted === true) {
+      throw cancelledError();
+    }
     let resolveVerification!: (value: DeviceFlowAuthorization) => void;
     let rejectVerification!: (error: unknown) => void;
     const verificationPromise = new Promise<DeviceFlowAuthorization>((resolve, reject) => {
       resolveVerification = resolve;
       rejectVerification = reject;
     });
+    let removeAbortListener: (() => void) | undefined;
     if (signal !== undefined) {
       // A cancellation while initialization is still awaiting its verification
       // data must unblock `beginDeviceFlow` (which awaits onVerification) so the
       // caller can unwind gracefully instead of hanging on a detached promise.
-      signal.addEventListener("abort", () => rejectVerification(cancelledError()), { once: true });
+      const onAbort = () => rejectVerification(cancelledError());
+      signal.addEventListener("abort", onAbort, { once: true });
+      removeAbortListener = () => signal.removeEventListener("abort", onAbort);
     }
 
     // Wrap the underlying Octokit request so that a cancellation signal reaches
@@ -142,6 +156,7 @@ export class OctokitGateway implements GitHubGateway {
       // hides endpoint metadata the device flow needs, so assert it here.
       request: request as DeviceAuthRequest,
       onVerification: (verification) => {
+        removeAbortListener?.();
         resolveVerification({
           deviceCode: verification.device_code,
           userCode: verification.user_code,

@@ -1974,6 +1974,38 @@ describe("kestrel end-to-end workflow", () => {
     expect(after.status).toBe(0);
   }, 60_000);
 
+  it("cancels device-flow initialization with SIGINT (exit 130, no credential mutation)", async () => {
+    deviceCodeHold = true;
+    deviceCodeArrived = false;
+    releaseDeviceCodeHold = undefined;
+    const child = spawnCli(["--json", "find", "--mood", "QUICK_WIN"], {
+      PATH: prependToPath(noCredGitDir),
+      GITHUB_CLIENT_ID: "test-client-id",
+    });
+    try {
+      // Wait until the child is alive and has entered device-flow initialization,
+      // then abort. The gateway rejects a pre-aborted beginDeviceFlow before
+      // invoking the device-auth factory, so no credential is ever written.
+      await waitFor(() => deviceCodeArrived, "device-flow initialization arrived");
+      child.child.kill("SIGINT");
+      const result = await child.result;
+      expect(result.status).toBe(130);
+      expect(result.stderr).toMatch(/DM_(GITHUB_AUTH_CANCELLED|PROCESS_CANCELLED)/);
+      // No secrets were leaked and no credential/partial state was persisted.
+      expect(result.stdout + result.stderr).not.toContain("DEVICE_FLOW_ACCESS_TOKEN");
+      expect(result.stdout + result.stderr).not.toContain("device-code-secret");
+    } finally {
+      deviceCodeHold = false;
+      releaseDeviceCodeHold?.();
+    }
+    // A follow-up command still works: the cancelled run left no mutation.
+    const after = await runCli(["--json", "find", "--mood", "QUICK_WIN"], {
+      PATH: prependToPath(noCredGitDir),
+      GITHUB_CLIENT_ID: "test-client-id",
+    });
+    expect(after.status).toBe(0);
+  }, 60_000);
+
   it("cancels an in-flight git process with SIGINT (terminated, not manually released)", async () => {
     searchCount = 0;
     await rm(cloneStarted, { force: true });

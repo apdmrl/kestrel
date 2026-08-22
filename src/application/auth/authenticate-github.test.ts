@@ -173,6 +173,35 @@ describe("authenticateGitHub", () => {
     ).rejects.toMatchObject({ code: "DM_GITHUB_AUTH_CANCELLED" });
   });
 
+  it("rejects a pre-aborted signal before device-flow initialization with no credential mutation", async () => {
+    const store = new FakeCredentialStore();
+    const gateway = new FakeGateway();
+    // Model the real gateway: a pre-aborted signal is rejected before the device
+    // flow is initialized (the device-flow factory is never invoked).
+    gateway.beginDeviceFlow = async (signal) => {
+      if (signal?.aborted === true) {
+        throw createKestrelError({
+          code: "DM_GITHUB_AUTH_CANCELLED",
+          category: "USER_ACTION_REQUIRED",
+          userMessage: "device flow cancelled",
+          suggestedActions: ["retry"],
+          retryability: "NO_RETRY",
+          recoveryStrategy: "USER_ACTION",
+          severity: "INFO",
+        });
+      }
+      return authorization;
+    };
+    const controller = new AbortController();
+    controller.abort();
+    await expect(
+      authenticateGitHub(deps(store, gateway), { account: "octocat", signal: controller.signal }),
+    ).rejects.toMatchObject({ code: "DM_GITHUB_AUTH_CANCELLED" });
+    // Cancellation before initialization never mutates a credential.
+    expect(store.stored).toEqual([]);
+    expect(store.deleted).toEqual([]);
+  });
+
   it("never leaks the token in a failure", async () => {
     const store = new FakeCredentialStore();
     const gateway = new FakeGateway();

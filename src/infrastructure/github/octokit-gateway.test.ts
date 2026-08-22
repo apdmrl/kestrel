@@ -157,4 +157,22 @@ describe("OctokitGateway", () => {
       code: "DM_GITHUB_AUTH_REQUIRED",
     });
   });
+
+  it("rejects a pre-aborted beginDeviceFlow promptly without starting device work", async () => {
+    let factoryCalled = false;
+    const factory: DeviceAuthFactory = () => {
+      factoryCalled = true;
+      // Never calls onVerification: if the pre-aborted signal were not handled
+      // synchronously, beginDeviceFlow would hang awaiting its verification.
+      return () => new Promise<{ token: string }>(() => undefined);
+    };
+    const gateway = new OctokitGateway(new FakeOctokit(), "client-id", factory);
+    const controller = new AbortController();
+    controller.abort();
+    await expect(gateway.beginDeviceFlow(controller.signal)).rejects.toMatchObject({
+      code: "DM_GITHUB_AUTH_CANCELLED",
+    });
+    // The device-auth factory is never invoked for a pre-aborted signal.
+    expect(factoryCalled).toBe(false);
+  });
 });
