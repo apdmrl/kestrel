@@ -931,7 +931,15 @@ describe("kestrel end-to-end workflow", () => {
     const accept = await runCli(["mission", "accept", "--id", recommendationId]);
     expect(accept.status).toBe(0);
 
-    const brief = await runCli(["agent", "brief", "--hypothesis", "a null deref"]);
+    const missionId = extractMissionId(accept.stdout);
+    const brief = await runCli([
+      "agent",
+      "brief",
+      "--id",
+      missionId,
+      "--hypothesis",
+      "a null deref",
+    ]);
     expect(brief.status, "agent brief stderr:\n" + brief.stderr).toBe(0);
     expect(brief.stdout).toContain("Handoff");
 
@@ -958,7 +966,7 @@ describe("kestrel end-to-end workflow", () => {
     const recommendationId = await findRecommendationId();
     const accept = await runCli(["mission", "accept", "--id", recommendationId]);
     expect(accept.status).toBe(0);
-    const prepare = await runCli(["mission", "prepare"]);
+    const prepare = await runCli(["mission", "prepare", "--id", extractMissionId(accept.stdout)]);
     expect(prepare.status, "mission prepare stderr:\n" + prepare.stderr).toBe(0);
 
     const verify = await runCli(["verify", "submission", "--pr", "999"]);
