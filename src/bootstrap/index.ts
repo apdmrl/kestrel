@@ -1,5 +1,5 @@
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import { realpath } from "node:fs/promises";
 import { Octokit } from "octokit";
 import { createOAuthDeviceAuth } from "@octokit/auth-oauth-device";
@@ -326,15 +326,52 @@ export async function bootstrap(
     }
   };
 
+  const isLexicallyWithin = (root: string, target: string): boolean => {
+    const rel = relative(resolve(root), resolve(target));
+    return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+  };
+
+  /**
+   * Derive the immutable persisted mission workspace identity from the first
+   * candidate that has a readable persisted mission state. A mission is accepted
+   * under a concrete workspace root; recovery must validate and delete against
+   * that persisted root, not the currently configured `KESTREL_WORKSPACE`, so a
+   * config change between acceptance and recovery neither wrongly rejects a
+   * legitimate mission nor validates against the wrong root.
+   */
+  const derivePersistedWorkspaceRoot = async (
+    candidates: string[],
+  ): Promise<string | undefined> => {
+    for (const raw of candidates) {
+      try {
+        const stored = await missionStore.get(raw);
+        const persisted = stored?.mission.acceptanceContext.workspaceRoot;
+        if (typeof persisted === "string" && persisted.length > 0) {
+          return resolve(persisted);
+        }
+      } catch {
+        // A corrupt/unreadable persisted mission falls back to the configured root.
+      }
+    }
+    return undefined;
+  };
+
   /**
    * Resolve the exact sidecar for a recovery target from validated index data or
    * validated matching pending intents. Never accepts a filesystem path from
-   * the user. Every matching source is collected and canonicalized, and the
-   * recovery requires exactly one unique location; `find()` is never used to
-   * select an arbitrary intent, so two conflicting sources cannot silently pick
-   * a winner based on directory enumeration order.
+   * the user. Every matching source is collected and the recovery requires
+   * exactly one unique location; `find()` is never used to select an arbitrary
+   * intent, so two conflicting sources cannot silently pick a winner based on
+   * directory enumeration order.
+   *
+   * Each raw source is preserved and validated for symlink/reparse components
+   * BEFORE deduplication or canonicalization, so a link that resolves to another
+   * in-root (or out-of-root) mission is rejected rather than silently erased by
+   * `realpath`. Only validated sources are canonicalized.
    */
-  const resolveRecoverySidecar = async (missionId: string): Promise<string> => {
+  const resolveRecoverySidecar = async (
+    missionId: MissionId,
+  ): Promise<{ sidecarPath: string; workspaceRoot: string }> => {
     const { index } = await indexStore.get();
     const indexPaths = index.entries
       .filter((entry) => entry.missionId === missionId)
@@ -347,13 +384,27 @@ export async function bootstrap(
     if (candidates.length === 0) {
       throw noMission("No mission found to break a stale lock for");
     }
-    // Canonicalize every source (realpath when present, else a lexical resolve)
-    // so syntactically different paths to the same target are treated as one.
+    // Derive and cross-check the persisted mission workspace identity; fall back
+    // to the configured root when no persisted identity can be read.
+    const persistedRoot = await derivePersistedWorkspaceRoot(candidates);
+    const workspaceRoot = persistedRoot ?? config.workspaceRoot;
+    // Preserve each raw source through validation: reject any symlink/reparse
+    // component BEFORE canonicalization/deduplication. A source lexically within
+    // the trust root is walked with lstat so a link to another mission is caught
+    // on the raw path; a source outside the trust root is left to the final
+    // containment check (fail-closed) and the all-source conflict resolution.
+    for (const raw of candidates) {
+      if (isLexicallyWithin(workspaceRoot, raw)) {
+        await verifyTrustedLockTarget({ workspaceRoot, missionId, sidecarPath: raw });
+      }
+    }
+    // Canonicalize only the validated sources so syntactically different paths to
+    // the same target are treated as one.
     const unique = [...new Set(await Promise.all(candidates.map(canonicalizePath)))];
     if (unique.length > 1) {
       throw conflictingLocations();
     }
-    return unique[0] as string;
+    return { sidecarPath: unique[0] as string, workspaceRoot };
   };
 
   const loadRecommendation = async (recommendationId: string) => {
@@ -485,14 +536,16 @@ export async function bootstrap(
     },
     missionBreakLock: async ({ missionId }) => {
       const id = parseRequiredMissionId(missionId);
-      const candidate = await resolveRecoverySidecar(id);
+      const recovery = await resolveRecoverySidecar(id);
       // Fail closed: derive and verify a trusted mission location inside the
-      // managed workspace root before deleting anything. A raw index/intent
-      // sidecar path is never trusted as-is.
+      // managed (persisted) workspace root before deleting anything. A raw
+      // index/intent sidecar path is never trusted as-is, and the trusted lock
+      // target is re-derived at deletion time so a path is never validated once
+      // and then used later against a concurrently changed location.
       const trusted = await verifyTrustedLockTarget({
-        workspaceRoot: config.workspaceRoot,
+        workspaceRoot: recovery.workspaceRoot,
         missionId: id,
-        sidecarPath: candidate,
+        sidecarPath: recovery.sidecarPath,
       });
       // Recover the mission lock first, then the shared global index lock that
       // replay needs. breakStaleLock refuses any live lock.

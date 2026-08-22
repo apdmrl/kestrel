@@ -1,7 +1,17 @@
 import { existsSync, readFileSync } from "node:fs";
 import { execFile, spawn } from "node:child_process";
 import { createServer, type Server } from "node:http";
-import { chmod, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { promisify } from "node:util";
@@ -1568,6 +1578,72 @@ describe("kestrel end-to-end workflow", () => {
     // The outside lock is never deleted.
     await expect(stat(outsideLock)).resolves.toBeDefined();
     await rm(outsideDir, { recursive: true, force: true });
+  }, 60_000);
+
+  it("refuses break-lock when an in-root symlink resolves to another in-root mission", async () => {
+    searchCount = 0;
+    const recommendationId = await findRecommendationId();
+    const accept = await runCli(["mission", "accept", "--id", recommendationId]);
+    expect(accept.status).toBe(0);
+    const missionId = extractMissionId(accept.stdout);
+    const sidecar = await findSidecarFor(missionId);
+    await writeStaleMissionLock(missionId, sidecar);
+
+    // A second in-root directory whose `kestrel` component is a symlink to the
+    // real (in-root) mission sidecar. If recovery canonicalizes the raw path
+    // before validation, the symlink is erased and the real lock is deleted.
+    const linkDir = join(workspace, "kestrel-symlink-" + Date.now());
+    await mkdir(linkDir, { recursive: true });
+    await symlink(sidecar, join(linkDir, "kestrel"));
+
+    // Point the index at the symlinked in-root path for this mission.
+    const raw = JSON.parse(await readFile(join(home, "index.json"), "utf8")) as {
+      stateVersion: number;
+      entries: Array<{ missionId: string; sidecarPath: string }>;
+    };
+    for (const entry of raw.entries) {
+      if (entry.missionId === missionId) {
+        entry.sidecarPath = join(linkDir, "kestrel");
+      }
+    }
+    await writeFile(join(home, "index.json"), JSON.stringify(raw, null, 2), "utf8");
+
+    const broke = await runCli(["mission", "break-lock", "--id", missionId]);
+    expect(broke.status).not.toBe(0);
+    expect(broke.stderr).toContain("DM_UNSAFE_PATH");
+    // The real (in-root) mission lock is never touched.
+    await expect(stat(join(sidecar, ".lock"))).resolves.toBeDefined();
+
+    // Restore a clean shared-home state for later tests.
+    for (const entry of raw.entries) {
+      if (entry.missionId === missionId) {
+        entry.sidecarPath = sidecar;
+      }
+    }
+    await writeFile(join(home, "index.json"), JSON.stringify(raw, null, 2), "utf8");
+    await rm(join(sidecar, ".lock"), { force: true });
+    await rm(linkDir, { recursive: true, force: true });
+  }, 60_000);
+
+  it("rebreaks a stale lock using the persisted identity after KESTREL_WORKSPACE changes", async () => {
+    searchCount = 0;
+    const recommendationId = await findRecommendationId();
+    const accept = await runCli(["mission", "accept", "--id", recommendationId]);
+    expect(accept.status).toBe(0);
+    const missionId = extractMissionId(accept.stdout);
+    const sidecar = await findSidecarFor(missionId);
+    await writeStaleMissionLock(missionId, sidecar);
+
+    // A different workspace root than the one the mission was accepted under.
+    const otherRoot = await mkdtemp(join(tmpdir(), "kestrel-other-root-"));
+
+    const broke = await runCli(["mission", "break-lock", "--id", missionId], {
+      KESTREL_WORKSPACE: otherRoot,
+    });
+    expect(broke.status).toBe(0);
+    // The lock under the ORIGINAL persisted workspace root is cleared.
+    await expect(stat(join(sidecar, ".lock"))).rejects.toThrow();
+    await rm(otherRoot, { recursive: true, force: true });
   }, 60_000);
 
   it("rejects break-lock when two pending intents name different locations", async () => {
