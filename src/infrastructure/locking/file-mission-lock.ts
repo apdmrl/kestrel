@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import {
+  lstat,
   mkdir,
   open,
   readFile,
@@ -87,6 +88,19 @@ function isEnoent(error: unknown): boolean {
   return (
     typeof error === "object" && error !== null && (error as { code?: string }).code === "ENOENT"
   );
+}
+
+/** Whether a path exists on disk (follows no symlinks on the final component). */
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await lstat(path);
+    return true;
+  } catch (error) {
+    if (isEnoent(error)) {
+      return false;
+    }
+    throw error;
+  }
 }
 
 function lockedError(pid: number) {
@@ -296,7 +310,12 @@ export class FileMissionLock implements MissionLock {
           await rename(reservationDir, guardPath);
           return token;
         } catch (error) {
-          if (!this.isGuardConflict(error)) {
+          // A failed rename is a guard conflict whenever the guard path now
+          // exists; only when it does NOT exist is it a genuine IO failure. The
+          // error code for "destination exists" is platform-specific (ENOTEMPTY
+          // on POSIX but EPERM/EACCES on Windows), so existence is the portable
+          // discriminator rather than the code.
+          if (!this.isGuardConflict(error) && !(await pathExists(guardPath))) {
             throw ioError("Failed to acquire the mission lock guard", error);
           }
         }
