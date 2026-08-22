@@ -15,7 +15,7 @@ import {
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { promisify } from "node:util";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 const execFileAsync = promisify(execFile);
 const root = process.cwd();
@@ -256,6 +256,46 @@ async function waitForFile(path: string): Promise<void> {
 /** Remove a crashed process's lock residue by running the product recovery command. */
 async function breakStaleLock(missionId: string): Promise<CliResult> {
   return runCli(["mission", "break-lock", "--id", missionId]);
+}
+
+/** Recursively list `.lock` files under a root (mission sidecar locks). */
+async function listLockFiles(rootDir: string): Promise<string[]> {
+  const found: string[] = [];
+  const stack = [rootDir];
+  while (stack.length > 0) {
+    const dir = stack.pop();
+    let entries;
+    try {
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch {
+      continue; // Missing directory or unreadable: nothing to clean.
+    }
+    for (const entry of entries) {
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        stack.push(full);
+      } else if (entry.isFile() && entry.name.endsWith(".lock")) {
+        found.push(full);
+      }
+    }
+  }
+  return found;
+}
+
+/**
+ * Restore a clean transactional baseline after each test. A crashed or failed
+ * break-lock scenario can leave a stale mission lock, a pending transaction
+ * intent, or a stale global index lock; any of these makes the next test's
+ * bootstrap recovery throw `DM_MISSION_LOCK_STALE` and cascades across the
+ * suite. Each scenario sets up its own state inside the test, so clearing these
+ * leftovers between tests never destroys intentionally prepared fixtures.
+ */
+async function clearRecoveryLeftovers(): Promise<void> {
+  await rm(join(home, "index.json.lock"), { force: true });
+  await rm(join(home, "transactions"), { recursive: true, force: true });
+  for (const lock of await listLockFiles(workspace)) {
+    await rm(lock, { force: true });
+  }
 }
 
 /** Write a stale (dead-owner) mission lock at a sidecar, simulating a crash. */
@@ -589,11 +629,7 @@ function extractRecommendationId(stdout: string): string {
 /** Run find and return the stable recommendation id shown to the user. */
 async function findRecommendationId(): Promise<string> {
   const find = await runCli(["find", "--mood", "QUICK_WIN"]);
-  if (find.status !== 0) {
-    throw new Error(
-      "DIAG find exited " + find.status + " stderr:\n" + find.stderr + "\nstdout:\n" + find.stdout,
-    );
-  }
+  expect(find.status).toBe(0);
   return extractRecommendationId(find.stdout);
 }
 
@@ -789,6 +825,12 @@ afterAll(async () => {
   if (fakeGitDir !== "") await rm(fakeGitDir, { recursive: true, force: true });
   if (noCredGitDir !== "") await rm(noCredGitDir, { recursive: true, force: true });
   if (fixture !== "") await rm(join(fixture, ".."), { recursive: true, force: true });
+});
+
+afterEach(async () => {
+  if (home !== "" && workspace !== "") {
+    await clearRecoveryLeftovers();
+  }
 });
 
 describe("kestrel end-to-end workflow", () => {
