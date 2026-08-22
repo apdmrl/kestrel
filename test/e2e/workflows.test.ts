@@ -2058,299 +2058,309 @@ describe("kestrel end-to-end workflow", () => {
     expect((await readPersistedMission(sidecar)).mission.submissionVerification).toBe("NONE");
   }, 60_000);
 
-  it("cancels preparation gracefully with SIGINT and releases the lock", async () => {
-    searchCount = 0;
-    await rm(cloneStarted, { force: true });
-    const recommendationId = await findRecommendationId();
-    const accept = await runCli(["mission", "accept", "--id", recommendationId]);
-    expect(accept.status).toBe(0);
-    const missionId = extractMissionId(accept.stdout);
+  // POSIX-signal delivery semantics: `child.kill("SIGINT")`/`SIGTERM` deliver a
+  // catchable signal that runs the CLI's graceful handler and exits 130. On
+  // Windows, Node's child.kill with a signal force-terminates the child (the
+  // handler never runs and the exit code is not 130), so these scenarios are
+  // POSIX-only; the equivalent "no partial state / lock released / no secrets"
+  // invariants are covered on all platforms by the SIGKILL-cancellation and
+  // checkpoint-interruption tests.
+  describe.skipIf(process.platform === "win32")("POSIX signal cancellation", () => {
+    it("cancels preparation gracefully with SIGINT and releases the lock", async () => {
+      searchCount = 0;
+      await rm(cloneStarted, { force: true });
+      const recommendationId = await findRecommendationId();
+      const accept = await runCli(["mission", "accept", "--id", recommendationId]);
+      expect(accept.status).toBe(0);
+      const missionId = extractMissionId(accept.stdout);
 
-    // Gate the clone so the process is mid-critical-section, then SIGINT it.
-    const gateFile = await createGate("cancel-gate");
-    const child = spawnCli(["mission", "prepare", "--id", missionId], {
-      KESTREL_CLONE_GATE: gateFile,
-      KESTREL_CLONE_STARTED: cloneStarted,
-    });
-    try {
-      await waitForFile(cloneStarted);
-      child.child.kill("SIGINT");
-      // The signal terminates the in-flight git process; no gate release needed.
-      const result = await child.result;
-      expect(result.status).toBe(130);
-      expect(result.stderr).toMatch(/DM_(GIT|PROCESS)_CANCELLED/);
-    } finally {
-      // Unblock any straggler reader without hanging if none is waiting.
-      await releaseGate(gateFile);
-    }
+      // Gate the clone so the process is mid-critical-section, then SIGINT it.
+      const gateFile = await createGate("cancel-gate");
+      const child = spawnCli(["mission", "prepare", "--id", missionId], {
+        KESTREL_CLONE_GATE: gateFile,
+        KESTREL_CLONE_STARTED: cloneStarted,
+      });
+      try {
+        await waitForFile(cloneStarted);
+        child.child.kill("SIGINT");
+        // The signal terminates the in-flight git process; no gate release needed.
+        const result = await child.result;
+        expect(result.status).toBe(130);
+        expect(result.stderr).toMatch(/DM_(GIT|PROCESS)_CANCELLED/);
+      } finally {
+        // Unblock any straggler reader without hanging if none is waiting.
+        await releaseGate(gateFile);
+      }
 
-    // Graceful cancellation released the lock: resume works without break-lock.
-    const resumed = await runCli(["mission", "resume", "--id", missionId]);
-    expect(resumed.status).toBe(0);
-    expect(resumed.stdout).toContain("IN_PROGRESS");
-  }, 60_000);
+      // Graceful cancellation released the lock: resume works without break-lock.
+      const resumed = await runCli(["mission", "resume", "--id", missionId]);
+      expect(resumed.status).toBe(0);
+      expect(resumed.stdout).toContain("IN_PROGRESS");
+    }, 60_000);
 
-  it("cancels device polling with SIGINT (exit 130, no partial state)", async () => {
-    devicePending = true;
-    devicePollCount = 0;
-    try {
+    it("cancels device polling with SIGINT (exit 130, no partial state)", async () => {
+      devicePending = true;
+      devicePollCount = 0;
+      try {
+        const child = spawnCli(["--json", "find", "--mood", "QUICK_WIN"], {
+          PATH: prependToPath(noCredGitDir),
+          GITHUB_CLIENT_ID: "test-client-id",
+        });
+        await waitFor(async () => devicePollCount >= 1, "device polling started");
+        child.child.kill("SIGINT");
+        const result = await child.result;
+        expect(result.status).toBe(130);
+        expect(result.stderr).toContain("DM_GITHUB_AUTH_CANCELLED");
+        // No secrets, no partial state.
+        expect(result.stdout + result.stderr).not.toContain("DEVICE_FLOW_ACCESS_TOKEN");
+        expect(result.stdout + result.stderr).not.toContain("device-code-secret");
+      } finally {
+        devicePending = false;
+      }
+      const after = await runCli(["journey"]);
+      expect(after.status).toBe(0);
+    }, 60_000);
+
+    it("cancels a blocked discovery request with SIGINT (exit 130)", async () => {
+      searchCount = 0;
+      searchHold = true;
+      searchArrived = false;
+      releaseSearchHold = undefined;
+      const discovery = spawnCli(["find", "--mood", "QUICK_WIN"]);
+      try {
+        await waitFor(() => searchArrived, "search request arrived");
+        discovery.child.kill("SIGINT");
+        const result = await discovery.result;
+        expect(result.status).toBe(130);
+        expect(result.stderr).toContain("DM_PROCESS_CANCELLED");
+      } finally {
+        searchHold = false;
+        releaseSearchHold?.();
+      }
+    }, 60_000);
+
+    it("cancels a hanging cached-token validation with SIGINT (exit 130, no mutation)", async () => {
+      searchCount = 0;
+      // A successful find stores a cached credential through the fake git helper.
+      const seeded = await runCli(["--json", "find", "--mood", "QUICK_WIN"], {
+        PATH: prependToPath(noCredGitDir),
+        GITHUB_CLIENT_ID: "test-client-id",
+      });
+      expect(seeded.status).toBe(0);
+
+      // Now hold the /user endpoint so cached-token validation hangs.
+      userHold = true;
+      userArrived = false;
+      releaseUserHold = undefined;
       const child = spawnCli(["--json", "find", "--mood", "QUICK_WIN"], {
         PATH: prependToPath(noCredGitDir),
         GITHUB_CLIENT_ID: "test-client-id",
       });
-      await waitFor(async () => devicePollCount >= 1, "device polling started");
-      child.child.kill("SIGINT");
-      const result = await child.result;
-      expect(result.status).toBe(130);
-      expect(result.stderr).toContain("DM_GITHUB_AUTH_CANCELLED");
-      // No secrets, no partial state.
-      expect(result.stdout + result.stderr).not.toContain("DEVICE_FLOW_ACCESS_TOKEN");
-      expect(result.stdout + result.stderr).not.toContain("device-code-secret");
-    } finally {
-      devicePending = false;
-    }
-    const after = await runCli(["journey"]);
-    expect(after.status).toBe(0);
-  }, 60_000);
+      try {
+        await waitFor(() => userArrived, "cached-token validation arrived");
+        child.child.kill("SIGINT");
+        const result = await child.result;
+        expect(result.status).toBe(130);
+        expect(result.stderr).toMatch(/DM_(GITHUB_AUTH_CANCELLED|PROCESS_CANCELLED)/);
+        // No secrets, and no partial state was persisted by the cancelled command.
+        expect(result.stdout + result.stderr).not.toContain("FAKE_TOKEN_XYZ");
+        expect(result.stdout + result.stderr).not.toContain("DEVICE_FLOW_ACCESS_TOKEN");
+      } finally {
+        userHold = false;
+        releaseUserHold?.();
+      }
+      const after = await runCli(["journey"]);
+      expect(after.status).toBe(0);
+    }, 60_000);
 
-  it("cancels a blocked discovery request with SIGINT (exit 130)", async () => {
-    searchCount = 0;
-    searchHold = true;
-    searchArrived = false;
-    releaseSearchHold = undefined;
-    const discovery = spawnCli(["find", "--mood", "QUICK_WIN"]);
-    try {
-      await waitFor(() => searchArrived, "search request arrived");
-      discovery.child.kill("SIGINT");
-      const result = await discovery.result;
-      expect(result.status).toBe(130);
-      expect(result.stderr).toContain("DM_PROCESS_CANCELLED");
-    } finally {
-      searchHold = false;
-      releaseSearchHold?.();
-    }
-  }, 60_000);
+    it("cancels a hanging device-flow initialization with SIGINT (exit 130, no mutation)", async () => {
+      deviceCodeHold = true;
+      deviceCodeArrived = false;
+      releaseDeviceCodeHold = undefined;
+      const child = spawnCli(["--json", "find", "--mood", "QUICK_WIN"], {
+        PATH: prependToPath(noCredGitDir),
+        GITHUB_CLIENT_ID: "test-client-id",
+      });
+      try {
+        await waitFor(() => deviceCodeArrived, "device-flow initialization arrived");
+        child.child.kill("SIGINT");
+        const result = await child.result;
+        expect(result.status).toBe(130);
+        expect(result.stderr).toMatch(/DM_(GITHUB_AUTH_CANCELLED|PROCESS_CANCELLED)/);
+        expect(result.stdout + result.stderr).not.toContain("DEVICE_FLOW_ACCESS_TOKEN");
+        expect(result.stdout + result.stderr).not.toContain("device-code-secret");
+      } finally {
+        deviceCodeHold = false;
+        releaseDeviceCodeHold?.();
+      }
+      const after = await runCli(["journey"]);
+      expect(after.status).toBe(0);
+    }, 60_000);
 
-  it("cancels a hanging cached-token validation with SIGINT (exit 130, no mutation)", async () => {
-    searchCount = 0;
-    // A successful find stores a cached credential through the fake git helper.
-    const seeded = await runCli(["--json", "find", "--mood", "QUICK_WIN"], {
-      PATH: prependToPath(noCredGitDir),
-      GITHUB_CLIENT_ID: "test-client-id",
-    });
-    expect(seeded.status).toBe(0);
+    it("cancels device-flow initialization with SIGINT (exit 130, no credential mutation)", async () => {
+      deviceCodeHold = true;
+      deviceCodeArrived = false;
+      releaseDeviceCodeHold = undefined;
+      const child = spawnCli(["--json", "find", "--mood", "QUICK_WIN"], {
+        PATH: prependToPath(noCredGitDir),
+        GITHUB_CLIENT_ID: "test-client-id",
+      });
+      try {
+        // Wait until the child is alive and has entered device-flow initialization,
+        // then abort. The gateway rejects a pre-aborted beginDeviceFlow before
+        // invoking the device-auth factory, so no credential is ever written.
+        await waitFor(() => deviceCodeArrived, "device-flow initialization arrived");
+        child.child.kill("SIGINT");
+        const result = await child.result;
+        expect(result.status).toBe(130);
+        expect(result.stderr).toMatch(/DM_(GITHUB_AUTH_CANCELLED|PROCESS_CANCELLED)/);
+        // No secrets were leaked and no credential/partial state was persisted.
+        expect(result.stdout + result.stderr).not.toContain("DEVICE_FLOW_ACCESS_TOKEN");
+        expect(result.stdout + result.stderr).not.toContain("device-code-secret");
+      } finally {
+        deviceCodeHold = false;
+        releaseDeviceCodeHold?.();
+      }
+      // A follow-up command still works: the cancelled run left no mutation.
+      const after = await runCli(["--json", "find", "--mood", "QUICK_WIN"], {
+        PATH: prependToPath(noCredGitDir),
+        GITHUB_CLIENT_ID: "test-client-id",
+      });
+      expect(after.status).toBe(0);
+    }, 60_000);
 
-    // Now hold the /user endpoint so cached-token validation hangs.
-    userHold = true;
-    userArrived = false;
-    releaseUserHold = undefined;
-    const child = spawnCli(["--json", "find", "--mood", "QUICK_WIN"], {
-      PATH: prependToPath(noCredGitDir),
-      GITHUB_CLIENT_ID: "test-client-id",
-    });
-    try {
-      await waitFor(() => userArrived, "cached-token validation arrived");
-      child.child.kill("SIGINT");
-      const result = await child.result;
-      expect(result.status).toBe(130);
-      expect(result.stderr).toMatch(/DM_(GITHUB_AUTH_CANCELLED|PROCESS_CANCELLED)/);
-      // No secrets, and no partial state was persisted by the cancelled command.
-      expect(result.stdout + result.stderr).not.toContain("FAKE_TOKEN_XYZ");
-      expect(result.stdout + result.stderr).not.toContain("DEVICE_FLOW_ACCESS_TOKEN");
-    } finally {
-      userHold = false;
-      releaseUserHold?.();
-    }
-    const after = await runCli(["journey"]);
-    expect(after.status).toBe(0);
-  }, 60_000);
+    it("cancels an in-flight git process with SIGINT (terminated, not manually released)", async () => {
+      searchCount = 0;
+      await rm(cloneStarted, { force: true });
+      const recommendationId = await findRecommendationId();
+      const accept = await runCli(["mission", "accept", "--id", recommendationId]);
+      expect(accept.status).toBe(0);
+      const missionId = extractMissionId(accept.stdout);
 
-  it("cancels a hanging device-flow initialization with SIGINT (exit 130, no mutation)", async () => {
-    deviceCodeHold = true;
-    deviceCodeArrived = false;
-    releaseDeviceCodeHold = undefined;
-    const child = spawnCli(["--json", "find", "--mood", "QUICK_WIN"], {
-      PATH: prependToPath(noCredGitDir),
-      GITHUB_CLIENT_ID: "test-client-id",
-    });
-    try {
-      await waitFor(() => deviceCodeArrived, "device-flow initialization arrived");
-      child.child.kill("SIGINT");
-      const result = await child.result;
-      expect(result.status).toBe(130);
-      expect(result.stderr).toMatch(/DM_(GITHUB_AUTH_CANCELLED|PROCESS_CANCELLED)/);
-      expect(result.stdout + result.stderr).not.toContain("DEVICE_FLOW_ACCESS_TOKEN");
-      expect(result.stdout + result.stderr).not.toContain("device-code-secret");
-    } finally {
-      deviceCodeHold = false;
-      releaseDeviceCodeHold?.();
-    }
-    const after = await runCli(["journey"]);
-    expect(after.status).toBe(0);
-  }, 60_000);
+      const gateFile = await createGate("git-cancel-gate");
+      const child = spawnCli(["mission", "prepare", "--id", missionId], {
+        KESTREL_CLONE_GATE: gateFile,
+        KESTREL_CLONE_STARTED: cloneStarted,
+      });
+      try {
+        await waitForFile(cloneStarted);
+        child.child.kill("SIGINT");
+        // The git process is terminated by the signal; do NOT release the gate.
+        const result = await child.result;
+        expect(result.status).toBe(130);
+        expect(result.stderr).toMatch(/DM_(GIT|PROCESS)_CANCELLED/);
+      } finally {
+        // No reader should remain (the git process was terminated). Unblock any
+        // straggler without hanging the test if none is waiting to read.
+        await releaseGate(gateFile);
+      }
 
-  it("cancels device-flow initialization with SIGINT (exit 130, no credential mutation)", async () => {
-    deviceCodeHold = true;
-    deviceCodeArrived = false;
-    releaseDeviceCodeHold = undefined;
-    const child = spawnCli(["--json", "find", "--mood", "QUICK_WIN"], {
-      PATH: prependToPath(noCredGitDir),
-      GITHUB_CLIENT_ID: "test-client-id",
-    });
-    try {
-      // Wait until the child is alive and has entered device-flow initialization,
-      // then abort. The gateway rejects a pre-aborted beginDeviceFlow before
-      // invoking the device-auth factory, so no credential is ever written.
-      await waitFor(() => deviceCodeArrived, "device-flow initialization arrived");
-      child.child.kill("SIGINT");
-      const result = await child.result;
-      expect(result.status).toBe(130);
-      expect(result.stderr).toMatch(/DM_(GITHUB_AUTH_CANCELLED|PROCESS_CANCELLED)/);
-      // No secrets were leaked and no credential/partial state was persisted.
-      expect(result.stdout + result.stderr).not.toContain("DEVICE_FLOW_ACCESS_TOKEN");
-      expect(result.stdout + result.stderr).not.toContain("device-code-secret");
-    } finally {
-      deviceCodeHold = false;
-      releaseDeviceCodeHold?.();
-    }
-    // A follow-up command still works: the cancelled run left no mutation.
-    const after = await runCli(["--json", "find", "--mood", "QUICK_WIN"], {
-      PATH: prependToPath(noCredGitDir),
-      GITHUB_CLIENT_ID: "test-client-id",
-    });
-    expect(after.status).toBe(0);
-  }, 60_000);
+      // The mission lock was released and the mission remains resumable.
+      const resumed = await runCli(["mission", "resume", "--id", missionId]);
+      expect(resumed.status).toBe(0);
+      expect(resumed.stdout).toContain("IN_PROGRESS");
+    }, 60_000);
 
-  it("cancels an in-flight git process with SIGINT (terminated, not manually released)", async () => {
-    searchCount = 0;
-    await rm(cloneStarted, { force: true });
-    const recommendationId = await findRecommendationId();
-    const accept = await runCli(["mission", "accept", "--id", recommendationId]);
-    expect(accept.status).toBe(0);
-    const missionId = extractMissionId(accept.stdout);
+    it("cancels a blocked discovery request with SIGTERM (exit 130)", async () => {
+      searchCount = 0;
+      searchHold = true;
+      searchArrived = false;
+      releaseSearchHold = undefined;
+      const discovery = spawnCli(["find", "--mood", "QUICK_WIN"]);
+      try {
+        await waitFor(() => searchArrived, "search request arrived");
+        discovery.child.kill("SIGTERM");
+        const result = await discovery.result;
+        expect(result.status).toBe(130);
+        expect(result.stderr).toContain("DM_PROCESS_CANCELLED");
+      } finally {
+        searchHold = false;
+        releaseSearchHold?.();
+      }
+    }, 60_000);
 
-    const gateFile = await createGate("git-cancel-gate");
-    const child = spawnCli(["mission", "prepare", "--id", missionId], {
-      KESTREL_CLONE_GATE: gateFile,
-      KESTREL_CLONE_STARTED: cloneStarted,
-    });
-    try {
-      await waitForFile(cloneStarted);
-      child.child.kill("SIGINT");
-      // The git process is terminated by the signal; do NOT release the gate.
-      const result = await child.result;
-      expect(result.status).toBe(130);
-      expect(result.stderr).toMatch(/DM_(GIT|PROCESS)_CANCELLED/);
-    } finally {
-      // No reader should remain (the git process was terminated). Unblock any
-      // straggler without hanging the test if none is waiting to read.
-      await releaseGate(gateFile);
-    }
+    it("cancels preparation with SIGTERM while holding the lock, then resumes without duplicates", async () => {
+      searchCount = 0;
+      await rm(cloneStarted, { force: true });
+      const recommendationId = await findRecommendationId();
+      const accept = await runCli(["mission", "accept", "--id", recommendationId]);
+      expect(accept.status).toBe(0);
+      const missionId = extractMissionId(accept.stdout);
+      const sidecar = await findSidecarFor(missionId);
 
-    // The mission lock was released and the mission remains resumable.
-    const resumed = await runCli(["mission", "resume", "--id", missionId]);
-    expect(resumed.status).toBe(0);
-    expect(resumed.stdout).toContain("IN_PROGRESS");
-  }, 60_000);
+      // Hold the clone gate so the process is mid-critical-section holding the lock.
+      const gateFile = await createGate("sigterm-gate");
+      const child = spawnCli(["mission", "prepare", "--id", missionId], {
+        KESTREL_CLONE_GATE: gateFile,
+        KESTREL_CLONE_STARTED: cloneStarted,
+      });
+      try {
+        await waitForFile(cloneStarted);
+        await waitForFile(join(sidecar, ".lock"));
+        child.child.kill("SIGTERM");
+        const result = await child.result;
+        expect(result.status).toBe(130);
+        expect(result.stderr).toMatch(/DM_(GIT|PROCESS)_CANCELLED/);
+      } finally {
+        await releaseGate(gateFile);
+      }
 
-  it("cancels a blocked discovery request with SIGTERM (exit 130)", async () => {
-    searchCount = 0;
-    searchHold = true;
-    searchArrived = false;
-    releaseSearchHold = undefined;
-    const discovery = spawnCli(["find", "--mood", "QUICK_WIN"]);
-    try {
-      await waitFor(() => searchArrived, "search request arrived");
-      discovery.child.kill("SIGTERM");
-      const result = await discovery.result;
-      expect(result.status).toBe(130);
-      expect(result.stderr).toContain("DM_PROCESS_CANCELLED");
-    } finally {
-      searchHold = false;
-      releaseSearchHold?.();
-    }
-  }, 60_000);
+      // The lock was released, no partial mutation, and resume succeeds.
+      await expect(stat(join(sidecar, ".lock"))).rejects.toThrow();
+      const resumed = await runCli(["mission", "resume", "--id", missionId]);
+      expect(resumed.status).toBe(0);
+      expect(resumed.stdout).toContain("IN_PROGRESS");
+      // No duplicate preparation-started event for THIS mission from the
+      // cancelled attempt (the shared journey holds events for every test's
+      // missions, so filter by this mission id).
+      const myEvents = (await readJourneyEvents()).filter((e) => e.missionId === missionId);
+      expect(myEvents.filter((e) => e.type === "MissionPreparationStarted")).toHaveLength(1);
+    }, 60_000);
 
-  it("cancels preparation with SIGTERM while holding the lock, then resumes without duplicates", async () => {
-    searchCount = 0;
-    await rm(cloneStarted, { force: true });
-    const recommendationId = await findRecommendationId();
-    const accept = await runCli(["mission", "accept", "--id", recommendationId]);
-    expect(accept.status).toBe(0);
-    const missionId = extractMissionId(accept.stdout);
-    const sidecar = await findSidecarFor(missionId);
-
-    // Hold the clone gate so the process is mid-critical-section holding the lock.
-    const gateFile = await createGate("sigterm-gate");
-    const child = spawnCli(["mission", "prepare", "--id", missionId], {
-      KESTREL_CLONE_GATE: gateFile,
-      KESTREL_CLONE_STARTED: cloneStarted,
-    });
-    try {
-      await waitForFile(cloneStarted);
-      await waitForFile(join(sidecar, ".lock"));
-      child.child.kill("SIGTERM");
-      const result = await child.result;
-      expect(result.status).toBe(130);
-      expect(result.stderr).toMatch(/DM_(GIT|PROCESS)_CANCELLED/);
-    } finally {
-      await releaseGate(gateFile);
-    }
-
-    // The lock was released, no partial mutation, and resume succeeds.
-    await expect(stat(join(sidecar, ".lock"))).rejects.toThrow();
-    const resumed = await runCli(["mission", "resume", "--id", missionId]);
-    expect(resumed.status).toBe(0);
-    expect(resumed.stdout).toContain("IN_PROGRESS");
-    // No duplicate preparation-started event for THIS mission from the
-    // cancelled attempt (the shared journey holds events for every test's
-    // missions, so filter by this mission id).
-    const myEvents = (await readJourneyEvents()).filter((e) => e.missionId === missionId);
-    expect(myEvents.filter((e) => e.type === "MissionPreparationStarted")).toHaveLength(1);
-  }, 60_000);
-
-  it("cancels a blocked submission verification with SIGINT (exit 130)", async () => {
-    searchCount = 0;
-    const recommendationId = await findRecommendationId();
-    const accept = await runCli(["mission", "accept", "--id", recommendationId]);
-    expect(accept.status).toBe(0);
-    const missionId = extractMissionId(accept.stdout);
-    const prepare = await runCli(["mission", "prepare", "--id", missionId]);
-    expect(prepare.status).toBe(0);
-    const repo = await findRepoForMission(missionId);
-    await writeFile(join(repo, "fix.txt"), "fixed\n", "utf8");
-    await runGit(repo, ["add", "fix.txt"]);
-    await runGit(repo, ["commit", "-m", "fix the bug"]);
-    const headSha = (
-      await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" })
-    ).stdout.trim();
-    prFixture = {
-      number: 31,
-      author: "octocat",
-      state: "open",
-      body: "closes #42",
-      commits: [headSha],
-    };
-    pullsHold = true;
-    pullsArrived = false;
-    releasePullsHold = undefined;
-    const verify = spawnCli(["verify", "submission", "--id", missionId, "--pr", "31"]);
-    try {
-      await waitFor(() => pullsArrived, "pull-request request arrived");
-      verify.child.kill("SIGINT");
-      const result = await verify.result;
-      expect(result.status).toBe(130);
-      expect(result.stderr).toContain("DM_PROCESS_CANCELLED");
-    } finally {
-      pullsHold = false;
-      releasePullsHold?.();
-      prFixture = undefined;
-    }
-    // No partial mutation: submission verification stays NONE.
-    expect(
-      (await readPersistedMission(await findSidecarFor(missionId))).mission.submissionVerification,
-    ).toBe("NONE");
-  }, 60_000);
+    it("cancels a blocked submission verification with SIGINT (exit 130)", async () => {
+      searchCount = 0;
+      const recommendationId = await findRecommendationId();
+      const accept = await runCli(["mission", "accept", "--id", recommendationId]);
+      expect(accept.status).toBe(0);
+      const missionId = extractMissionId(accept.stdout);
+      const prepare = await runCli(["mission", "prepare", "--id", missionId]);
+      expect(prepare.status).toBe(0);
+      const repo = await findRepoForMission(missionId);
+      await writeFile(join(repo, "fix.txt"), "fixed\n", "utf8");
+      await runGit(repo, ["add", "fix.txt"]);
+      await runGit(repo, ["commit", "-m", "fix the bug"]);
+      const headSha = (
+        await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" })
+      ).stdout.trim();
+      prFixture = {
+        number: 31,
+        author: "octocat",
+        state: "open",
+        body: "closes #42",
+        commits: [headSha],
+      };
+      pullsHold = true;
+      pullsArrived = false;
+      releasePullsHold = undefined;
+      const verify = spawnCli(["verify", "submission", "--id", missionId, "--pr", "31"]);
+      try {
+        await waitFor(() => pullsArrived, "pull-request request arrived");
+        verify.child.kill("SIGINT");
+        const result = await verify.result;
+        expect(result.status).toBe(130);
+        expect(result.stderr).toContain("DM_PROCESS_CANCELLED");
+      } finally {
+        pullsHold = false;
+        releasePullsHold?.();
+        prFixture = undefined;
+      }
+      // No partial mutation: submission verification stays NONE.
+      expect(
+        (await readPersistedMission(await findSidecarFor(missionId))).mission
+          .submissionVerification,
+      ).toBe("NONE");
+    }, 60_000);
+  });
 
   it("classifies primary and secondary GitHub rate limits without partial mutation", async () => {
     searchCount = 0;
