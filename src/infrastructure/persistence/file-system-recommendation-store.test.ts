@@ -1,4 +1,4 @@
-import { mkdtemp, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -292,6 +292,53 @@ describe("migrateLegacyRecommendation", () => {
     expect(await migrateLegacyRecommendation(legacyPath, store)).toBe(true);
     await expect(stat(legacyPath)).rejects.toThrow();
     expect((await store.load("challenge-a" as ChallengeId))?.confidence).toBe(0.9);
+  });
+
+  it("never overwrites a recommendation.json recreated inside the restore window", async () => {
+    const legacyPath = join(dir, "recommendation.json");
+    const store = new FileSystemRecommendationStore(join(dir, "recommendations"));
+    const original = makeRecommendation(makeChallenge("challenge-a", "Fix crash on startup"), 0.9);
+    await writeFile(
+      legacyPath,
+      JSON.stringify({
+        schemaVersion: 1,
+        recommendationId: "challenge-a",
+        recommendation: toPersistedRecommendation(original),
+      }),
+      "utf8",
+    );
+
+    // A store whose save always fails triggers the failure-restoration path.
+    const failingStore: RecommendationStore = {
+      save: async () => {
+        throw new Error("transient write failure");
+      },
+      load: (id) => store.load(id),
+    };
+
+    // The writer snapshot recreated concurrently, which must survive unchanged.
+    const writerContent = JSON.stringify({
+      schemaVersion: 1,
+      recommendationId: "challenge-b",
+      recommendation: toPersistedRecommendation(
+        makeRecommendation(makeChallenge("challenge-b", "Add documentation"), 0.7),
+      ),
+    });
+
+    // Deterministic seam: recreate recommendation.json after restoration has
+    // observed absence but before it attempts restoration.
+    const diag: string[] = [];
+    await migrateLegacyRecommendation(legacyPath, failingStore, (m) => diag.push(m), {
+      beforeRestore: async () => {
+        await writeFile(legacyPath, writerContent, "utf8");
+      },
+    });
+
+    // The concurrently recreated writer file is byte-for-byte unchanged.
+    expect(await readFile(legacyPath, "utf8")).toBe(writerContent);
+    // The owned staging evidence remains recoverable.
+    expect((await readdir(dir)).filter((e) => e.endsWith(".staging"))).toHaveLength(1);
+    expect(diag.length).toBeGreaterThan(0);
   });
 
   it("recovers an orphaned staging file left by a crashed migration on the next bootstrap", async () => {

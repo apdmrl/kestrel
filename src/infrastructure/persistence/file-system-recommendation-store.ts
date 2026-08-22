@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { lstat, mkdir, readdir, rename, rm } from "node:fs/promises";
+import { link, lstat, mkdir, readdir, rename, rm } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { z } from "zod";
 import { createKestrelError } from "../../application/errors/kestrel-error.js";
@@ -146,6 +146,12 @@ function isEnoent(error: unknown): boolean {
   );
 }
 
+function isEexist(error: unknown): boolean {
+  return (
+    typeof error === "object" && error !== null && (error as { code?: string }).code === "EEXIST"
+  );
+}
+
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -163,6 +169,12 @@ function stagingPatternFor(legacyPath: string): RegExp {
 export interface MigrationHooks {
   /** Test seam fired immediately after the legacy file is claimed (renamed). */
   readonly afterClaim?: (stagingPath: string) => Promise<void> | void;
+  /**
+   * Test seam fired after failure restoration has observed that the legacy
+   * pathname is absent but BEFORE restoration is attempted. Used to simulate a
+   * concurrent writer recreating the pathname inside the restore window.
+   */
+  readonly beforeRestore?: (stagingPath: string, restoreTo: string) => Promise<void> | void;
 }
 
 /**
@@ -176,6 +188,7 @@ async function processStagingFile(
   store: RecommendationStore,
   onDiagnostic: (message: string) => void,
   restoreTo?: string,
+  hooks: MigrationHooks = {},
 ): Promise<boolean> {
   let envelope;
   try {
@@ -191,14 +204,14 @@ async function processStagingFile(
   const result = fromPersistedRecommendationSnapshot(envelope.recommendation);
   if (!result.ok || envelope.recommendationId !== result.value.challenge.id) {
     onDiagnostic("Legacy recommendation was inconsistent and was left in place for manual review.");
-    await restoreOrPreserve(stagingPath, restoreTo, onDiagnostic);
+    await restoreOrPreserve(stagingPath, restoreTo, onDiagnostic, hooks);
     return false;
   }
   try {
     await store.save(result.value);
   } catch {
     onDiagnostic("Legacy recommendation could not be migrated and was left in place.");
-    await restoreOrPreserve(stagingPath, restoreTo, onDiagnostic);
+    await restoreOrPreserve(stagingPath, restoreTo, onDiagnostic, hooks);
     return false;
   }
   // The identical snapshot is now durably confirmed installed; remove ONLY this
@@ -213,6 +226,7 @@ async function restoreOrPreserve(
   stagingPath: string,
   restoreTo: string | undefined,
   onDiagnostic: (message: string) => void,
+  hooks: MigrationHooks = {},
 ): Promise<void> {
   if (restoreTo === undefined) {
     return; // orphan recovery: leave the staging file as evidence.
@@ -233,9 +247,26 @@ async function restoreOrPreserve(
     );
     return;
   }
-  await rename(stagingPath, restoreTo).catch(() => {
+  if (hooks.beforeRestore !== undefined) {
+    await hooks.beforeRestore(stagingPath, restoreTo);
+  }
+  // Restore with an atomic no-replace primitive so a pathname recreated after
+  // the absence observation is never overwritten or deleted. A hard link fails
+  // with EEXIST if the target already exists (same parent directory, same
+  // volume), so exclusive ownership is proven atomically; on success the owned
+  // staging name is removed, leaving the restored pathname as the live file.
+  try {
+    await link(stagingPath, restoreTo);
+    await rm(stagingPath);
+  } catch (error) {
+    if (isEexist(error)) {
+      onDiagnostic(
+        "A newer legacy recommendation appeared during restoration; migrated evidence is preserved in a staging file.",
+      );
+      return;
+    }
     onDiagnostic("Could not restore the legacy recommendation file after a failed migration.");
-  });
+  }
 }
 
 /**
@@ -268,7 +299,7 @@ export async function migrateLegacyRecommendation(
       continue;
     }
     const stagingPath = join(parent, entry);
-    if (await processStagingFile(stagingPath, store, onDiagnostic)) {
+    if (await processStagingFile(stagingPath, store, onDiagnostic, undefined, hooks)) {
       recovered = true;
     }
   }
@@ -287,6 +318,6 @@ export async function migrateLegacyRecommendation(
   if (hooks.afterClaim !== undefined) {
     await hooks.afterClaim(stagingPath);
   }
-  const migrated = await processStagingFile(stagingPath, store, onDiagnostic, legacyPath);
+  const migrated = await processStagingFile(stagingPath, store, onDiagnostic, legacyPath, hooks);
   return migrated || recovered;
 }
