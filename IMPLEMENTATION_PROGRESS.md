@@ -128,6 +128,19 @@ Current phase: general-release-review fix pass — in progress
 
 - [ ] **Task 9 / KGR-009 — Fail closed on malformed process identity.** (RED → GREEN pending)
 
+- [x] **Task 9 / KGR-009 — Fail closed on malformed process identity.**
+  - RED: added `process-liveness.test.ts` cases asserting a malformed boot id or start ticks on
+    a live pid is treated as unknown/live (fail closed, never stale) while a well-formed,
+    verified mismatch remains stale. Failed (`false` for malformed) before the fix.
+  - GREEN: `npx vitest run src/infrastructure/system/process-liveness.test.ts
+    src/infrastructure/locking/file-mission-lock.test.ts` (37 tests) pass; typecheck/lint/format
+    clean.
+  - Implementation: added `isWellFormedIdentity` (UUID-shaped boot id + decimal start ticks)
+    and made `defaultIsProcessAlive` treat a malformed/unreadable owner identity as unknown/live,
+    never authorizing deletion. Tightened the lock/guard identity schemas to canonical formats
+    (a malformed-identity lock fails closed as `DM_STATE_CORRUPTED`). Updated the lock
+    mismatch-test fixture to a well-formed mismatched UUID.
+
 - [ ] **Task 10 / KGR-010 — Add SIGTERM acceptance coverage.** (RED → GREEN pending)
 
 - [ ] **Task 11 / KGR-011 — Make verification claims reproducible.** (RED → GREEN pending)

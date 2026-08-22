@@ -23,8 +23,8 @@ import {
 } from "../system/process-liveness.js";
 
 const identitySchema = z.object({
-  bootId: z.string().min(1),
-  startTicks: z.string().min(1),
+  bootId: z.string().regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i),
+  startTicks: z.string().regex(/^\d+$/),
 });
 
 const lockFileSchema = z.object({

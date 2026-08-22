@@ -12,6 +12,18 @@ export interface ProcessIdentity {
   readonly startTicks: string;
 }
 
+const BOOT_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const START_TICKS_RE = /^\d+$/;
+
+/**
+ * Whether a process identity is in the canonical format: a UUID-shaped boot id
+ * and a non-negative decimal start-ticks string. A syntactically malformed
+ * identity is untrustworthy and must never authorize a destructive decision.
+ */
+export function isWellFormedIdentity(identity: ProcessIdentity): boolean {
+  return BOOT_ID_RE.test(identity.bootId) && START_TICKS_RE.test(identity.startTicks);
+}
+
 /**
  * Parse field 22 (starttime, in clock ticks since boot) from a `/proc/<pid>/stat`
  * line. The command field may itself contain spaces and `)`, so the state fields
@@ -74,6 +86,11 @@ export function defaultIsProcessAlive(
     return false;
   }
   if (ownerIdentity === undefined) {
+    return true;
+  }
+  // A malformed or unreadable identity for an otherwise live pid is treated as
+  // unknown/live and must never authorize deletion (fail closed).
+  if (!isWellFormedIdentity(ownerIdentity)) {
     return true;
   }
   const current = readProcessIdentity(pid);

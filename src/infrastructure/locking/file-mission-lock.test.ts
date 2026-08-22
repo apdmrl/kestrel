@@ -121,9 +121,14 @@ describe("FileMissionLock", () => {
   });
 
   it("classifies a live pid with a mismatched identity as stale (pid reuse)", async () => {
-    // process.pid is alive, but the lock names an identity that does not match
-    // the current process, so the pid must have been recycled.
-    await writeLock(identityLockContent(process.pid, { bootId: "none", startTicks: "1" }));
+    // process.pid is alive, but the lock names a well-formed identity that does
+    // not match the current process, so the pid must have been recycled.
+    await writeLock(
+      identityLockContent(process.pid, {
+        bootId: "00000000-0000-0000-0000-000000000000",
+        startTicks: "1",
+      }),
+    );
     const lock = new FileMissionLock();
     await expectCode(
       lock.withMissionLock(lockPath(), missionId, "complete", async () => undefined),
@@ -131,6 +136,16 @@ describe("FileMissionLock", () => {
     );
     await lock.breakStaleLock(lockPath());
     await expect(stat(lockPath())).rejects.toThrow();
+  });
+
+  it("fails closed on a malformed identity for a live pid (never classified as stale)", async () => {
+    await writeLock(identityLockContent(process.pid, { bootId: "malformed", startTicks: "1" }));
+    const lock = new FileMissionLock();
+    // A malformed identity must never authorize stale (deletable) classification.
+    await expectCode(
+      lock.withMissionLock(lockPath(), missionId, "complete", async () => undefined),
+      "DM_STATE_CORRUPTED",
+    );
   });
 
   it("keeps a live process with an exact identity match authoritative", async () => {

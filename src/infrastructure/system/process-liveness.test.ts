@@ -111,4 +111,39 @@ describe("defaultIsProcessAlive", () => {
   it("treats an absent pid without identity as stale", () => {
     expect(defaultIsProcessAlive(99999999, undefined)).toBe(false);
   });
+
+  it("treats a malformed boot id on a live pid as unknown/live (fail closed)", () => {
+    if (platform() !== "linux" || readProcessIdentity(process.pid) === undefined) {
+      return;
+    }
+    expect(defaultIsProcessAlive(process.pid, { bootId: "not-a-uuid", startTicks: "1" })).toBe(
+      true,
+    );
+  });
+
+  it("treats a malformed start ticks on a live pid as unknown/live (fail closed)", () => {
+    if (platform() !== "linux" || readProcessIdentity(process.pid) === undefined) {
+      return;
+    }
+    expect(
+      defaultIsProcessAlive(process.pid, {
+        bootId: "00000000-0000-0000-0000-000000000000",
+        startTicks: "not-decimal",
+      }),
+    ).toBe(true);
+  });
+
+  it("still classifies a well-formed, verified identity mismatch as stale", () => {
+    if (platform() !== "linux" || readProcessIdentity(process.pid) === undefined) {
+      return;
+    }
+    // A canonical UUID boot id that differs from the live pid's is a verified
+    // (well-formed) mismatch, so it remains a stale/reused pid.
+    expect(
+      defaultIsProcessAlive(process.pid, {
+        bootId: "00000000-0000-0000-0000-000000000000",
+        startTicks: "999999",
+      }),
+    ).toBe(false);
+  });
 });
