@@ -35,47 +35,14 @@ jobs:
         run: npm run format:check
       - name: Typecheck
         run: npm run typecheck
-      - name: Tests (JUnit + verbose)
+      - name: Tests
+        env:
+          NODE_OPTIONS: --trace-uncaught --unhandled-rejections=strict --enable-source-maps
         run: |
-          set -o pipefail
-          npm test -- --reporter=verbose --reporter=junit --reporter=github-actions --outputFile=junit.xml 2>&1 | tee test-output.log
-      - name: Extract failed test names
-        if: always()
-        run: |
-          node -e '
-            const fs = require("fs");
-            const xml = fs.existsSync("junit.xml") ? fs.readFileSync("junit.xml", "utf8") : "";
-            const re = /<testcase classname="([^"]+)" name="([^"]+)"[^>]*>\s*<failure/g;
-            const out = [];
-            let m;
-            while ((m = re.exec(xml))) out.push(m[1] + " :: " + m[2]);
-            fs.writeFileSync("failed-tests.txt", out.join("\n") + (out.length ? "" : ""));
-            console.log(out.length + " failing test case(s) recorded.");
-          '
+          npm test -- --reporter=verbose --reporter=github-actions
       - name: Write failure summary
         if: always()
         run: |
-          {
-            echo "## Test results (${{ runner.os }}, attempt ${{ github.run_attempt }})"
-            echo
-            if [ -f failed-tests.txt ] && [ -s failed-tests.txt ]; then
-              echo "Failing tests:"
-              sed 's/^/ - /' failed-tests.txt
-            else
-              echo "No failing tests recorded."
-            fi
-          } >> "$GITHUB_STEP_SUMMARY"
-      - name: Upload test artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: test-results-${{ matrix.os }}-${{ github.run_attempt }}
-          path: |
-            junit.xml
-            test-output.log
-            failed-tests.txt
-            env-versions.txt
-            e2e-cli-failures.log
-          if-no-files-found: ignore
+          echo "## Test results (${{ runner.os }}, attempt ${{ github.run_attempt }})" >> "$GITHUB_STEP_SUMMARY"
       - name: Build
         run: npm run build
