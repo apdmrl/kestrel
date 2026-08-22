@@ -3,7 +3,6 @@ import { open, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { ZodType } from "zod";
 import { createKestrelError } from "../../application/errors/kestrel-error.js";
-
 export interface AtomicWriteOptions {
   /**
    * Override the directory fsync performed after the rename. Used by tests and
@@ -17,6 +16,28 @@ const UNSUPPORTED_DIRECTORY_SYNC_CODES = new Set(["EINVAL", "EPERM", "ENOTSUP", 
 function isUnsupportedDirectorySync(error: unknown): boolean {
   const code = (error as { code?: string }).code;
   return code !== undefined && UNSUPPORTED_DIRECTORY_SYNC_CODES.has(code);
+}
+
+/**
+ * Codes that indicate the rename target is briefly held open by another process
+ * (a just-exited sibling process whose handle is still being released). Windows
+ * reports EPERM/EACCES/EBUSY here; POSIX normally succeeds, but a bounded retry
+ * is harmless there too. The target is never modified on a failed rename, so
+ * retrying with a fresh temp file and the same intended value is idempotent and
+ * safe: it can never install a different value than the one requested.
+ */
+const RENAME_RETRY_CODES = new Set(["EPERM", "EACCES", "EBUSY"]);
+
+const RENAME_RETRY_ATTEMPTS = 20;
+const RENAME_RETRY_DELAY_MS = 25;
+
+function isRenameRetryable(error: unknown): boolean {
+  const code = (error as { code?: string }).code;
+  return code !== undefined && RENAME_RETRY_CODES.has(code);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 /**
@@ -94,7 +115,7 @@ export async function writeJsonAtomically<T>(
     await handle.sync();
     await handle.close();
     handle = undefined;
-    await rename(tempPath, path);
+    await renameWithRetry(tempPath, path);
     renameCommitted = true;
     await fsyncParentDirectory(dirname(path), options);
   } catch (error) {
@@ -118,6 +139,27 @@ export async function writeJsonAtomically<T>(
       severity: "ERROR",
       cause: error,
     });
+  }
+}
+
+/**
+ * Rename a fully-written, synced temp file over its target, retrying a bounded
+ * number of times when the target is transiently held open (Windows
+ * EPERM/EACCES/EBUSY from a just-exited process). A failed rename never consumes
+ * or mutates the temp file or the target, so retrying installs exactly the
+ * intended value and is idempotent.
+ */
+async function renameWithRetry(tempPath: string, path: string): Promise<void> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await rename(tempPath, path);
+      return;
+    } catch (error) {
+      if (!isRenameRetryable(error) || attempt >= RENAME_RETRY_ATTEMPTS - 1) {
+        throw error;
+      }
+      await sleep(RENAME_RETRY_DELAY_MS);
+    }
   }
 }
 
