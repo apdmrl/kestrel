@@ -1,6 +1,6 @@
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { authenticateGitHub } from "../../application/auth/authenticate-github.js";
 import { redactSecrets } from "../../application/errors/kestrel-error.js";
@@ -46,25 +46,29 @@ describe("GitCredentialStore integration with the real process runner", () => {
     const dir = await mkdtemp(join(tmpdir(), "kestrel-creds-"));
     const previousPath = process.env.PATH;
     try {
-      await writeFile(
-        join(dir, "git"),
-        [
-          "#!/usr/bin/env bash",
-          'if [ "$1" = "credential" ] && [ "$2" = "fill" ]; then',
-          "  printf 'username=octocat\\npassword=REAL_TOKEN_123\\n'",
-          "  exit 0",
-          "fi",
-          'if [ "$1" = "config" ]; then',
-          "  printf 'fake-helper\\n'",
-          "  exit 0",
-          "fi",
-          "exit 0",
-          "",
-        ].join("\n"),
-        "utf8",
-      );
+      // A cross-platform fake `git` shim. A plain Node script runs on every OS;
+      // on Windows a `git.cmd` launcher is required because PATHEXT lookup finds
+      // `.cmd`, not the extension-less POSIX script, and bare `git` spawns the
+      // native Git for Windows executable otherwise.
+      const shim = [
+        "#!/usr/bin/env node",
+        'const { exit } = require("node:process");',
+        'const args = process.argv.slice(2);',
+        'if (args[0] === "credential" && args[1] === "fill") {',
+        '  process.stdout.write("username=octocat\\npassword=REAL_TOKEN_123\\n");',
+        "  exit(0);",
+        "}",
+        'if (args[0] === "config") {',
+        '  process.stdout.write("fake-helper\\n");',
+        "  exit(0);",
+        "}",
+        "exit(0);",
+        "",
+      ].join("\n");
+      await writeFile(join(dir, "git"), shim, "utf8");
+      await writeFile(join(dir, "git.cmd"), '@echo off\r\nnode "%~dp0git" %*\r\n', "utf8");
       await chmod(join(dir, "git"), 0o755);
-      process.env.PATH = dir + ":" + (previousPath ?? "");
+      process.env.PATH = dir + delimiter + (previousPath ?? "");
 
       const runner = new ExecaProcessRunner();
       const store = new GitCredentialStore(runner);
