@@ -66,10 +66,14 @@ async function expectCode(promise: Promise<unknown>, code: string): Promise<void
 /**
  * Deterministic synchronization barrier: yield to the event loop until a
  * condition holds or a bounded yield budget is exhausted. No wall-clock sleep
- * is involved, so the result cannot flake with machine speed.
+ * is involved, so the result cannot flake with machine speed. The budget is a
+ * large-but-bounded count of event-loop turns so a contender that must complete
+ * a real chain of filesystem round-trips (guard break, rename retry, lock write)
+ * interleaved with this poller is never starved on a slow filesystem (Windows),
+ * while a genuine hang still fails the test instead of running forever.
  */
 async function waitFor(condition: () => boolean): Promise<void> {
-  for (let i = 0; i < 2000; i++) {
+  for (let i = 0; i < 100000; i++) {
     if (condition()) {
       return;
     }
@@ -420,7 +424,6 @@ describe("FileMissionLock", () => {
     );
 
     await waitFor(() => firstReached && secondReached);
-
     // The first contender resumes and must establish ownership, entering the
     // critical section.
     resumeFirst();
