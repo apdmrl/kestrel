@@ -36,10 +36,16 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
       - name: Tests
+        id: tests
         env:
           NODE_OPTIONS: --trace-uncaught --unhandled-rejections=strict --enable-source-maps
         run: |
-          npm test -- --reporter=verbose --reporter=github-actions
+          set -o pipefail
+          npm test -- --reporter=verbose --reporter=github-actions 2>&1 | tee test-output.log
+      - name: Surface crash stacks as annotations
+        if: always() && steps.tests.outcome == 'failure'
+        run: |
+          node scripts/surface-test-errors.mjs test-output.log
       - name: Write failure summary
         if: always()
         run: |
