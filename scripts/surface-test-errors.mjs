@@ -74,9 +74,9 @@ if (crashLines.length > 0) {
 // a generic non-zero exit is still diagnosable from the Actions log alone,
 // without relying on crash markers or artifact access.
 const failingTests = lines
-  .map((l, i) => ({ l, i }))
+  .map((l) => ({ l }))
   .filter(({ l }) => l.includes(" FAIL ") || l.includes("Failed Tests"));
-for (const { l, i } of failingTests) {
+for (const { l } of failingTests) {
   if (l.includes("Failed Tests")) continue;
   process.stdout.write(`::error title=failing-test::${escapeData(l)}\n`);
 }
