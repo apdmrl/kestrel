@@ -14,7 +14,7 @@ export function createSessionController(
 ): (command: SessionCommand) => Promise<SessionControllerResult> {
   return async (command) => {
     if (command.kind === "help") {
-      return { kind: "output", text: "/help  /clear  /exit\n/find  /current  /mission ...\n/progress  /journey  /preferences ..." };
+      return { kind: "output", text: "/help  /clear  /exit\n/find  /mission current  /mission ...\n/progress  /journey  /preferences ..." };
     }
     if (command.kind === "clear") return { kind: "clear" };
     if (command.kind === "exit") return { kind: "exit" };
