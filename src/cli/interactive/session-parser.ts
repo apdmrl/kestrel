@@ -41,28 +41,30 @@ function tokenize(input: string): TokenResult {
   let token = "";
   let quote: "'" | '"' | undefined;
   let tokenStarted = false;
-  let quotedLeadingDashes = false;
+  let quotedLeadingDashCount = 0;
 
   const push = (): void => {
     if (tokenStarted) {
-      tokens.push({ value: token, quotedLeadingDashes });
+      tokens.push({
+        value: token,
+        quotedLeadingDashes: token.startsWith("--") && quotedLeadingDashCount === 2,
+      });
       token = "";
       tokenStarted = false;
-      quotedLeadingDashes = false;
+      quotedLeadingDashCount = 0;
     }
   };
-
   for (let index = 0; index < input.length; index += 1) {
     const character = input[index];
     if (quote !== undefined) {
       if (character === quote) {
         quote = undefined;
       } else {
+        if (character === "-" && token.length < 2) quotedLeadingDashCount += 1;
         token += character;
       }
       tokenStarted = true;
     } else if (character === "'" || character === '"') {
-      if (!tokenStarted) quotedLeadingDashes = true;
       quote = character;
       tokenStarted = true;
     } else if (/\s/u.test(character)) {
@@ -204,6 +206,7 @@ export function parseSessionCommand(input: string): SessionCommand | SessionPars
     case "agent": {
       if (args[0]?.value !== "brief") return new SessionParseError(`Unknown agent action: ${args[0]?.value ?? ""}`);
       const parsed = options(args.slice(1));
+      if (parsed instanceof SessionParseError) return parsed;
       const unknown = rejectUnknown(parsed, ["--id", "--hypothesis"]);
       if (unknown !== undefined) return unknown;
       return {

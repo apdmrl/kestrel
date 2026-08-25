@@ -195,3 +195,7 @@ describe("parseSessionCommand quote boundaries", () => {
       reason: "\u0000blocked",
     });
   });
+
+  it("returns an error for an incomplete agent option", () => {
+    expect(parseSessionCommand("/agent brief --id")).toBeInstanceOf(Error);
+  });
