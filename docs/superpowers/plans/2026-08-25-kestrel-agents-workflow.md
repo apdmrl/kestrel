@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- Preserve the existing `domain → application → ports → infrastructure` dependency direction.
+- Preserve the dependency direction: the domain remains independent of infrastructure and presentation; application depends on domain and ports; infrastructure implements ports; CLI depends on application-facing contracts; bootstrap wires concrete adapters.
 - Keep CLI presentation and terminal themes out of domain/application logic.
 - Preserve clone-only behavior, sidecar metadata, atomic persistence, lock/transaction recovery and cancellation semantics.
 - Do not claim terminal-session persistence or UI behavior that does not exist yet.

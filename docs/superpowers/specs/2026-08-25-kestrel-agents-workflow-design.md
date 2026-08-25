@@ -60,7 +60,7 @@ The AGENTS file will recommend:
 - Package or portability changes: build, package and portability suites.
 - Persistent session/UI changes: component state-transition tests, interactive CLI smoke tests, and plain/JSON behavior parity.
 
-The standard final checks remain the existing npm scripts: `npm run boundaries`, `npm run lint`, `npm run format:check`, `npm run typecheck`, `npm test`, and `npm run build` when packaging/build output is affected.
+The standard final checks remain the existing npm scripts: `npm run boundaries`, `npm run lint`, `npm run format:check`, `npm run typecheck`, `npm test`, and `npm run build` when packaging/build output is affected. Run `npm run check:runtime` as an additional prerequisite check when runtime support is relevant.
 
 ## Agent Routing and Token Efficiency
 
