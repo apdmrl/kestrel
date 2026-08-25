@@ -50,10 +50,11 @@ export async function main(): Promise<void> {
         createElement(Session, { handlers, signal: controller.signal, onCancel: cancelSession }),
         { exitOnCtrlC: false },
       );
+      const waitForExit = app.waitUntilExit();
       const closeOnAbort = (): void => app?.unmount();
       controller.signal.addEventListener("abort", closeOnAbort, { once: true });
       if (controller.signal.aborted) closeOnAbort();
-      await app.waitUntilExit();
+      await waitForExit;
     } else {
       const program = createProgram({ handlers });
       await program.parseAsync(process.argv);
