@@ -36,12 +36,14 @@ function tokenize(input: string): TokenResult {
   let token = "";
   let quote: "'" | '"' | undefined;
   let tokenStarted = false;
+  let tokenQuoted = false;
 
   const push = (): void => {
     if (tokenStarted) {
-      tokens.push(token);
+      tokens.push(tokenQuoted && token.startsWith("--") ? `\u0000${token}` : token);
       token = "";
       tokenStarted = false;
+      tokenQuoted = false;
     }
   };
 
@@ -57,6 +59,7 @@ function tokenize(input: string): TokenResult {
     } else if (character === "'" || character === '"') {
       quote = character;
       tokenStarted = true;
+      tokenQuoted = true;
     } else if (/\s/u.test(character)) {
       push();
     } else {
@@ -80,13 +83,13 @@ function options(tokens: readonly string[]): Map<string, string> | SessionParseE
       return new SessionParseError(`Unexpected argument: ${option}`);
     }
     const value = tokens[index + 1];
-    if (value === undefined || value.startsWith("--")) {
+    if (value === undefined || (value.startsWith("--") && !value.startsWith("\u0000"))) {
       return new SessionParseError(`Missing value for ${option}`);
     }
     if (values.has(option)) {
       return new SessionParseError(`Duplicate option: ${option}`);
     }
-    values.set(option, value);
+    values.set(option, value.startsWith("\u0000") ? value.slice(1) : value);
     index += 1;
   }
   return values;
@@ -162,12 +165,14 @@ function parseMission(tokens: readonly string[]): SessionCommand | SessionParseE
 }
 
 export function parseSessionCommand(input: string): SessionCommand | SessionParseError {
-  const tokenResult = tokenize(input.trim());
+  const trimmed = input.trim();
+  if (!trimmed.startsWith("/")) {
+    return new SessionParseError(`Commands must start with \`/\`; try /${trimmed || "help"}`);
+  }
+  const tokenResult = tokenize(trimmed);
   if (tokenResult instanceof SessionParseError) return tokenResult;
   const [command, ...args] = tokenResult.tokens;
-  if (command === undefined || !command.startsWith("/")) {
-    return new SessionParseError(`Commands must start with \`/\`; try /${command ?? "help"}`);
-  }
+  if (command === undefined) return new SessionParseError("Missing command; try /help");
 
   switch (command.slice(1)) {
     case "help":

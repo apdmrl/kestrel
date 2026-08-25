@@ -163,3 +163,24 @@ describe("parseSessionCommand handler commands", () => {
     });
   });
 });
+
+describe("parseSessionCommand quote boundaries", () => {
+  it("rejects a quoted command token before tokenization", () => {
+    expect(parseSessionCommand('"/help"')).toBeInstanceOf(Error);
+  });
+
+  it("preserves quoted option values that begin with dashes", () => {
+    expect(parseSessionCommand('/mission abandon --reason "--blocked"')).toEqual({
+      kind: "mission-abandon",
+      reason: "--blocked",
+    });
+    expect(parseSessionCommand("/mission abandon --reason '--blocked'")).toEqual({
+      kind: "mission-abandon",
+      reason: "--blocked",
+    });
+  });
+
+  it("rejects unknown options", () => {
+    expect(parseSessionCommand("/progress --unexpected value")).toBeInstanceOf(Error);
+  });
+});
