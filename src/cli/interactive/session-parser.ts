@@ -219,6 +219,10 @@ export function parseSessionCommand(input: string): SessionCommand | SessionPars
       return args.length === 0
         ? { kind: "journey" }
         : new SessionParseError("/journey takes no options");
+    case "current":
+      return args.length === 0
+        ? { kind: "mission-current" }
+        : new SessionParseError("/current takes no options");
     case "find": {
       const parsed = options(args);
       if (parsed instanceof SessionParseError) return parsed;

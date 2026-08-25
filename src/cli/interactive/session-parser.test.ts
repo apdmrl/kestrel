@@ -74,6 +74,10 @@ describe("parseSessionCommand handler commands", () => {
     expect(parseSessionCommand("/mission current")).toEqual({ kind: "mission-current" });
   });
 
+  it("parses top-level current", () => {
+    expect(parseSessionCommand("/current")).toEqual({ kind: "mission-current" });
+  });
+
   it("parses mission current with id", () => {
     expect(parseSessionCommand("/mission current --id m1")).toEqual({
       kind: "mission-current",
