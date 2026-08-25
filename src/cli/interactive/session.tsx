@@ -122,7 +122,8 @@ export function Session({ handlers, signal, onExit, onCancel }: SessionProps) {
     const lineBreak = typed.search(/[\r\n]/u);
     if (lineBreak >= 0) {
       const command = input + typed.slice(0, lineBreak);
-      const remainder = typed.slice(lineBreak + 1);
+      const delimiterLength = typed.startsWith("\r\n", lineBreak) ? 2 : 1;
+      const remainder = typed.slice(lineBreak + delimiterLength);
       void submit(command);
       if (remainder.length > 0) setInput(remainder);
       return;
