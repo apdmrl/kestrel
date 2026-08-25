@@ -20,7 +20,7 @@ export type SessionCommand =
   | { readonly kind: "preferences-set"; readonly language?: string; readonly mode?: string };
 
 export class SessionParseError extends Error {
-  readonly usage?: string;
+  readonly usage: string | undefined;
 
   constructor(message: string, usage?: string) {
     super(message);
@@ -55,7 +55,7 @@ function tokenize(input: string): TokenResult {
     }
   };
   for (let index = 0; index < input.length; index += 1) {
-    const character = input[index];
+    const character = input[index]!;
     if (quote !== undefined) {
       if (character === quote) {
         quote = undefined;
@@ -85,7 +85,7 @@ function tokenize(input: string): TokenResult {
 function options(tokens: readonly Token[]): Map<string, string> | SessionParseError {
   const values = new Map<string, string>();
   for (let index = 0; index < tokens.length; index += 1) {
-    const option = tokens[index];
+    const option = tokens[index]!;
     if (!option.value.startsWith("--")) {
       return new SessionParseError(`Unexpected argument: ${option.value}`);
     }
@@ -137,7 +137,9 @@ function parseMission(tokens: readonly Token[]): SessionCommand | SessionParseEr
   switch (action) {
     case "current": {
       const unknown = rejectUnknown(parsed, ["--id"]);
-      return unknown ?? { kind: "mission-current", ...(optional(parsed, "--id") !== undefined ? { missionId: optional(parsed, "--id") } : {}) };
+      if (unknown !== undefined) return unknown;
+      const missionId = optional(parsed, "--id");
+      return missionId === undefined ? { kind: "mission-current" } : { kind: "mission-current", missionId };
     }
     case "accept": {
       const unknown = rejectUnknown(parsed, ["--id"]);
@@ -151,15 +153,17 @@ function parseMission(tokens: readonly Token[]): SessionCommand | SessionParseEr
       const unknown = rejectUnknown(parsed, ["--id"]);
       if (unknown !== undefined) return unknown;
       const missionId = optional(parsed, "--id");
-      return { kind: `mission-${action}`, ...(missionId !== undefined ? { missionId } : {}) } as SessionCommand;
+      return missionId === undefined
+        ? { kind: `mission-${action}` as "mission-prepare" | "mission-resume" | "mission-complete" }
+        : { kind: `mission-${action}` as "mission-prepare" | "mission-resume" | "mission-complete", missionId };
     }
     case "abandon": {
       const unknown = rejectUnknown(parsed, ["--id", "--reason"]);
       if (unknown !== undefined) return unknown;
       const reason = required(parsed, "--reason");
-      return reason instanceof SessionParseError
-        ? reason
-        : { kind: "mission-abandon", reason, ...(optional(parsed, "--id") !== undefined ? { missionId: optional(parsed, "--id") } : {}) };
+      if (reason instanceof SessionParseError) return reason;
+      const missionId = optional(parsed, "--id");
+      return missionId === undefined ? { kind: "mission-abandon", reason } : { kind: "mission-abandon", reason, missionId };
     }
     case "break-lock": {
       const unknown = rejectUnknown(parsed, ["--id"]);
@@ -199,7 +203,10 @@ export function parseSessionCommand(input: string): SessionCommand | SessionPars
       const parsed = options(args);
       if (parsed instanceof SessionParseError) return parsed;
       const unknown = rejectUnknown(parsed, ["--mood", "--type"]);
-      return unknown ?? { kind: "find", mood: optional(parsed, "--mood") ?? "QUICK_WIN", ...(optional(parsed, "--type") !== undefined ? { type: optional(parsed, "--type") } : {}) };
+      if (unknown !== undefined) return unknown;
+      const mood = optional(parsed, "--mood") ?? "QUICK_WIN";
+      const type = optional(parsed, "--type");
+      return type === undefined ? { kind: "find", mood } : { kind: "find", mood, type };
     }
     case "mission":
       return parseMission(args);
@@ -209,11 +216,13 @@ export function parseSessionCommand(input: string): SessionCommand | SessionPars
       if (parsed instanceof SessionParseError) return parsed;
       const unknown = rejectUnknown(parsed, ["--id", "--hypothesis"]);
       if (unknown !== undefined) return unknown;
-      return {
-        kind: "agent-brief",
-        ...(optional(parsed, "--id") !== undefined ? { missionId: optional(parsed, "--id") } : {}),
-        ...(optional(parsed, "--hypothesis") !== undefined ? { hypothesis: optional(parsed, "--hypothesis") } : {}),
-      };
+      const missionId = optional(parsed, "--id");
+      const hypothesis = optional(parsed, "--hypothesis");
+      if (missionId === undefined) {
+        return hypothesis === undefined ? { kind: "agent-brief" } : { kind: "agent-brief", hypothesis };
+      }
+      if (hypothesis === undefined) return { kind: "agent-brief", missionId };
+      return { kind: "agent-brief", missionId, hypothesis };
     }
     case "verify": {
       const action = args[0]?.value;
@@ -228,7 +237,14 @@ export function parseSessionCommand(input: string): SessionCommand | SessionPars
       if (pr instanceof SessionParseError) return pr;
       const prNumber = numeric(pr, "--pr");
       if (prNumber instanceof SessionParseError) return prNumber;
-      return { kind: `verify-${action}`, prNumber, ...(optional(parsed, "--id") !== undefined ? { missionId: optional(parsed, "--id") } : {}) } as SessionCommand;
+      const missionId = optional(parsed, "--id");
+      if (action === "submission") {
+        return missionId === undefined ? { kind: "verify-submission", prNumber } : { kind: "verify-submission", prNumber, missionId };
+      }
+      if (action === "link") {
+        return missionId === undefined ? { kind: "verify-link", prNumber } : { kind: "verify-link", prNumber, missionId };
+      }
+      return missionId === undefined ? { kind: "verify-merge", prNumber } : { kind: "verify-merge", prNumber, missionId };
     }
     case "preferences": {
       const action = args[0]?.value;
@@ -237,7 +253,14 @@ export function parseSessionCommand(input: string): SessionCommand | SessionPars
       const parsed = options(args.slice(1));
       if (parsed instanceof SessionParseError) return parsed;
       const unknown = rejectUnknown(parsed, ["--language", "--mode"]);
-      return unknown ?? { kind: "preferences-set", ...(optional(parsed, "--language") !== undefined ? { language: optional(parsed, "--language") } : {}), ...(optional(parsed, "--mode") !== undefined ? { mode: optional(parsed, "--mode") } : {}) };
+      if (unknown !== undefined) return unknown;
+      const language = optional(parsed, "--language");
+      const mode = optional(parsed, "--mode");
+      if (language === undefined) {
+        return mode === undefined ? { kind: "preferences-set" } : { kind: "preferences-set", mode };
+      }
+      if (mode === undefined) return { kind: "preferences-set", language };
+      return { kind: "preferences-set", language, mode };
     }
     default:
       return new SessionParseError(`Unknown command: ${command}`);
