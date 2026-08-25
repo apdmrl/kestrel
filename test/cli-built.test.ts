@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -40,6 +40,7 @@ function runCli(
     );
   });
 }
+
 
 describe("built CLI", () => {
   beforeAll(async () => {
@@ -99,4 +100,5 @@ describe("built CLI", () => {
       rmSync(home, { recursive: true, force: true });
     }
   }, 30_000);
+
 });
