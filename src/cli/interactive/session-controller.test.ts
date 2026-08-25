@@ -51,13 +51,22 @@ describe("session controller", () => {
 
     expect(commandHandlers.find).toHaveBeenCalledWith({ mood: "DEEP_DEBUGGING", type: "BUG" });
     expect(commandHandlers.missionCurrent).toHaveBeenCalledWith({ missionId: "m-1" });
-    expect(commandHandlers.verifySubmission).toHaveBeenCalledWith({ missionId: "m-1", prNumber: 42 });
-    expect(commandHandlers.preferencesSet).toHaveBeenCalledWith({ language: "TypeScript", mode: "guided" });
+    expect(commandHandlers.verifySubmission).toHaveBeenCalledWith({
+      missionId: "m-1",
+      prNumber: 42,
+    });
+    expect(commandHandlers.preferencesSet).toHaveBeenCalledWith({
+      language: "TypeScript",
+      mode: "guided",
+    });
     expect(commandHandlers.missionAccept).toHaveBeenCalledWith({ recommendationId: "r-1" });
     expect(commandHandlers.missionPrepare).toHaveBeenCalledWith({ missionId: "m-1" });
     expect(commandHandlers.missionResume).toHaveBeenCalledWith({ missionId: "m-1" });
     expect(commandHandlers.missionComplete).toHaveBeenCalledWith({ missionId: "m-1" });
-    expect(commandHandlers.missionAbandon).toHaveBeenCalledWith({ missionId: "m-1", reason: "done" });
+    expect(commandHandlers.missionAbandon).toHaveBeenCalledWith({
+      missionId: "m-1",
+      reason: "done",
+    });
     expect(commandHandlers.missionBreakLock).toHaveBeenCalledWith({ missionId: "m-1" });
     expect(commandHandlers.agentBrief).toHaveBeenCalledWith({ missionId: "m-1", hypothesis: "h" });
     expect(commandHandlers.verifyLink).toHaveBeenCalledWith({ missionId: "m-1", prNumber: 42 });
@@ -84,7 +93,10 @@ describe("session controller", () => {
     vi.mocked(commandHandlers.progress).mockRejectedValueOnce(new Error("boom"));
     const controller = createSessionController(commandHandlers);
 
-    expect(await controller({ kind: "progress" })).toEqual({ kind: "error", text: expect.stringContaining("boom") });
+    expect(await controller({ kind: "progress" })).toEqual({
+      kind: "error",
+      text: expect.stringContaining("boom"),
+    });
     expect(await controller({ kind: "journey" })).toEqual({ kind: "output", text: "ok" });
   });
 });

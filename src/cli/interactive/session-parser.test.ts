@@ -185,17 +185,17 @@ describe("parseSessionCommand quote boundaries", () => {
   });
 });
 
-  it("does not treat trailing empty quotes as quoted option syntax", () => {
-    expect(parseSessionCommand('/mission abandon --reason --unexpected""')).toBeInstanceOf(Error);
-  });
+it("does not treat trailing empty quotes as quoted option syntax", () => {
+  expect(parseSessionCommand('/mission abandon --reason --unexpected""')).toBeInstanceOf(Error);
+});
 
-  it("preserves a literal NUL at the start of a quoted value", () => {
-    expect(parseSessionCommand('/mission abandon --reason "\u0000blocked"')).toEqual({
-      kind: "mission-abandon",
-      reason: "\u0000blocked",
-    });
+it("preserves a literal NUL at the start of a quoted value", () => {
+  expect(parseSessionCommand('/mission abandon --reason "\u0000blocked"')).toEqual({
+    kind: "mission-abandon",
+    reason: "\u0000blocked",
   });
+});
 
-  it("returns an error for an incomplete agent option", () => {
-    expect(parseSessionCommand("/agent brief --id")).toBeInstanceOf(Error);
-  });
+it("returns an error for an incomplete agent option", () => {
+  expect(parseSessionCommand("/agent brief --id")).toBeInstanceOf(Error);
+});

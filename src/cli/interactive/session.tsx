@@ -6,7 +6,8 @@ import { parseSessionCommand, SessionParseError } from "./session-parser.js";
 import type { TranscriptEntry } from "./session-view-models.js";
 
 const MAX_TRANSCRIPT_ENTRIES = 200;
-const HELP_TEXT = "/help  /clear  /exit\n/find  /mission current  /mission ...\n/progress  /journey  /preferences ...";
+const HELP_TEXT =
+  "/help  /clear  /exit\n/find  /mission current  /mission ...\n/progress  /journey  /preferences ...";
 
 export interface SessionProps {
   readonly handlers: CommandHandlers;
@@ -50,7 +51,10 @@ export function sessionInputTransition(
   return { nextInput: current, submit: false, cancel: false };
 }
 
-function appendEntry(entries: readonly TranscriptEntry[], entry: TranscriptEntry): readonly TranscriptEntry[] {
+function appendEntry(
+  entries: readonly TranscriptEntry[],
+  entry: TranscriptEntry,
+): readonly TranscriptEntry[] {
   const next = [...entries, entry];
   return next.length > MAX_TRANSCRIPT_ENTRIES ? next.slice(-MAX_TRANSCRIPT_ENTRIES) : next;
 }
@@ -117,38 +121,49 @@ export function Session({ handlers, signal, onExit, onCancel }: SessionProps) {
     }
   };
 
-  useInput((character, key) => {
-    const typed = typeof character === "string" ? character : "";
-    const lineBreak = typed.search(/[\r\n]/u);
-    if (lineBreak >= 0) {
-      const command = input + typed.slice(0, lineBreak);
-      const delimiterLength = typed.startsWith("\r\n", lineBreak) ? 2 : 1;
-      const remainder = typed.slice(lineBreak + delimiterLength);
-      void submit(command);
-      if (remainder.length > 0) setInput(remainder);
-      return;
-    }
-    const transition = sessionInputTransition(input, typed, key ?? {}, busy);
-    if (transition.cancel) {
-      onCancel?.();
-    } else if (transition.submit) {
-      void submit();
-    } else {
-      setInput(transition.nextInput);
-    }
-  }, { isActive: true });
+  useInput(
+    (character, key) => {
+      const typed = typeof character === "string" ? character : "";
+      const lineBreak = typed.search(/[\r\n]/u);
+      if (lineBreak >= 0) {
+        const command = input + typed.slice(0, lineBreak);
+        const delimiterLength = typed.startsWith("\r\n", lineBreak) ? 2 : 1;
+        const remainder = typed.slice(lineBreak + delimiterLength);
+        void submit(command);
+        if (remainder.length > 0) setInput(remainder);
+        return;
+      }
+      const transition = sessionInputTransition(input, typed, key ?? {}, busy);
+      if (transition.cancel) {
+        onCancel?.();
+      } else if (transition.submit) {
+        void submit();
+      } else {
+        setInput(transition.nextInput);
+      }
+    },
+    { isActive: true },
+  );
 
   return (
     <Box flexDirection="column">
-      <Text color="greenBright"> KESTREL  /  LOCAL ENGINEERING COMPANION</Text>
-      <Text color="green"> workspace: local                              session: {busy ? "working" : "ready"}</Text>
+      <Text color="greenBright"> KESTREL / LOCAL ENGINEERING COMPANION</Text>
+      <Text color="green"> workspace: local session: {busy ? "working" : "ready"}</Text>
       {transcript.map((entry) => (
-        <Text key={entry.id} color={entry.kind === "error" ? "red" : entry.kind === "input" ? "greenBright" : "green"}>
+        <Text
+          key={entry.id}
+          color={entry.kind === "error" ? "red" : entry.kind === "input" ? "greenBright" : "green"}
+        >
           {entry.text}
         </Text>
       ))}
-      <Text color="greenBright">kestrel › {input}{busy ? " …" : ""}</Text>
-      {transcript.length === 1 && transcript[0]?.kind === "system" ? <Text color="green">{HELP_TEXT}</Text> : null}
+      <Text color="greenBright">
+        kestrel › {input}
+        {busy ? " …" : ""}
+      </Text>
+      {transcript.length === 1 && transcript[0]?.kind === "system" ? (
+        <Text color="green">{HELP_TEXT}</Text>
+      ) : null}
     </Box>
   );
 }

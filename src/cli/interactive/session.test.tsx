@@ -31,13 +31,14 @@ describe("persistent session", () => {
   afterEach(() => cleanup());
 
   it("renders the Matrix-green shell header and prompt", () => {
-    const { lastFrame } = render(<Session handlers={handlers()} signal={new AbortController().signal} />);
+    const { lastFrame } = render(
+      <Session handlers={handlers()} signal={new AbortController().signal} />,
+    );
     expect(lastFrame()).toContain("KESTREL");
     expect(lastFrame()).toContain("session: ready");
     expect(lastFrame()).toContain("kestrel ›");
     expect(lastFrame()).toContain("Type /help");
   });
-
 
   it("clears idle Ctrl+C input without exiting", () => {
     expect(sessionInputTransition("/hel", "c", { ctrl: true }, false)).toEqual({
@@ -54,7 +55,6 @@ describe("persistent session", () => {
       cancel: true,
     });
   });
-
 
   it("submits slash commands and handles editing keys", () => {
     expect(sessionInputTransition("/help", "\r", { return: true }, false)).toEqual({

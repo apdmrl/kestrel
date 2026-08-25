@@ -100,7 +100,6 @@ describe("built CLI", () => {
     }
   }, 30_000);
 
-
   it("keeps argument-bearing progress on the one-shot path", async () => {
     const home = mkdtempSync(join(tmpdir(), "kestrel-cli-one-shot-"));
     try {

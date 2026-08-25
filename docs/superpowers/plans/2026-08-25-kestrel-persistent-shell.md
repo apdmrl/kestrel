@@ -47,10 +47,12 @@
 ### Task 1: Define and test the slash-command grammar
 
 **Files:**
+
 - Create: `src/cli/interactive/session-parser.ts`
 - Test: `src/cli/interactive/session-parser.test.ts`
 
 **Interfaces:**
+
 - Produces `SessionCommand`, a discriminated union for session-local commands and handler commands.
 - Produces `SessionParseError`, an error with a user-facing message and optional usage text.
 - Exports `parseSessionCommand(input: string): SessionCommand | SessionParseError`.
@@ -133,10 +135,12 @@ git commit -m "feat: add persistent shell command parser"
 ### Task 2: Map parsed commands to existing handlers
 
 **Files:**
+
 - Create: `src/cli/interactive/session-controller.ts`
 - Test: `src/cli/interactive/session-controller.test.ts`
 
 **Interfaces:**
+
 - Consumes `SessionCommand`, `CommandHandlers`, and `ViewModel`.
 - Produces `SessionControllerResult`:
 
@@ -210,11 +214,13 @@ git commit -m "feat: route shell commands to cli handlers"
 ### Task 3: Add transcript presentation types and Matrix-green components
 
 **Files:**
+
 - Create: `src/cli/interactive/session-view-models.ts`
 - Create: `src/cli/interactive/session.tsx`
 - Test: `src/cli/interactive/session.test.tsx`
 
 **Interfaces:**
+
 - `TranscriptEntry` is `{ kind: "input" | "output" | "error" | "system"; text: string; id: number }`.
 - `SessionProps` is:
 
@@ -292,10 +298,12 @@ git commit -m "feat: add persistent matrix-green shell session"
 ### Task 4: Wire bare invocation to the persistent session
 
 **Files:**
+
 - Modify: `src/cli/main.ts`
 - Test: nearest existing main-entry test seam, or create a focused test alongside `src/cli/main.ts` only if dependency injection is required by the implementation.
 
 **Interfaces:**
+
 - Preserve `main(): Promise<void>` as the process entrypoint.
 - Reuse the already bootstrapped `handlers`, `controller.signal`, and recovery decision.
 - Session mode is selected only when `process.argv.slice(2).length === 0`.
@@ -305,14 +313,15 @@ git commit -m "feat: add persistent matrix-green shell session"
 Cover these invariants:
 
 argv = []
-  -> render the Ink session
+-> render the Ink session
 
 argv = ["find", "--no-interactive"]
-  -> keep the existing Commander parse path
+-> keep the existing Commander parse path
 
 argv = ["--json", "progress"]
-  -> keep the existing Commander JSON path
-```
+-> keep the existing Commander JSON path
+
+````
 
 - [ ] **Step 2: Run the focused mode-selection test and verify it fails.**
 
@@ -329,7 +338,7 @@ if (process.argv.slice(2).length === 0) {
   await render(<Session handlers={handlers} signal={controller.signal} onExit={() => undefined} />);
   return;
 }
-```
+````
 
 Use the repository's existing Ink render/import convention. Keep the current Commander construction and `parseAsync` path unchanged for every non-empty argument list. Preserve the current recovery bypass for `mission break-lock`, signal listeners, and post-command cancellation exit logic. Make session exit resolve the mounted render promise and allow `main()` to return without setting an error exit code.
 
@@ -351,10 +360,12 @@ git commit -m "feat: launch shell for bare kestrel invocation"
 ### Task 5: Add real built-CLI smoke coverage
 
 **Files:**
+
 - Modify: the nearest existing built CLI smoke test in `test/cli-built.test.ts` or `test/e2e/` after inspecting its process helpers.
 - Modify: only the smallest test fixture/helper needed to send stdin to a running built process.
 
 **Interfaces:**
+
 - Consumes the built `dist/cli/main.js` entrypoint and existing test process utilities.
 - Produces observable coverage for the session/one-shot boundary; it must not install dependencies or run target repository commands.
 
@@ -406,10 +417,12 @@ git commit -m "test: smoke test persistent kestrel shell"
 ### Task 6: Integration verification and reviewer correction pass
 
 **Files:**
+
 - Modify only files identified by focused test failures or reviewer findings.
 - Test: existing focused tests plus repository quality commands.
 
 **Interfaces:**
+
 - Consumes Tasks 1–5 outputs.
 - Produces a verified persistent shell with no regression to one-shot CLI behavior.
 
