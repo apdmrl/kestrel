@@ -1,15 +1,23 @@
 #!/usr/bin/env node
+import { render } from "ink";
+import { createElement } from "react";
 import { bootstrap, createConfig } from "../bootstrap/index.js";
+import { Session } from "./interactive/session.js";
 import { createProgram } from "./create-program.js";
 
+export function shouldStartSession(args: readonly string[]): boolean {
+  return args.length === 0;
+}
+
 export async function main(): Promise<void> {
+  const args = process.argv.slice(2);
   const config = createConfig(process.env as Record<string, string | undefined>);
   // Wire the commander --no-interactive flag into bootstrap before handlers run.
-  const interactive = !process.argv.includes("--no-interactive");
+  const interactive = !args.includes("--no-interactive");
   // The exact `mission break-lock` invocation must run before journal replay so
   // a stale lock that replay would trip over can be cleared first.
   const isBreakLock = ((): boolean => {
-    const positional = process.argv.slice(2).filter((a) => !a.startsWith("-"));
+    const positional = args.filter((a) => !a.startsWith("-"));
     return positional[0] === "mission" && positional[1] === "break-lock";
   })();
   // Shared cancellation contract: SIGINT/SIGTERM abort the operation so it can
@@ -31,9 +39,28 @@ export async function main(): Promise<void> {
     signal: controller.signal,
     recover: !isBreakLock,
   });
-  const program = createProgram({ handlers });
   try {
-    await program.parseAsync(process.argv);
+    if (shouldStartSession(args)) {
+      const app = render(
+        createElement(Session, {
+          handlers,
+          signal: controller.signal,
+          onCancel: () => {
+            controller.abort();
+            app.unmount();
+          },
+        }),
+        { exitOnCtrlC: false },
+      );
+      const waitForExit = app.waitUntilExit();
+      const closeOnAbort = (): void => app.unmount();
+      controller.signal.addEventListener("abort", closeOnAbort, { once: true });
+      if (controller.signal.aborted) closeOnAbort();
+      await waitForExit;
+    } else {
+      const program = createProgram({ handlers });
+      await program.parseAsync(process.argv);
+    }
   } catch (error) {
     // createProgram enables exitOverride, so Commander never calls
     // process.exit directly: it has already written the message and help to

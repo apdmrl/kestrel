@@ -99,4 +99,16 @@ describe("built CLI", () => {
       rmSync(home, { recursive: true, force: true });
     }
   }, 30_000);
+
+  it("keeps argument-bearing progress on the one-shot path", async () => {
+    const home = mkdtempSync(join(tmpdir(), "kestrel-cli-one-shot-"));
+    try {
+      const result = await runCli(["--no-interactive", "progress"], { KESTREL_HOME: home });
+      expect(result.code).toBe(0);
+      expect(result.stdout).toContain("Accepted: 0");
+      expect(result.stdout).not.toContain("kestrel ›");
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  }, 30_000);
 });
