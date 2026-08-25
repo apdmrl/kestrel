@@ -2,7 +2,7 @@ import { cleanup, render } from "ink-testing-library";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CommandHandlers } from "../command-handlers.js";
 import type { ViewModel } from "../presentation/view-models.js";
-import { Session, sessionInputTransition } from "./session.js";
+import { Session, sessionInputTransition, TranscriptLine } from "./session.js";
 
 const view: ViewModel = { kind: "verification", text: "ok" };
 
@@ -30,14 +30,26 @@ function handlers(): CommandHandlers {
 describe("persistent session", () => {
   afterEach(() => cleanup());
 
-  it("renders the Matrix-green shell header and prompt", () => {
+  it("renders a calm status bar, welcome panel, and minimal prompt", () => {
     const { lastFrame } = render(
       <Session handlers={handlers()} signal={new AbortController().signal} />,
     );
     expect(lastFrame()).toContain("KESTREL");
-    expect(lastFrame()).toContain("session: ready");
-    expect(lastFrame()).toContain("kestrel ›");
-    expect(lastFrame()).toContain("Type /help");
+    expect(lastFrame()).toContain("LOCAL WORKSPACE");
+    expect(lastFrame()).toContain("Ready");
+    expect(lastFrame()).toContain("›");
+    expect(lastFrame()).toContain("Try /help");
+    expect(lastFrame()).not.toContain("kestrel ›");
+  });
+
+  it("renders actionable errors as a titled panel", () => {
+    const { lastFrame } = render(
+      <TranscriptLine
+        entry={{ id: 1, kind: "error", text: "GitHub authentication is not configured" }}
+      />,
+    );
+    expect(lastFrame()).toContain("GitHub authentication is not configured");
+    expect(lastFrame()).toContain("Action required");
   });
 
   it("clears idle Ctrl+C input without exiting", () => {
@@ -74,7 +86,7 @@ describe("persistent session", () => {
     controller.abort();
     const commandHandlers = handlers();
     const { lastFrame } = render(<Session handlers={commandHandlers} signal={controller.signal} />);
-    expect(lastFrame()).toContain("session: ready");
+    expect(lastFrame()).toContain("Ready");
     expect(commandHandlers.progress).not.toHaveBeenCalled();
   });
 });
