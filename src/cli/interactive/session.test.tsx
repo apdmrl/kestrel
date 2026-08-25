@@ -38,6 +38,7 @@ describe("persistent session", () => {
     expect(lastFrame()).toContain("Type /help");
   });
 
+
   it("clears idle Ctrl+C input without exiting", () => {
     expect(sessionInputTransition("/hel", "c", { ctrl: true }, false)).toEqual({
       nextInput: "",

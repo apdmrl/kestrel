@@ -118,13 +118,16 @@ export function Session({ handlers, signal, onExit, onCancel }: SessionProps) {
   };
 
   useInput((character, key) => {
-    const lineBreak = character.search(/[\r\n]/u);
+    const typed = typeof character === "string" ? character : "";
+    const lineBreak = typed.search(/[\r\n]/u);
     if (lineBreak >= 0) {
-      const command = input + character.slice(0, lineBreak);
+      const command = input + typed.slice(0, lineBreak);
+      const remainder = typed.slice(lineBreak + 1);
       void submit(command);
+      if (remainder.length > 0) setInput(remainder);
       return;
     }
-    const transition = sessionInputTransition(input, character, key, busy);
+    const transition = sessionInputTransition(input, typed, key ?? {}, busy);
     if (transition.cancel) {
       onCancel?.();
     } else if (transition.submit) {
