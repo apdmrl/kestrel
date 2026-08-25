@@ -68,6 +68,8 @@ export function Session({ handlers, signal, onExit, onCancel }: SessionProps) {
     { id: 1, kind: "system", text: "✓ Welcome back\n  Type /help to see commands." },
   ]);
   const controller = createSessionController(handlers);
+  const commandQueue = useRef<string[]>([]);
+  const drainingQueue = useRef(false);
 
   const addEntry = (kind: TranscriptEntry["kind"], text: string): void => {
     const id = nextId.current;
@@ -121,16 +123,31 @@ export function Session({ handlers, signal, onExit, onCancel }: SessionProps) {
     }
   };
 
+  const drainQueue = async (commands: readonly string[]): Promise<void> => {
+    commandQueue.current.push(...commands);
+    if (drainingQueue.current) return;
+    drainingQueue.current = true;
+    try {
+      while (commandQueue.current.length > 0 && !closing.current) {
+        const command = commandQueue.current.shift();
+        if (command !== undefined) await submit(command);
+      }
+    } finally {
+      drainingQueue.current = false;
+    }
+  };
+
   useInput(
     (character, key) => {
       const typed = typeof character === "string" ? character : "";
       const lineBreak = typed.search(/[\r\n]/u);
       if (lineBreak >= 0) {
-        const command = input + typed.slice(0, lineBreak);
-        const delimiterLength = typed.startsWith("\r\n", lineBreak) ? 2 : 1;
-        const remainder = typed.slice(lineBreak + delimiterLength);
-        void submit(command);
+        const lines = typed.split(/\r\n|\r|\n/u);
+        const first = input + (lines.shift() ?? "");
+        const remainder = lines.pop() ?? "";
+        const commands = [first, ...lines];
         if (remainder.length > 0) setInput(remainder);
+        void drainQueue(commands);
         return;
       }
       const transition = sessionInputTransition(input, typed, key ?? {}, busy);
