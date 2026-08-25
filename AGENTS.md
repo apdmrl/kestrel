@@ -40,13 +40,13 @@ Keep dependencies moving toward the domain/application contracts. Infrastructure
 
 Choose the smallest test flow that proves the changed behavior, then run the applicable integration checks:
 
-| Change | Required evidence |
-| --- | --- |
-| Domain or application use case | Focused unit/use-case tests for invariants, transitions, errors and cancellation. |
-| Port or infrastructure adapter | Adapter tests plus failure, cancellation, persistence, locking or recovery boundaries. |
-| CLI or presentation | Renderer/component tests plus built-CLI smoke coverage; preserve plain and JSON contracts. |
-| State, lock or transaction | Recovery-projector tests and real-process E2E scenarios, including interruption/resume when relevant. |
-| Packaging or portability | Build/package tests and portability coverage. |
+| Change                            | Required evidence                                                                                      |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| Domain or application use case    | Focused unit/use-case tests for invariants, transitions, errors and cancellation.                      |
+| Port or infrastructure adapter    | Adapter tests plus failure, cancellation, persistence, locking or recovery boundaries.                 |
+| CLI or presentation               | Renderer/component tests plus built-CLI smoke coverage; preserve plain and JSON contracts.             |
+| State, lock or transaction        | Recovery-projector tests and real-process E2E scenarios, including interruption/resume when relevant.  |
+| Packaging or portability          | Build/package tests and portability coverage.                                                          |
 | Persistent session or terminal UI | Component/state-transition tests, interactive CLI smoke coverage, and parity with plain/JSON behavior. |
 
 Existing quality commands are `npm run boundaries`, `npm run lint`, `npm run format:check`, `npm run typecheck`, `npm test`, `npm run build`, and `npm run check:runtime`. Use `npm run build` when build or packaging output is affected; use `npm run check:runtime` when runtime prerequisites are relevant.
