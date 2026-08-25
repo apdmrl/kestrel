@@ -1,5 +1,5 @@
 import { Box, Text, useApp, useInput } from "ink";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { CommandHandlers } from "../command-handlers.js";
 import { createSessionController } from "./session-controller.js";
 import { parseSessionCommand, SessionParseError } from "./session-parser.js";
@@ -12,36 +12,40 @@ export interface SessionProps {
   readonly handlers: CommandHandlers;
   readonly signal: AbortSignal;
   readonly onExit?: () => void;
+  readonly onCancel?: () => void;
 }
 
 function appendEntry(entries: readonly TranscriptEntry[], entry: TranscriptEntry): readonly TranscriptEntry[] {
   const next = [...entries, entry];
   return next.length > MAX_TRANSCRIPT_ENTRIES ? next.slice(-MAX_TRANSCRIPT_ENTRIES) : next;
 }
-
-export function Session({ handlers, signal, onExit }: SessionProps) {
+export function Session({ handlers, signal, onExit, onCancel }: SessionProps) {
   const { exit } = useApp();
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
-  const [nextId, setNextId] = useState(2);
+  const nextId = useRef(2);
+  const closing = useRef(false);
   const [transcript, setTranscript] = useState<readonly TranscriptEntry[]>([
     { id: 1, kind: "system", text: "✓ Welcome back\n  Type /help to see commands." },
   ]);
   const controller = createSessionController(handlers);
 
   const addEntry = (kind: TranscriptEntry["kind"], text: string): void => {
-    setTranscript((entries) => appendEntry(entries, { id: nextId, kind, text }));
-    setNextId((id) => id + 1);
+    const id = nextId.current;
+    nextId.current += 1;
+    setTranscript((entries) => appendEntry(entries, { id, kind, text }));
   };
 
   const close = (): void => {
+    if (closing.current) return;
+    closing.current = true;
     onExit?.();
     exit();
   };
 
   const submit = async (): Promise<void> => {
     const commandText = input.trim();
-    if (commandText.length === 0 || busy) return;
+    if (commandText.length === 0 || busy || closing.current) return;
     setInput("");
     addEntry("input", `kestrel › ${commandText}`);
     const parsed = parseSessionCommand(commandText);
@@ -80,7 +84,11 @@ export function Session({ handlers, signal, onExit }: SessionProps) {
 
   useInput((character, key) => {
     if (key.ctrl && character === "c") {
-      setInput("");
+      if (busy) {
+        onCancel?.();
+      } else {
+        setInput("");
+      }
       return;
     }
     if (character === "\r" || character === "\n" || key.return) {
@@ -94,7 +102,7 @@ export function Session({ handlers, signal, onExit }: SessionProps) {
     if (!key.ctrl && !key.meta && character.length > 0) {
       setInput((value) => value + character);
     }
-  }, { isActive: !busy });
+  }, { isActive: true });
 
   return (
     <Box flexDirection="column">
