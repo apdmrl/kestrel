@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { render } from "ink";
+import { render, type Instance } from "ink";
 import { createElement } from "react";
 import { bootstrap, createConfig } from "../bootstrap/index.js";
 import { Session } from "./interactive/session.js";
@@ -41,9 +41,16 @@ export async function main(): Promise<void> {
   });
   try {
     if (shouldStartSession(args)) {
-      const app = render(
-        createElement(Session, { handlers, signal: controller.signal, onCancel: () => controller.abort() }),
+      let app: Instance | undefined;
+      const cancelSession = (): void => {
+        controller.abort();
+        app?.unmount();
+      };
+      app = render(
+        createElement(Session, { handlers, signal: controller.signal, onCancel: cancelSession }),
+        { exitOnCtrlC: false },
       );
+      controller.signal.addEventListener("abort", () => app?.unmount(), { once: true });
       await app.waitUntilExit();
     } else {
       const program = createProgram({ handlers });
