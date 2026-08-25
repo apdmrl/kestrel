@@ -184,3 +184,14 @@ describe("parseSessionCommand quote boundaries", () => {
     expect(parseSessionCommand("/progress --unexpected value")).toBeInstanceOf(Error);
   });
 });
+
+  it("does not treat trailing empty quotes as quoted option syntax", () => {
+    expect(parseSessionCommand('/mission abandon --reason --unexpected""')).toBeInstanceOf(Error);
+  });
+
+  it("preserves a literal NUL at the start of a quoted value", () => {
+    expect(parseSessionCommand('/mission abandon --reason "\u0000blocked"')).toEqual({
+      kind: "mission-abandon",
+      reason: "\u0000blocked",
+    });
+  });

@@ -29,21 +29,26 @@ export class SessionParseError extends Error {
   }
 }
 
-type TokenResult = { readonly tokens: readonly string[] } | SessionParseError;
+type Token = {
+  readonly value: string;
+  readonly quotedLeadingDashes: boolean;
+};
+
+type TokenResult = { readonly tokens: readonly Token[] } | SessionParseError;
 
 function tokenize(input: string): TokenResult {
-  const tokens: string[] = [];
+  const tokens: Token[] = [];
   let token = "";
   let quote: "'" | '"' | undefined;
   let tokenStarted = false;
-  let tokenQuoted = false;
+  let quotedLeadingDashes = false;
 
   const push = (): void => {
     if (tokenStarted) {
-      tokens.push(tokenQuoted && token.startsWith("--") ? `\u0000${token}` : token);
+      tokens.push({ value: token, quotedLeadingDashes });
       token = "";
       tokenStarted = false;
-      tokenQuoted = false;
+      quotedLeadingDashes = false;
     }
   };
 
@@ -57,9 +62,9 @@ function tokenize(input: string): TokenResult {
       }
       tokenStarted = true;
     } else if (character === "'" || character === '"') {
+      if (!tokenStarted) quotedLeadingDashes = true;
       quote = character;
       tokenStarted = true;
-      tokenQuoted = true;
     } else if (/\s/u.test(character)) {
       push();
     } else {
@@ -75,21 +80,21 @@ function tokenize(input: string): TokenResult {
   return { tokens };
 }
 
-function options(tokens: readonly string[]): Map<string, string> | SessionParseError {
+function options(tokens: readonly Token[]): Map<string, string> | SessionParseError {
   const values = new Map<string, string>();
   for (let index = 0; index < tokens.length; index += 1) {
     const option = tokens[index];
-    if (!option.startsWith("--")) {
-      return new SessionParseError(`Unexpected argument: ${option}`);
+    if (!option.value.startsWith("--")) {
+      return new SessionParseError(`Unexpected argument: ${option.value}`);
     }
     const value = tokens[index + 1];
-    if (value === undefined || (value.startsWith("--") && !value.startsWith("\u0000"))) {
-      return new SessionParseError(`Missing value for ${option}`);
+    if (value === undefined || (value.value.startsWith("--") && !value.quotedLeadingDashes)) {
+      return new SessionParseError(`Missing value for ${option.value}`);
     }
-    if (values.has(option)) {
-      return new SessionParseError(`Duplicate option: ${option}`);
+    if (values.has(option.value)) {
+      return new SessionParseError(`Duplicate option: ${option.value}`);
     }
-    values.set(option, value.startsWith("\u0000") ? value.slice(1) : value);
+    values.set(option.value, value.value);
     index += 1;
   }
   return values;
@@ -120,9 +125,10 @@ function numeric(value: string, option: string): number | SessionParseError {
     : new SessionParseError(`Invalid value for ${option}: ${value}`);
 }
 
-function parseMission(tokens: readonly string[]): SessionCommand | SessionParseError {
-  const action = tokens[0];
-  if (action === undefined) return new SessionParseError("Missing mission action");
+function parseMission(tokens: readonly Token[]): SessionCommand | SessionParseError {
+  const actionToken = tokens[0];
+  if (actionToken === undefined) return new SessionParseError("Missing mission action");
+  const action = actionToken.value;
   const parsed = options(tokens.slice(1));
   if (parsed instanceof SessionParseError) return parsed;
 
@@ -171,8 +177,9 @@ export function parseSessionCommand(input: string): SessionCommand | SessionPars
   }
   const tokenResult = tokenize(trimmed);
   if (tokenResult instanceof SessionParseError) return tokenResult;
-  const [command, ...args] = tokenResult.tokens;
-  if (command === undefined) return new SessionParseError("Missing command; try /help");
+  const [commandToken, ...args] = tokenResult.tokens;
+  if (commandToken === undefined) return new SessionParseError("Missing command; try /help");
+  const command = commandToken.value;
 
   switch (command.slice(1)) {
     case "help":
@@ -195,9 +202,8 @@ export function parseSessionCommand(input: string): SessionCommand | SessionPars
     case "mission":
       return parseMission(args);
     case "agent": {
-      if (args[0] !== "brief") return new SessionParseError(`Unknown agent action: ${args[0] ?? ""}`);
+      if (args[0]?.value !== "brief") return new SessionParseError(`Unknown agent action: ${args[0]?.value ?? ""}`);
       const parsed = options(args.slice(1));
-      if (parsed instanceof SessionParseError) return parsed;
       const unknown = rejectUnknown(parsed, ["--id", "--hypothesis"]);
       if (unknown !== undefined) return unknown;
       return {
@@ -207,7 +213,7 @@ export function parseSessionCommand(input: string): SessionCommand | SessionPars
       };
     }
     case "verify": {
-      const action = args[0];
+      const action = args[0]?.value;
       if (action !== "submission" && action !== "link" && action !== "merge") {
         return new SessionParseError(`Unknown verify action: ${action ?? ""}`);
       }
@@ -222,7 +228,7 @@ export function parseSessionCommand(input: string): SessionCommand | SessionPars
       return { kind: `verify-${action}`, prNumber, ...(optional(parsed, "--id") !== undefined ? { missionId: optional(parsed, "--id") } : {}) } as SessionCommand;
     }
     case "preferences": {
-      const action = args[0];
+      const action = args[0]?.value;
       if (action === "get") return args.length === 1 ? { kind: "preferences-get" } : new SessionParseError("/preferences get takes no options");
       if (action !== "set") return new SessionParseError(`Unknown preferences action: ${action ?? ""}`);
       const parsed = options(args.slice(1));
