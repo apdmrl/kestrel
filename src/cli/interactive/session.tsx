@@ -78,8 +78,8 @@ export function Session({ handlers, signal, onExit, onCancel }: SessionProps) {
     exit();
   };
 
-  const submit = async (): Promise<void> => {
-    const commandText = input.trim();
+  const submit = async (commandOverride?: string): Promise<void> => {
+    const commandText = (commandOverride ?? input).trim();
     if (commandText.length === 0 || busy || closing.current) return;
     setInput("");
     addEntry("input", `kestrel › ${commandText}`);
@@ -118,6 +118,12 @@ export function Session({ handlers, signal, onExit, onCancel }: SessionProps) {
   };
 
   useInput((character, key) => {
+    const lineBreak = character.search(/[\r\n]/u);
+    if (lineBreak >= 0) {
+      const command = input + character.slice(0, lineBreak);
+      void submit(command);
+      return;
+    }
     const transition = sessionInputTransition(input, character, key, busy);
     if (transition.cancel) {
       onCancel?.();

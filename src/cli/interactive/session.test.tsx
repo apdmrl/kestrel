@@ -54,6 +54,7 @@ describe("persistent session", () => {
     });
   });
 
+
   it("submits slash commands and handles editing keys", () => {
     expect(sessionInputTransition("/help", "\r", { return: true }, false)).toEqual({
       nextInput: "/help",
