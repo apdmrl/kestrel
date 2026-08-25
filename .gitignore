@@ -9,3 +9,4 @@ env-versions.txt
 .env
 *.tgz
 .recovery-repeat/
+.worktrees/
