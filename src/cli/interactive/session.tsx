@@ -147,7 +147,9 @@ export function Session({ handlers, signal, onExit, onCancel }: SessionProps) {
         const remainder = lines.pop() ?? "";
         const commands = [first, ...lines];
         if (remainder.length > 0) setInput(remainder);
-        void drainQueue(commands);
+        queueMicrotask(() => {
+          void drainQueue(commands);
+        });
         return;
       }
       const transition = sessionInputTransition(input, typed, key ?? {}, busy);
