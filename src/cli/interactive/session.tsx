@@ -15,6 +15,41 @@ export interface SessionProps {
   readonly onCancel?: () => void;
 }
 
+export interface SessionInputKey {
+  readonly ctrl?: boolean;
+  readonly meta?: boolean;
+  readonly return?: boolean;
+  readonly backspace?: boolean;
+  readonly delete?: boolean;
+}
+
+export interface SessionInputTransition {
+  readonly nextInput: string;
+  readonly submit: boolean;
+  readonly cancel: boolean;
+}
+
+export function sessionInputTransition(
+  current: string,
+  character: string,
+  key: SessionInputKey,
+  busy: boolean,
+): SessionInputTransition {
+  if (key.ctrl && character === "c") {
+    return { nextInput: busy ? current : "", submit: false, cancel: busy };
+  }
+  if (character === "\r" || character === "\n" || key.return) {
+    return { nextInput: current, submit: true, cancel: false };
+  }
+  if (key.backspace || key.delete) {
+    return { nextInput: current.slice(0, -1), submit: false, cancel: false };
+  }
+  if (!key.ctrl && !key.meta && character.length > 0) {
+    return { nextInput: current + character, submit: false, cancel: false };
+  }
+  return { nextInput: current, submit: false, cancel: false };
+}
+
 function appendEntry(entries: readonly TranscriptEntry[], entry: TranscriptEntry): readonly TranscriptEntry[] {
   const next = [...entries, entry];
   return next.length > MAX_TRANSCRIPT_ENTRIES ? next.slice(-MAX_TRANSCRIPT_ENTRIES) : next;
@@ -83,24 +118,13 @@ export function Session({ handlers, signal, onExit, onCancel }: SessionProps) {
   };
 
   useInput((character, key) => {
-    if (key.ctrl && character === "c") {
-      if (busy) {
-        onCancel?.();
-      } else {
-        setInput("");
-      }
-      return;
-    }
-    if (character === "\r" || character === "\n" || key.return) {
+    const transition = sessionInputTransition(input, character, key, busy);
+    if (transition.cancel) {
+      onCancel?.();
+    } else if (transition.submit) {
       void submit();
-      return;
-    }
-    if (key.backspace || key.delete) {
-      setInput((value) => value.slice(0, -1));
-      return;
-    }
-    if (!key.ctrl && !key.meta && character.length > 0) {
-      setInput((value) => value + character);
+    } else {
+      setInput(transition.nextInput);
     }
   }, { isActive: true });
 

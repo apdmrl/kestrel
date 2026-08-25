@@ -2,7 +2,7 @@ import { cleanup, render } from "ink-testing-library";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CommandHandlers } from "../command-handlers.js";
 import type { ViewModel } from "../presentation/view-models.js";
-import { Session } from "./session.js";
+import { Session, sessionInputTransition } from "./session.js";
 
 const view: ViewModel = { kind: "verification", text: "ok" };
 
@@ -38,11 +38,41 @@ describe("persistent session", () => {
     expect(lastFrame()).toContain("Type /help");
   });
 
-  it("renders the cancelled state without starting a handler", () => {
+  it("clears idle Ctrl+C input without exiting", () => {
+    expect(sessionInputTransition("/hel", "c", { ctrl: true }, false)).toEqual({
+      nextInput: "",
+      submit: false,
+      cancel: false,
+    });
+  });
+
+  it("signals active Ctrl+C cancellation and preserves the prompt", () => {
+    expect(sessionInputTransition("/progress", "c", { ctrl: true }, true)).toEqual({
+      nextInput: "/progress",
+      submit: false,
+      cancel: true,
+    });
+  });
+
+  it("submits slash commands and handles editing keys", () => {
+    expect(sessionInputTransition("/help", "\r", { return: true }, false)).toEqual({
+      nextInput: "/help",
+      submit: true,
+      cancel: false,
+    });
+    expect(sessionInputTransition("/help", "", { backspace: true }, false)).toEqual({
+      nextInput: "/hel",
+      submit: false,
+      cancel: false,
+    });
+  });
+
+  it("does not start work from an already-aborted session", () => {
     const controller = new AbortController();
     controller.abort();
-    const { lastFrame } = render(<Session handlers={handlers()} signal={controller.signal} />);
+    const commandHandlers = handlers();
+    const { lastFrame } = render(<Session handlers={commandHandlers} signal={controller.signal} />);
     expect(lastFrame()).toContain("session: ready");
-    expect(lastFrame()).toContain("/help");
+    expect(commandHandlers.progress).not.toHaveBeenCalled();
   });
 });
