@@ -7,6 +7,9 @@ Kestrel prepares the work. The developer owns the work.
 ## Commands
 
 ```
+kestrel auth login                # connect to GitHub (opens your browser)
+kestrel auth status               # show which GitHub account is connected
+kestrel auth logout --confirm github.com  # clear the stored GitHub credential
 kestrel find                      # discover one recommended challenge
 kestrel mission accept --id <id>  # accept the exact recommendation shown by find
 kestrel mission prepare           # prepare the mission workspace (resumable)
@@ -26,7 +29,29 @@ kestrel preferences set           # update preferences
 kestrel --json journey            # machine-readable output
 kestrel --plain find              # plain output
 kestrel --no-interactive find     # disable interactive prompts
+kestrel --no-browser auth login   # authenticate without opening a browser
 ```
+
+## Connecting to GitHub
+
+Kestrel authenticates with the GitHub OAuth device flow and stores the token through your Git
+credential helper. Set the client id of a GitHub OAuth App that has device flow enabled, then
+log in:
+
+```
+export GITHUB_CLIENT_ID=<your-oauth-app-client-id>
+kestrel auth login
+```
+
+Kestrel prints the verification URL and a short user code, then opens the URL in your browser.
+The URL and code are always printed, so authentication still works when no browser can be
+opened. Suppress the browser with `--no-browser`, `KESTREL_NO_BROWSER=1`, or `--json`.
+
+Commands that need GitHub (`find`, `verify ...`) still authenticate on demand if you have not
+run `auth login` first.
+
+`auth logout` clears the shared `github.com` credential that `git` and `gh` also use, so it
+requires `--confirm github.com`.
 
 ## What Kestrel will not change
 

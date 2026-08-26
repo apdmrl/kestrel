@@ -9,14 +9,22 @@ export type SessionControllerResult =
   | { readonly kind: "exit" }
   | { readonly kind: "error"; readonly text: string };
 
+/**
+ * Build the session command router.
+ *
+ * `notify` receives interim guidance that arrives while a command is still
+ * running, such as device-flow instructions. The session appends it to the
+ * transcript; writing it directly to stderr would corrupt the Ink frame.
+ */
 export function createSessionController(
   handlers: CommandHandlers,
+  notify?: (text: string) => void,
 ): (command: SessionCommand) => Promise<SessionControllerResult> {
   return async (command) => {
     if (command.kind === "help") {
       return {
         kind: "output",
-        text: "/help  /clear  /exit\n/find  /mission current  /mission ...\n/progress  /journey  /preferences ...",
+        text: "/help  /clear  /exit\n/auth login  /auth status  /auth logout --confirm github.com\n/find  /mission current  /mission ...\n/progress  /journey  /preferences ...",
       };
     }
     if (command.kind === "clear") return { kind: "clear" };
@@ -25,6 +33,19 @@ export function createSessionController(
     try {
       let view;
       switch (command.kind) {
+        case "auth-login":
+          view = await handlers.authLogin({
+            onNotice: (notice) => {
+              notify?.(renderPlain(notice));
+            },
+          });
+          break;
+        case "auth-status":
+          view = await handlers.authStatus();
+          break;
+        case "auth-logout":
+          view = await handlers.authLogout({ confirmation: command.confirmation });
+          break;
         case "find":
           view = await handlers.find({
             mood: command.mood,

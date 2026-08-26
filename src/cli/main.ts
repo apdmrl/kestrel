@@ -2,6 +2,7 @@
 import { render } from "ink";
 import { createElement } from "react";
 import { bootstrap, createConfig } from "../bootstrap/index.js";
+import { shouldOpenBrowser } from "../application/auth/browser-launch-policy.js";
 import { Session } from "./interactive/session.js";
 import { createProgram } from "./create-program.js";
 
@@ -14,6 +15,14 @@ export async function main(): Promise<void> {
   const config = createConfig(process.env as Record<string, string | undefined>);
   // Wire the commander --no-interactive flag into bootstrap before handlers run.
   const interactive = !args.includes("--no-interactive");
+  // The browser launch decision is a policy, not a presentation concern, so it
+  // is resolved once here and passed to bootstrap rather than decided deeper in.
+  const openBrowser = shouldOpenBrowser({
+    noBrowserFlag: args.includes("--no-browser"),
+    envDisabled: config.noBrowser,
+    json: args.includes("--json"),
+    interactive,
+  });
   // The exact `mission break-lock` invocation must run before journal replay so
   // a stale lock that replay would trip over can be cleared first.
   const isBreakLock = ((): boolean => {
@@ -36,6 +45,7 @@ export async function main(): Promise<void> {
   process.on("SIGTERM", onSignal);
   const handlers = await bootstrap(config, {
     interactive,
+    openBrowser,
     signal: controller.signal,
     recover: !isBreakLock,
   });

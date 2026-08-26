@@ -9,6 +9,9 @@ describe("session controller", () => {
   function handlers(): CommandHandlers {
     return {
       find: vi.fn().mockResolvedValue(view),
+      authLogin: vi.fn().mockResolvedValue(view),
+      authStatus: vi.fn().mockResolvedValue(view),
+      authLogout: vi.fn().mockResolvedValue(view),
       missionAccept: vi.fn().mockResolvedValue(view),
       missionPrepare: vi.fn().mockResolvedValue(view),
       missionResume: vi.fn().mockResolvedValue(view),
@@ -98,5 +101,63 @@ describe("session controller", () => {
       text: expect.stringContaining("boom"),
     });
     expect(await controller({ kind: "journey" })).toEqual({ kind: "output", text: "ok" });
+  });
+  it("routes the auth commands to their handlers", async () => {
+    const commandHandlers = handlers();
+    const controller = createSessionController(commandHandlers);
+
+    await controller({ kind: "auth-login" });
+    await controller({ kind: "auth-status" });
+    await controller({ kind: "auth-logout", confirmation: "github.com" });
+
+    expect(commandHandlers.authStatus).toHaveBeenCalledWith();
+    expect(commandHandlers.authLogout).toHaveBeenCalledWith({ confirmation: "github.com" });
+  });
+
+  it("routes /auth logout without a confirmation so the use case refuses", async () => {
+    const commandHandlers = handlers();
+    const controller = createSessionController(commandHandlers);
+    await controller({ kind: "auth-logout" });
+    expect(commandHandlers.authLogout).toHaveBeenCalledWith({ confirmation: undefined });
+  });
+
+  it("delivers device authorization guidance through the notify channel", async () => {
+    const commandHandlers = handlers();
+    vi.mocked(commandHandlers.authLogin).mockImplementationOnce(async (args) => {
+      args.onNotice?.({
+        kind: "device-authorization",
+        verificationUri: "https://github.com/login/device",
+        userCode: "ABCD-1234",
+      });
+      return view;
+    });
+    const notices: string[] = [];
+    const controller = createSessionController(commandHandlers, (text) => notices.push(text));
+
+    await controller({ kind: "auth-login" });
+
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toContain("https://github.com/login/device");
+    expect(notices[0]).toContain("ABCD-1234");
+  });
+
+  it("does not fail when no notify channel is supplied", async () => {
+    const commandHandlers = handlers();
+    vi.mocked(commandHandlers.authLogin).mockImplementationOnce(async (args) => {
+      args.onNotice?.({
+        kind: "device-authorization",
+        verificationUri: "https://github.com/login/device",
+        userCode: "ABCD-1234",
+      });
+      return view;
+    });
+    const controller = createSessionController(commandHandlers);
+    expect(await controller({ kind: "auth-login" })).toEqual({ kind: "output", text: "ok" });
+  });
+
+  it("lists /auth in the session help", async () => {
+    const controller = createSessionController(handlers());
+    const result = await controller({ kind: "help" });
+    expect(result).toMatchObject({ kind: "output", text: expect.stringContaining("/auth") });
   });
 });

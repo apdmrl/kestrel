@@ -203,3 +203,41 @@ it("preserves a literal NUL at the start of a quoted value", () => {
 it("returns an error for an incomplete agent option", () => {
   expect(parseSessionCommand("/agent brief --id")).toBeInstanceOf(Error);
 });
+
+describe("/auth", () => {
+  it("parses /auth login", () => {
+    expect(parseSessionCommand("/auth login")).toEqual({ kind: "auth-login" });
+  });
+
+  it("parses /auth status", () => {
+    expect(parseSessionCommand("/auth status")).toEqual({ kind: "auth-status" });
+  });
+
+  it("parses /auth logout without a confirmation so the use case can refuse", () => {
+    expect(parseSessionCommand("/auth logout")).toEqual({ kind: "auth-logout" });
+  });
+
+  it("parses /auth logout with a confirmation token", () => {
+    expect(parseSessionCommand("/auth logout --confirm github.com")).toEqual({
+      kind: "auth-logout",
+      confirmation: "github.com",
+    });
+  });
+
+  it("rejects an unknown auth action", () => {
+    expect(parseSessionCommand("/auth whoami")).toBeInstanceOf(Error);
+  });
+
+  it("rejects a bare /auth", () => {
+    expect(parseSessionCommand("/auth")).toBeInstanceOf(Error);
+  });
+
+  it("rejects options on /auth login and /auth status", () => {
+    expect(parseSessionCommand("/auth login --confirm github.com")).toBeInstanceOf(Error);
+    expect(parseSessionCommand("/auth status --id x")).toBeInstanceOf(Error);
+  });
+
+  it("rejects an unknown option on /auth logout", () => {
+    expect(parseSessionCommand("/auth logout --force yes")).toBeInstanceOf(Error);
+  });
+});
