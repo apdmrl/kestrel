@@ -2,6 +2,22 @@
 
 ## Unreleased (post-0.1.0 review fixes)
 
+- GitHub browser authentication: `kestrel auth login`, `kestrel auth status`, and
+  `kestrel auth logout --confirm github.com`, plus `/auth login`, `/auth status`, and
+  `/auth logout` in the persistent shell. Authentication is now a deliberate action instead
+  of a side effect of the first command that needs GitHub.
+- The device-flow verification URI is opened in the user's browser automatically. The URI and
+  user code are still printed first, so a failed or slow launch never blocks authentication.
+  Suppress the launch with `--no-browser`, `KESTREL_NO_BROWSER`, or `--json`.
+- Browser launches fail closed: only `https:` URLs with a real host and no embedded userinfo
+  are opened, so a hostile `GITHUB_API_URL` cannot direct Kestrel at `javascript:`, `file:`,
+  `data:`, or a `https://github.com@evil.example/` impersonation.
+- Device-flow guidance is now a view model delivered through a callback rather than a raw
+  stderr write, so the Ink session renders it in the transcript instead of tearing the frame.
+- `auth status` validates the stored token against GitHub and never mutates credentials;
+  `auth logout` refuses without an explicit confirmation because it clears the shared
+  `github.com` credential that `git` and `gh` also read.
+
 - Cross-platform release gate: build cleanup and the recovery barrier are now portable Node
   helpers (no `rm -rf`, `mkfifo`, `bash`, or `timeout`), the fake Git test seam is a Node shim,
   packaged-bin tests resolve the Windows `.cmd` shim, and the CI matrix runs Node 24 on

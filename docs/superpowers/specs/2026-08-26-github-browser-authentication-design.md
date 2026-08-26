@@ -55,11 +55,11 @@ Without `GITHUB_CLIENT_ID` the existing `DM_GITHUB_AUTH_REQUIRED` error surfaces
 
 Reads the cached credential and calls `gateway.getViewer` to confirm it is still live, reporting one of three states:
 
-| State | Condition |
-| --- | --- |
-| `CONNECTED` | A credential exists and `getViewer` succeeds. Reports the live login. |
-| `NOT_CONNECTED` | No credential is stored. |
-| `EXPIRED` | A credential exists but GitHub rejected it with `DM_GITHUB_AUTH_EXPIRED`. |
+| State           | Condition                                                                 |
+| --------------- | ------------------------------------------------------------------------- |
+| `CONNECTED`     | A credential exists and `getViewer` succeeds. Reports the live login.     |
+| `NOT_CONNECTED` | No credential is stored.                                                  |
+| `EXPIRED`       | A credential exists but GitHub rejected it with `DM_GITHUB_AUTH_EXPIRED`. |
 
 `auth status` is a read command and **must not mutate credentials**. This is a deliberate divergence from `authenticateGitHub`, which deletes an expired credential before re-authenticating. Reporting `EXPIRED` without deleting keeps `status` free of side effects; the deletion still happens on the next `login`.
 
@@ -121,12 +121,12 @@ Pure and total. False when any of `noBrowserFlag`, `envDisabled`, or `json` is t
 
 `src/infrastructure/system/process-browser-launcher.ts`, built on the existing `ProcessRunner`, which is argv-only with `shell: false` and therefore carries no shell-injection surface. The command is selected from `detectPlatform().kind`:
 
-| Platform | Executable and arguments |
-| --- | --- |
-| `linux` | `xdg-open <url>` |
-| `darwin` | `open <url>` |
-| `win32` | `rundll32.exe url.dll,FileProtocolHandler <url>` |
-| `wsl` | `wslview <url>`, falling back to `xdg-open <url>` |
+| Platform | Executable and arguments                          |
+| -------- | ------------------------------------------------- |
+| `linux`  | `xdg-open <url>`                                  |
+| `darwin` | `open <url>`                                      |
+| `win32`  | `rundll32.exe url.dll,FileProtocolHandler <url>`  |
+| `wsl`    | `wslview <url>`, falling back to `xdg-open <url>` |
 
 Windows uses `rundll32` rather than `cmd /c start` deliberately: `start` is a `cmd.exe` builtin, which would require a shell and would mangle URLs containing `&`.
 
@@ -180,7 +180,8 @@ Implicit authentication in `find` and `verify` keeps the existing string `writeA
 
 ## Security
 
-- **URL validation fails closed.** The launcher parses the URI with `new URL()` and launches only when the protocol is exactly `https:` and the hostname is non-empty. `javascript:`, `file:`, `data:`, and malformed URIs are refused and resolve to `false`. This matters because `verification_uri` originates from the server named by `GITHUB_API_URL`, which a hostile or misconfigured environment controls. The refused URI is still printed as inert text so a legitimate GitHub Enterprise user is not blocked.
+- **URL validation fails closed.** The launcher parses the URI with `new URL()` and launches only when the protocol is exactly `https:`, the hostname is non-empty, and no userinfo is present. `javascript:`, `file:`, `data:`, and malformed URIs are refused and resolve to `false`. This matters because `verification_uri` originates from the server named by `GITHUB_API_URL`, which a hostile or misconfigured environment controls. The refused URI is still printed as inert text so a legitimate GitHub Enterprise user is not blocked.
+- **Userinfo is refused.** `https://user:pass@host/` would leak a credential into argv and the browser's history, and `https://github.com@evil.example/` reads as GitHub while resolving to `evil.example`. The Git client adapter already refuses userinfo in remote URLs, so this matches existing precedent. Note that Node's URL parser makes the empty-hostname case unreachable for `https:` (it throws), so that half of the check is defense in depth rather than a tested path.
 - **No secret reaches the launcher.** Only the verification URI is passed as an argument. The device code and access token are never passed to a subprocess, printed, or logged, preserving the existing guarantees in `docs/security.md`.
 - **`auth status` reports the login only.** Never the token, never the credential.
 - **Arguments, never a shell.** The launch goes through `ProcessRunner`, which forbids shell command strings.
@@ -202,17 +203,17 @@ Implicit authentication in `find` and `verify` keeps the existing string `writeA
 
 Following the repository test-flow matrix, each change is proved by the smallest flow that demonstrates it.
 
-| Unit | Evidence |
-| --- | --- |
-| `browser-launch-policy` | Full suppression matrix: enabled by default, and disabled by each of flag, env, json, non-interactive, independently and in combination. |
-| `ProcessBrowserLauncher` | Exact argv per platform kind; WSL fallback to `xdg-open`; refusal of `http:`, `javascript:`, `file:`, `data:`, and malformed URIs; non-zero exit, runner throw, timeout, and cancellation each resolve `false`; never throws. |
-| `getAuthStatus` | `CONNECTED` with the live login; `NOT_CONNECTED` with no credential; `EXPIRED` on `DM_GITHUB_AUTH_EXPIRED` **with the credential left intact**; unrelated gateway errors propagate; signal is forwarded. |
-| `logoutGitHub` | Deletes on a matching token; refuses with `INVALID_INPUT` and performs no deletion on a missing or wrong token; idempotent when nothing is stored. |
-| View models and renderers | Plain and JSON output for both new view models, including `browserOpened` true and false and all four `detail` values. |
-| Bootstrap wiring | `authLogin` launches the browser with the verification URI; each suppression path performs zero launches; guidance is still emitted when the launch fails; neither the device code nor the token is ever passed to the launcher. |
-| `create-program` | `auth login`, `auth status`, `auth logout` parse; `--no-browser` parses; `auth logout` without `--confirm` exits 2; device guidance goes to stderr and `--json` stdout stays a single document. |
-| Session | Parser accepts and rejects the `/auth` forms; controller routes each to the matching handler; the transcript renders a device-authorization entry; Ctrl+C during `/auth login` closes the session. |
-| Built CLI E2E | `kestrel auth status --json` against the existing fake GitHub server and fake `git` credential shims; `auth logout` without `--confirm` exits 2; `--no-browser` accepted; no token or device code in any output. |
+| Unit                      | Evidence                                                                                                                                                                                                                         |
+| ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `browser-launch-policy`   | Full suppression matrix: enabled by default, and disabled by each of flag, env, json, non-interactive, independently and in combination.                                                                                         |
+| `ProcessBrowserLauncher`  | Exact argv per platform kind; WSL fallback to `xdg-open`; refusal of `http:`, `javascript:`, `file:`, `data:`, and malformed URIs; non-zero exit, runner throw, timeout, and cancellation each resolve `false`; never throws.    |
+| `getAuthStatus`           | `CONNECTED` with the live login; `NOT_CONNECTED` with no credential; `EXPIRED` on `DM_GITHUB_AUTH_EXPIRED` **with the credential left intact**; unrelated gateway errors propagate; signal is forwarded.                         |
+| `logoutGitHub`            | Deletes on a matching token; refuses with `INVALID_INPUT` and performs no deletion on a missing or wrong token; idempotent when nothing is stored.                                                                               |
+| View models and renderers | Plain and JSON output for both new view models, including `browserOpened` true and false and all four `detail` values.                                                                                                           |
+| Bootstrap wiring          | `authLogin` launches the browser with the verification URI; each suppression path performs zero launches; guidance is still emitted when the launch fails; neither the device code nor the token is ever passed to the launcher. |
+| `create-program`          | `auth login`, `auth status`, `auth logout` parse; `--no-browser` parses; `auth logout` without `--confirm` exits 2; device guidance goes to stderr and `--json` stdout stays a single document.                                  |
+| Session                   | Parser accepts and rejects the `/auth` forms; controller routes each to the matching handler; the transcript renders a device-authorization entry; Ctrl+C during `/auth login` closes the session.                               |
+| Built CLI E2E             | `kestrel auth status --json` against the existing fake GitHub server and fake `git` credential shims; `auth logout` without `--confirm` exits 2; `--no-browser` accepted; no token or device code in any output.                 |
 
 ## Documentation
 
