@@ -12,9 +12,7 @@ export interface CommandHandlers {
    * stderr, while the Ink session appends them to the transcript instead of
    * corrupting the frame with a raw write.
    */
-  readonly authLogin: (args: {
-    onNotice?: (view: ViewModel) => void;
-  }) => Promise<ViewModel>;
+  readonly authLogin: (args: { onNotice?: (view: ViewModel) => void }) => Promise<ViewModel>;
   readonly authStatus: () => Promise<ViewModel>;
   readonly authLogout: (args: { confirmation?: string | undefined }) => Promise<ViewModel>;
   readonly missionAccept: (args: { recommendationId: string }) => Promise<ViewModel>;
