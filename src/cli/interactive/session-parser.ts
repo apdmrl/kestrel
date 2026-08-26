@@ -2,6 +2,9 @@ export type SessionCommand =
   | { readonly kind: "help" }
   | { readonly kind: "clear" }
   | { readonly kind: "exit" }
+  | { readonly kind: "auth-login" }
+  | { readonly kind: "auth-status" }
+  | { readonly kind: "auth-logout"; readonly confirmation?: string }
   | { readonly kind: "find"; readonly mood: string; readonly type?: string }
   | { readonly kind: "mission-current"; readonly missionId?: string }
   | { readonly kind: "mission-accept"; readonly recommendationId: string }
@@ -234,6 +237,25 @@ export function parseSessionCommand(input: string): SessionCommand | SessionPars
     }
     case "mission":
       return parseMission(args);
+    case "auth": {
+      const action = args[0]?.value;
+      if (action === "login" || action === "status") {
+        return args.length === 1
+          ? { kind: action === "login" ? "auth-login" : "auth-status" }
+          : new SessionParseError(`/auth ${action} takes no options`);
+      }
+      if (action === "logout") {
+        const parsed = options(args.slice(1));
+        if (parsed instanceof SessionParseError) return parsed;
+        const unknown = rejectUnknown(parsed, ["--confirm"]);
+        if (unknown !== undefined) return unknown;
+        const confirmation = optional(parsed, "--confirm");
+        return confirmation === undefined
+          ? { kind: "auth-logout" }
+          : { kind: "auth-logout", confirmation };
+      }
+      return new SessionParseError(`Unknown auth action: ${action ?? ""}`);
+    }
     case "agent": {
       if (args[0]?.value !== "brief")
         return new SessionParseError(`Unknown agent action: ${args[0]?.value ?? ""}`);

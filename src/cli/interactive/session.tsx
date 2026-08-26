@@ -108,7 +108,6 @@ export function Session({ handlers, signal, onExit, onCancel }: SessionProps) {
   const [transcript, setTranscript] = useState<readonly TranscriptEntry[]>([
     { id: 1, kind: "system", text: "✓ Welcome back\n  Type /help to see commands." },
   ]);
-  const controller = createSessionController(handlers);
   const commandQueue = useRef<string[]>([]);
   const drainingQueue = useRef(false);
 
@@ -117,6 +116,10 @@ export function Session({ handlers, signal, onExit, onCancel }: SessionProps) {
     nextId.current += 1;
     setTranscript((entries) => appendEntry(entries, { id, kind, text }));
   };
+
+  // Interim guidance (device-flow instructions) must land in the transcript.
+  // A raw stderr write would tear the Ink frame it renders inside.
+  const controller = createSessionController(handlers, (text) => addEntry("output", text));
 
   const close = (): void => {
     if (closing.current) return;
