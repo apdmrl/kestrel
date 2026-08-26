@@ -65,7 +65,7 @@ export function createProgram(options: ProgramOptions): Command {
         options.handlers.authLogin({
           // Device-flow guidance is presentation, never machine output: it goes
           // to stderr so --json stdout stays a single parseable JSON document.
-          onDeviceAuthorization: (view) => {
+          onNotice: (view) => {
             err(renderPlain(view) + "\n");
           },
         }),

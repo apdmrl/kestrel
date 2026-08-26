@@ -79,33 +79,28 @@ describe("renderPlain", () => {
       kind: "device-authorization",
       verificationUri: "https://github.com/login/device",
       userCode: "ABCD-1234",
-      browserOpened: false,
     });
     expect(output).toContain("https://github.com/login/device");
     expect(output).toContain("ABCD-1234");
     expect(output).not.toMatch(ansi);
   });
 
-  it("still shows the uri and code when the browser was opened", () => {
+  it("never claims a browser opened, which is reported as its own notice", () => {
     const output = renderPlain({
       kind: "device-authorization",
       verificationUri: "https://github.com/login/device",
       userCode: "ABCD-1234",
-      browserOpened: true,
     });
-    expect(output).toContain("https://github.com/login/device");
-    expect(output).toContain("ABCD-1234");
-    expect(output.toLowerCase()).toContain("browser");
+    expect(output.toLowerCase()).not.toContain("browser");
   });
 
-  it("does not claim a browser was opened when it was not", () => {
+  it("prints the guidance on a single line so it is never split or repeated", () => {
     const output = renderPlain({
       kind: "device-authorization",
       verificationUri: "https://github.com/login/device",
       userCode: "ABCD-1234",
-      browserOpened: false,
     });
-    expect(output.toLowerCase()).not.toContain("opened your browser");
+    expect(output.split("\n")).toHaveLength(1);
   });
 });
 
@@ -176,20 +171,13 @@ describe("renderJson", () => {
       kind: "device-authorization",
       verificationUri: "https://github.com/login/device",
       userCode: "ABCD-1234",
-      browserOpened: true,
     });
     const parsed = JSON.parse(output) as {
       ok: boolean;
-      data: { kind: string; verificationUri: string; userCode: string; browserOpened: boolean };
+      data: { kind: string; verificationUri: string; userCode: string };
     };
     expect(parsed.ok).toBe(true);
     expect(parsed.data.verificationUri).toBe("https://github.com/login/device");
-    expect(parsed.data.browserOpened).toBe(true);
-    expect(Object.keys(parsed.data).sort()).toEqual([
-      "browserOpened",
-      "kind",
-      "userCode",
-      "verificationUri",
-    ]);
+    expect(Object.keys(parsed.data).sort()).toEqual(["kind", "userCode", "verificationUri"]);
   });
 });

@@ -143,7 +143,6 @@ export interface DeviceAuthorizationViewModel {
   readonly kind: "device-authorization";
   readonly verificationUri: string;
   readonly userCode: string;
-  readonly browserOpened: boolean;
 }
 
 export interface AuthStatusViewModel {
@@ -161,9 +160,7 @@ One `AuthStatusViewModel` serves `login`, `status`, and `logout`, so there is ex
 `writeAuth` currently writes raw text to stderr. Inside the Ink session that bypasses the render tree and corrupts the frame. Rather than mutating a shared sink after bootstrap, `authLogin` accepts an explicit per-invocation callback:
 
 ```ts
-readonly authLogin: (args: {
-  onDeviceAuthorization?: (view: DeviceAuthorizationViewModel) => void;
-}) => Promise<ViewModel>;
+readonly authLogin: (args: { onNotice?: (view: ViewModel) => void }) => Promise<ViewModel>;
 ```
 
 - The Commander path renders the view model with `renderPlain` to **stderr**, never stdout, preserving the guarantee that `--json` stdout is a single parseable document.
@@ -176,7 +173,7 @@ Implicit authentication in `find` and `verify` keeps the existing string `writeA
 - `createConfig` reads `KESTREL_NO_BROWSER` into `KestrelConfig.noBrowser`.
 - `BootstrapOptions` gains `openBrowser?: boolean` and `browserLauncher?: BrowserLauncher`, matching the existing `gateway` and `credentialStore` override pattern used by tests.
 - `main.ts` derives the flags from `argv` exactly as it already derives `interactive` from `--no-interactive`, then passes `shouldOpenBrowser(...)` to bootstrap.
-- The guidance view model is emitted **before** the launch is attempted, so a slow or failed launch never delays the user seeing the code. `browserOpened` is therefore reported by a second emission after the attempt resolves.
+- The guidance view model is emitted **before** the launch is attempted, so a slow or failed launch never delays the user seeing the code. A successful launch then emits a **separate** short notice (a `verification` view model). An earlier draft re-emitted the whole device-authorization view with a `browserOpened` flag flipped; manual smoke testing showed that printed the URI and code twice, so the flag was removed. A failed launch emits nothing extra, because the user already has the URI.
 
 ## Security
 
@@ -209,7 +206,7 @@ Following the repository test-flow matrix, each change is proved by the smallest
 | `ProcessBrowserLauncher`  | Exact argv per platform kind; WSL fallback to `xdg-open`; refusal of `http:`, `javascript:`, `file:`, `data:`, and malformed URIs; non-zero exit, runner throw, timeout, and cancellation each resolve `false`; never throws.    |
 | `getAuthStatus`           | `CONNECTED` with the live login; `NOT_CONNECTED` with no credential; `EXPIRED` on `DM_GITHUB_AUTH_EXPIRED` **with the credential left intact**; unrelated gateway errors propagate; signal is forwarded.                         |
 | `logoutGitHub`            | Deletes on a matching token; refuses with `INVALID_INPUT` and performs no deletion on a missing or wrong token; idempotent when nothing is stored.                                                                               |
-| View models and renderers | Plain and JSON output for both new view models, including `browserOpened` true and false and all four `detail` values.                                                                                                           |
+| View models and renderers | Plain and JSON output for both new view models, all four `detail` values, and the guarantee that device-authorization renders on one line and never mentions a browser.                                                          |
 | Bootstrap wiring          | `authLogin` launches the browser with the verification URI; each suppression path performs zero launches; guidance is still emitted when the launch fails; neither the device code nor the token is ever passed to the launcher. |
 | `create-program`          | `auth login`, `auth status`, `auth logout` parse; `--no-browser` parses; `auth logout` without `--confirm` exits 2; device guidance goes to stderr and `--json` stdout stays a single document.                                  |
 | Session                   | Parser accepts and rejects the `/auth` forms; controller routes each to the matching handler; the transcript renders a device-authorization entry; Ctrl+C during `/auth login` closes the session.                               |

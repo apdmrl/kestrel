@@ -123,13 +123,11 @@ export function createConfig(env: Record<string, string | undefined>): KestrelCo
  */
 function deviceAuthorizationView(
   authorization: DeviceFlowAuthorization,
-  browserOpened: boolean,
 ): DeviceAuthorizationViewModel {
   return {
     kind: "device-authorization",
     verificationUri: authorization.verificationUri,
     userCode: authorization.userCode,
-    browserOpened,
   };
 }
 
@@ -552,7 +550,7 @@ export async function bootstrap(
   });
 
   return {
-    authLogin: async ({ onDeviceAuthorization }) => {
+    authLogin: async ({ onNotice }) => {
       const auth = await authenticateGitHub(
         { credentialStore, gateway },
         {
@@ -564,7 +562,7 @@ export async function bootstrap(
             // or failed browser never delays the user seeing what to do. Only
             // the verification URI and short user code are safe to display; the
             // device code and access token are never written out.
-            onDeviceAuthorization?.(deviceAuthorizationView(authorization, false));
+            onNotice?.(deviceAuthorizationView(authorization));
             if (!openBrowser) {
               return;
             }
@@ -572,8 +570,13 @@ export async function bootstrap(
               authorization.verificationUri,
               options.signal,
             );
+            // Reported as its own notice so the instructions above are never
+            // repeated, and nothing is claimed when the launch failed.
             if (opened) {
-              onDeviceAuthorization?.(deviceAuthorizationView(authorization, true));
+              onNotice?.({
+                kind: "verification",
+                text: "Opened your browser to complete authentication.",
+              });
             }
           },
         },

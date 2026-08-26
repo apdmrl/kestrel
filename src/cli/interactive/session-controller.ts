@@ -35,8 +35,8 @@ export function createSessionController(
       switch (command.kind) {
         case "auth-login":
           view = await handlers.authLogin({
-            onDeviceAuthorization: (authorization) => {
-              notify?.(renderPlain(authorization));
+            onNotice: (notice) => {
+              notify?.(renderPlain(notice));
             },
           });
           break;

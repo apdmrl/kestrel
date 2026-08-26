@@ -124,11 +124,10 @@ describe("session controller", () => {
   it("delivers device authorization guidance through the notify channel", async () => {
     const commandHandlers = handlers();
     vi.mocked(commandHandlers.authLogin).mockImplementationOnce(async (args) => {
-      args.onDeviceAuthorization?.({
+      args.onNotice?.({
         kind: "device-authorization",
         verificationUri: "https://github.com/login/device",
         userCode: "ABCD-1234",
-        browserOpened: false,
       });
       return view;
     });
@@ -145,11 +144,10 @@ describe("session controller", () => {
   it("does not fail when no notify channel is supplied", async () => {
     const commandHandlers = handlers();
     vi.mocked(commandHandlers.authLogin).mockImplementationOnce(async (args) => {
-      args.onDeviceAuthorization?.({
+      args.onNotice?.({
         kind: "device-authorization",
         verificationUri: "https://github.com/login/device",
         userCode: "ABCD-1234",
-        browserOpened: true,
       });
       return view;
     });

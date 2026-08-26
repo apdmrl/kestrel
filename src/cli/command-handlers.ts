@@ -1,4 +1,4 @@
-import type { DeviceAuthorizationViewModel, ViewModel } from "./presentation/view-models.js";
+import type { ViewModel } from "./presentation/view-models.js";
 
 /** Application boundaries the CLI commands call; composed in bootstrap. */
 export interface CommandHandlers {
@@ -6,13 +6,14 @@ export interface CommandHandlers {
   /**
    * Authenticate with GitHub.
    *
-   * Device-flow guidance is delivered through `onDeviceAuthorization` rather
-   * than written directly, so each presentation can place it correctly: the
-   * one-shot CLI renders it to stderr, while the Ink session appends it to the
-   * transcript instead of corrupting the frame with a raw write.
+   * Interim notices (device-flow instructions, then whether a browser opened)
+   * arrive through `onNotice` rather than being written directly, so each
+   * presentation can place them correctly: the one-shot CLI renders them to
+   * stderr, while the Ink session appends them to the transcript instead of
+   * corrupting the frame with a raw write.
    */
   readonly authLogin: (args: {
-    onDeviceAuthorization?: (view: DeviceAuthorizationViewModel) => void;
+    onNotice?: (view: ViewModel) => void;
   }) => Promise<ViewModel>;
   readonly authStatus: () => Promise<ViewModel>;
   readonly authLogout: (args: { confirmation?: string | undefined }) => Promise<ViewModel>;

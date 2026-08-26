@@ -62,12 +62,14 @@ export interface VerificationViewModel {
  *
  * Carries only what is safe to display: the verification URI and the short user
  * code. The device code and the access token never reach presentation.
+ *
+ * Whether a browser opened is reported separately, as its own notice, so the
+ * instructions are never printed twice.
  */
 export interface DeviceAuthorizationViewModel {
   readonly kind: "device-authorization";
   readonly verificationUri: string;
   readonly userCode: string;
-  readonly browserOpened: boolean;
 }
 
 /**

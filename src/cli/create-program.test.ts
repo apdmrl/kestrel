@@ -315,11 +315,10 @@ describe("createProgram auth commands", () => {
     const h: CommandHandlers = {
       ...base,
       authLogin: async (args) => {
-        args.onDeviceAuthorization?.({
+        args.onNotice?.({
           kind: "device-authorization",
           verificationUri: "https://github.com/login/device",
           userCode: "ABCD-1234",
-          browserOpened: false,
         });
         return {
           kind: "auth-status",
@@ -342,11 +341,10 @@ describe("createProgram auth commands", () => {
     const h: CommandHandlers = {
       ...base,
       authLogin: async (args) => {
-        args.onDeviceAuthorization?.({
+        args.onNotice?.({
           kind: "device-authorization",
           verificationUri: "https://github.com/login/device",
           userCode: "ABCD-1234",
-          browserOpened: true,
         });
         return {
           kind: "auth-status",
@@ -386,5 +384,48 @@ describe("createProgram auth commands", () => {
     } finally {
       process.exitCode = previous;
     }
+  });
+});
+
+describe("createProgram auth login guidance", () => {
+  function loginWithLaunch(base: CommandHandlers, launched: boolean): CommandHandlers {
+    return {
+      ...base,
+      authLogin: async (args) => {
+        args.onNotice?.({
+          kind: "device-authorization",
+          verificationUri: "https://github.com/login/device",
+          userCode: "WDJB-MJHT",
+        });
+        if (launched) {
+          args.onNotice?.({
+            kind: "verification",
+            text: "Opened your browser to complete authentication.",
+          });
+        }
+        return { kind: "auth-status", connected: true, login: "octocat", detail: "CONNECTED" };
+      },
+    };
+  }
+
+  it("prints the verification uri exactly once when a browser opened", async () => {
+    const { handlers: base } = handlers();
+    const { err } = await parse(loginWithLaunch(base, true), ["auth", "login"]);
+    expect(err.split("https://github.com/login/device").length - 1).toBe(1);
+    expect(err).toContain("WDJB-MJHT");
+    expect(err).toContain("Opened your browser");
+  });
+
+  it("prints the verification uri exactly once when no browser opened", async () => {
+    const { handlers: base } = handlers();
+    const { err } = await parse(loginWithLaunch(base, false), ["auth", "login"]);
+    expect(err.split("https://github.com/login/device").length - 1).toBe(1);
+    expect(err).not.toContain("Opened your browser");
+  });
+
+  it("prints the user code exactly once when a browser opened", async () => {
+    const { handlers: base } = handlers();
+    const { err } = await parse(loginWithLaunch(base, true), ["auth", "login"]);
+    expect(err.split("WDJB-MJHT").length - 1).toBe(1);
   });
 });

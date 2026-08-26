@@ -19,11 +19,7 @@ function renderMission(view: ViewModel & { kind: "mission" }): string {
 }
 
 function renderDeviceAuthorization(view: ViewModel & { kind: "device-authorization" }): string {
-  const lines = ["Open " + view.verificationUri + " and enter the code " + view.userCode];
-  if (view.browserOpened) {
-    lines.push("Opened your browser to complete authentication.");
-  }
-  return lines.join("\n");
+  return "Open " + view.verificationUri + " and enter the code " + view.userCode;
 }
 
 function renderAuthStatus(view: ViewModel & { kind: "auth-status" }): string {

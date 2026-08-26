@@ -67,11 +67,10 @@ describe("session auth interaction", () => {
   it("shows device authorization guidance in the transcript, not on stderr", async () => {
     const commandHandlers = handlers();
     vi.mocked(commandHandlers.authLogin).mockImplementation(async (args) => {
-      args.onDeviceAuthorization?.({
+      args.onNotice?.({
         kind: "device-authorization",
         verificationUri: "https://github.com/login/device",
         userCode: "ABCD-1234",
-        browserOpened: true,
       });
       return view;
     });
