@@ -250,3 +250,141 @@ describe("createProgram command routing", () => {
     process.exitCode = 0;
   });
 });
+
+describe("createProgram auth commands", () => {
+  it("routes auth status", async () => {
+    const { handlers: h, calls } = handlers();
+    await parse(h, ["auth", "status"]);
+    expect(calls).toEqual([{ handler: "authStatus", args: [] }]);
+  });
+
+  it("prints the connected login on stdout for auth status", async () => {
+    const { handlers: h } = handlers();
+    const { out } = await parse(h, ["auth", "status"]);
+    expect(out).toContain("octocat");
+  });
+
+  it("emits auth status as a single json document on stdout", async () => {
+    const { handlers: h } = handlers();
+    const { out, err } = await parse(h, ["--json", "auth", "status"]);
+    const parsed = JSON.parse(out) as { ok: boolean; data: { kind: string; login: string } };
+    expect(parsed.ok).toBe(true);
+    expect(parsed.data.kind).toBe("auth-status");
+    expect(err).toBe("");
+  });
+
+  it("routes auth login", async () => {
+    const { handlers: h, calls } = handlers();
+    await parse(h, ["auth", "login"]);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.handler).toBe("authLogin");
+  });
+
+  it("routes auth logout with the confirmation token", async () => {
+    const { handlers: h, calls } = handlers();
+    await parse(h, ["auth", "logout", "--confirm", "github.com"]);
+    expect(calls).toEqual([{ handler: "authLogout", args: [{ confirmation: "github.com" }] }]);
+  });
+
+  it("routes auth logout without a confirmation so the use case can refuse", async () => {
+    const { handlers: h, calls } = handlers();
+    await parse(h, ["auth", "logout"]);
+    expect(calls).toEqual([{ handler: "authLogout", args: [{ confirmation: undefined }] }]);
+  });
+
+  it("accepts --no-browser on the root program", () => {
+    const program = createProgram({
+      handlers: handlers().handlers,
+      stdout: () => undefined,
+      stderr: () => undefined,
+    });
+    expect(program.helpInformation()).toContain("--no-browser");
+  });
+
+  it("documents auth in the root help", () => {
+    const program = createProgram({
+      handlers: handlers().handlers,
+      stdout: () => undefined,
+      stderr: () => undefined,
+    });
+    expect(program.helpInformation()).toContain("auth");
+  });
+
+  it("writes device authorization guidance to stderr, keeping json stdout parseable", async () => {
+    const { handlers: base } = handlers();
+    const h: CommandHandlers = {
+      ...base,
+      authLogin: async (args) => {
+        args.onDeviceAuthorization?.({
+          kind: "device-authorization",
+          verificationUri: "https://github.com/login/device",
+          userCode: "ABCD-1234",
+          browserOpened: false,
+        });
+        return {
+          kind: "auth-status",
+          connected: true,
+          login: "octocat",
+          detail: "CONNECTED",
+        };
+      },
+    };
+    const { out, err } = await parse(h, ["--json", "auth", "login"]);
+    expect(err).toContain("https://github.com/login/device");
+    expect(err).toContain("ABCD-1234");
+    // stdout must remain exactly one parseable JSON document.
+    const parsed = JSON.parse(out) as { ok: boolean; data: { kind: string } };
+    expect(parsed.data.kind).toBe("auth-status");
+  });
+
+  it("writes device authorization guidance to stderr in plain mode too", async () => {
+    const { handlers: base } = handlers();
+    const h: CommandHandlers = {
+      ...base,
+      authLogin: async (args) => {
+        args.onDeviceAuthorization?.({
+          kind: "device-authorization",
+          verificationUri: "https://github.com/login/device",
+          userCode: "ABCD-1234",
+          browserOpened: true,
+        });
+        return {
+          kind: "auth-status",
+          connected: true,
+          login: "octocat",
+          detail: "CONNECTED",
+        };
+      },
+    };
+    const { out, err } = await parse(h, ["auth", "login"]);
+    expect(err).toContain("ABCD-1234");
+    expect(out).toContain("octocat");
+    expect(out).not.toContain("ABCD-1234");
+  });
+
+  it("maps a refused logout to exit code 2", async () => {
+    const { handlers: base } = handlers();
+    const h: CommandHandlers = {
+      ...base,
+      authLogout: async () => {
+        throw createKestrelError({
+          code: "DM_ILLEGAL_TRANSITION",
+          category: "INVALID_INPUT",
+          userMessage: "Logging out clears the shared github.com credential",
+          suggestedActions: ["Re-run with --confirm github.com to clear it"],
+          retryability: "NO_RETRY",
+          recoveryStrategy: "USER_ACTION",
+          severity: "WARNING",
+        });
+      },
+    };
+    const previous = process.exitCode;
+    try {
+      const { err } = await parse(h, ["auth", "logout"]);
+      expect(err).toContain("github.com");
+      expect(process.exitCode).toBe(2);
+    } finally {
+      process.exitCode = previous;
+    }
+  });
+});

@@ -49,11 +49,39 @@ export function createProgram(options: ProgramOptions): Command {
     .version("0.1.0")
     .option("--plain", "emit plain output")
     .option("--json", "emit machine-readable JSON")
-    .option("--no-interactive", "disable interactive prompts");
+    .option("--no-interactive", "disable interactive prompts")
+    .option("--no-browser", "do not open a browser during GitHub authentication");
 
   const isJson = (): boolean => (program.opts() as { json?: boolean }).json === true;
   const run = (handler: () => Promise<ViewModel>) =>
     runHandler(options.handlers, isJson(), out, err, handler);
+
+  const auth = program.command("auth").description("connect Kestrel to GitHub");
+  auth
+    .command("login")
+    .description("authenticate with GitHub, opening a browser when available")
+    .action(() =>
+      run(() =>
+        options.handlers.authLogin({
+          // Device-flow guidance is presentation, never machine output: it goes
+          // to stderr so --json stdout stays a single parseable JSON document.
+          onDeviceAuthorization: (view) => {
+            err(renderPlain(view) + "\n");
+          },
+        }),
+      )(),
+    );
+  auth
+    .command("status")
+    .description("show which GitHub account is connected")
+    .action(() => run(() => options.handlers.authStatus())());
+  auth
+    .command("logout")
+    .description("clear the stored GitHub credential")
+    .option("--confirm <token>", "confirm clearing the shared github.com credential")
+    .action((opts: { confirm?: string }) =>
+      run(() => options.handlers.authLogout({ confirmation: opts.confirm }))(),
+    );
 
   program
     .command("find")

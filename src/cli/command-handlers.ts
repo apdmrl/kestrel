@@ -15,7 +15,7 @@ export interface CommandHandlers {
     onDeviceAuthorization?: (view: DeviceAuthorizationViewModel) => void;
   }) => Promise<ViewModel>;
   readonly authStatus: () => Promise<ViewModel>;
-  readonly authLogout: (args: { confirmation?: string }) => Promise<ViewModel>;
+  readonly authLogout: (args: { confirmation?: string | undefined }) => Promise<ViewModel>;
   readonly missionAccept: (args: { recommendationId: string }) => Promise<ViewModel>;
   readonly missionPrepare: (args: { missionId?: string }) => Promise<ViewModel>;
   readonly missionResume: (args: { missionId?: string }) => Promise<ViewModel>;
