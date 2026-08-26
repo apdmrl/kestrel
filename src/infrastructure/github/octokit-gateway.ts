@@ -183,6 +183,22 @@ export class OctokitGateway implements GitHubGateway {
       throw mapGitHubError(error);
     });
 
+    // The auth work is detached from the promise this method returns, so its
+    // failure has to be observed here for two reasons. First, a device flow that
+    // fails before `onVerification` (GitHub rejecting the device-code request)
+    // would otherwise leave the caller awaiting verification data that will
+    // never arrive. Second, an unobserved rejection on `pendingAuth` escapes as
+    // a process-fatal unhandled rejection when the caller never reaches
+    // `pollForToken`. Rejecting after `onVerification` already resolved the
+    // verification promise is a no-op, so a later `pollForToken` caller still
+    // receives the same classified error. The `removeAbortListener` call here
+    // is also a no-op once `onVerification` has already removed it; the catch
+    // handler is still required for the pre-verification failure path.
+    this.pendingAuth.catch((error: unknown) => {
+      removeAbortListener?.();
+      rejectVerification(error);
+    });
+
     return verificationPromise;
   }
 

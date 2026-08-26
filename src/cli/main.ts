@@ -1,14 +1,10 @@
-#!/usr/bin/env node
 import { render } from "ink";
 import { createElement } from "react";
 import { bootstrap, createConfig } from "../bootstrap/index.js";
 import { shouldOpenBrowser } from "../application/auth/browser-launch-policy.js";
 import { Session } from "./interactive/session.js";
 import { createProgram } from "./create-program.js";
-
-export function shouldStartSession(args: readonly string[]): boolean {
-  return args.length === 0;
-}
+import { shouldStartSession } from "./session-start.js";
 
 export async function main(): Promise<void> {
   const args = process.argv.slice(2);

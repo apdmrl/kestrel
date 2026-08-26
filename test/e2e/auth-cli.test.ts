@@ -205,4 +205,36 @@ describe("built CLI auth commands", () => {
       await rm(connectedShim, { recursive: true, force: true });
     }
   }, 30_000);
+
+  it("reports a rejected device-flow request as a classified error instead of crashing", async () => {
+    // GitHub answers the device-code request with 404 when it does not recognize
+    // the configured OAuth client id. That failure lands before any verification
+    // data exists, so the CLI must classify it and exit instead of waiting
+    // forever on verification data or dying from an unobserved rejection.
+    const requestedPaths: string[] = [];
+    const server = createServer((request, response) => {
+      requestedPaths.push(request.url ?? "");
+      response.writeHead(404, { "content-type": "application/json" });
+      response.end(JSON.stringify({ message: "Not Found" }));
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    const port = typeof address === "object" && address !== null ? address.port : 0;
+    try {
+      const result = await runAsync([cli, "--no-browser", "auth", "login"], {
+        PATH: shimDir + delimiter + (process.env.PATH ?? ""),
+        GITHUB_API_URL: "http://127.0.0.1:" + String(port),
+        GITHUB_CLIENT_ID: "Iv1.unrecognized",
+      });
+      expect(requestedPaths).toContain("/login/device/code");
+      // The device-code request is intentionally answered with 404 so the
+      // gateway classifies the failure as DM_GITHUB_NOT_FOUND; assert the
+      // exact code so a future demotion of the classification does not pass
+      // the test silently.
+      expect(result.stderr).toContain("DM_GITHUB_NOT_FOUND");
+      expect(result.stderr).toContain("Error");
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  }, 30_000);
 });

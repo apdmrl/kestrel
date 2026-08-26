@@ -54,6 +54,26 @@ function fakeDeviceAuthFactory(): {
   };
 }
 
+/**
+ * Run `body` while capturing process-level unhandled rejections, so a detached
+ * device-flow failure that would crash the CLI is observable as test data.
+ */
+async function withoutUnhandledRejections(body: () => Promise<void>): Promise<unknown[]> {
+  const rejections: unknown[] = [];
+  const onUnhandled = (error: unknown): void => {
+    rejections.push(error);
+  };
+  process.on("unhandledRejection", onUnhandled);
+  try {
+    await body();
+    // Node reports unhandled rejections only after the microtask queue drains.
+    await new Promise((resolve) => setImmediate(resolve));
+  } finally {
+    process.off("unhandledRejection", onUnhandled);
+  }
+  return rejections;
+}
+
 describe("OctokitGateway", () => {
   it("returns the viewer identity", async () => {
     const gateway = new OctokitGateway(
@@ -155,6 +175,65 @@ describe("OctokitGateway", () => {
     const gateway = new OctokitGateway(new FakeOctokit(), "", fakeDeviceAuthFactory().factory);
     await expect(gateway.beginDeviceFlow()).rejects.toMatchObject({
       code: "DM_GITHUB_AUTH_REQUIRED",
+    });
+  });
+
+  it("rejects beginDeviceFlow when device-flow initialization fails before verification", async () => {
+    // GitHub rejects the device-code request (for example an OAuth client id it
+    // does not recognize), so `onVerification` never runs. The caller awaits
+    // `beginDeviceFlow` before it can ever reach `pollForToken`, so the failure
+    // has to surface here instead of leaving the caller waiting forever.
+    const factory: DeviceAuthFactory = () => async () => {
+      await Promise.resolve();
+      throw { name: "HttpError", status: 404, response: { headers: {} } };
+    };
+    const gateway = new OctokitGateway(new FakeOctokit(), "client-id", factory);
+    await expect(gateway.beginDeviceFlow()).rejects.toMatchObject({
+      code: "DM_GITHUB_NOT_FOUND",
+    });
+  });
+
+  it("keeps the device-flow failure handled when pollForToken is never called", async () => {
+    // The auth work is detached from `beginDeviceFlow`'s returned promise, so an
+    // unobserved rejection would escape as a process-fatal unhandled rejection
+    // and kill the CLI instead of being rendered as a classified error.
+    const rejections = await withoutUnhandledRejections(async () => {
+      const factory: DeviceAuthFactory = () => async () => {
+        await Promise.resolve();
+        throw { name: "HttpError", status: 404, response: { headers: {} } };
+      };
+      const gateway = new OctokitGateway(new FakeOctokit(), "client-id", factory);
+      await expect(gateway.beginDeviceFlow()).rejects.toMatchObject({
+        code: "DM_GITHUB_NOT_FOUND",
+      });
+    });
+    expect(rejections).toEqual([]);
+  });
+
+  it("keeps a cancelled device flow handled when pollForToken is never called", async () => {
+    // Cancelling during initialization also rejects the detached auth work, and
+    // the caller unwinds through `beginDeviceFlow` without ever polling.
+    const rejections = await withoutUnhandledRejections(async () => {
+      const factory: DeviceAuthFactory = () => () =>
+        new Promise<{ token: string }>(() => undefined);
+      const gateway = new OctokitGateway(new FakeOctokit(), "client-id", factory);
+      const controller = new AbortController();
+      const begin = gateway.beginDeviceFlow(controller.signal);
+      controller.abort();
+      await expect(begin).rejects.toMatchObject({ code: "DM_GITHUB_AUTH_CANCELLED" });
+    });
+    expect(rejections).toEqual([]);
+  });
+
+  it("still reports the device-flow failure to a later pollForToken caller", async () => {
+    // Attaching a failure handler inside `beginDeviceFlow` must not swallow the
+    // error for a caller that reached `pollForToken` before the flow failed.
+    const { factory, rejectToken } = fakeDeviceAuthFactory();
+    const gateway = new OctokitGateway(new FakeOctokit(), "client-id", factory);
+    await gateway.beginDeviceFlow();
+    rejectToken({ name: "HttpError", status: 404, response: { headers: {} } });
+    await expect(gateway.pollForToken("device-code")).rejects.toMatchObject({
+      code: "DM_GITHUB_NOT_FOUND",
     });
   });
 
