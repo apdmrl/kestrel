@@ -8,6 +8,7 @@ import { createEvaluationContext } from "../domain/challenge/evaluation-context.
 import type { ChallengeId } from "../domain/shared/identifiers.js";
 import type { IsoDateTime } from "../domain/shared/time.js";
 import type { ChallengeSource } from "../ports/challenge-source.js";
+import type { BrowserLauncher } from "../ports/browser-launcher.js";
 import type { Credential, CredentialStore } from "../ports/credential-store.js";
 import type {
   DeviceFlowAuthorization,
@@ -265,6 +266,214 @@ describe("bootstrap github authentication", () => {
     await handlers.find({ mood: "QUICK_WIN" });
     expect(seen).toEqual(["cached-token"]);
     expect(gateway.deviceFlowCalls).toBe(0);
+  });
+});
+
+class FakeBrowserLauncher implements BrowserLauncher {
+  readonly opened: string[] = [];
+  result = true;
+
+  async open(url: string): Promise<boolean> {
+    this.opened.push(url);
+    return this.result;
+  }
+}
+
+describe("bootstrap auth commands", () => {
+  it("reads KESTREL_NO_BROWSER from the environment", () => {
+    expect(createConfig({ KESTREL_HOME: dir }).noBrowser).toBe(false);
+    expect(createConfig({ KESTREL_HOME: dir, KESTREL_NO_BROWSER: "1" }).noBrowser).toBe(true);
+  });
+
+  it("reports NOT_CONNECTED from authStatus with no stored credential", async () => {
+    const handlers = await bootstrap(createConfig({ KESTREL_HOME: dir }), {
+      credentialStore: new FakeCredentialStore(),
+      gateway: new FakeGateway(),
+    });
+    const view = await handlers.authStatus();
+    expect(view).toEqual({
+      kind: "auth-status",
+      connected: false,
+      login: null,
+      detail: "NOT_CONNECTED",
+    });
+  });
+
+  it("reports CONNECTED from authStatus for a validated credential", async () => {
+    const store = new FakeCredentialStore();
+    store.credential = { service: "github", account: "octocat", token: "cached-token" };
+    const handlers = await bootstrap(createConfig({ KESTREL_HOME: dir }), {
+      credentialStore: store,
+      gateway: new FakeGateway(),
+    });
+    const view = await handlers.authStatus();
+    expect(view).toEqual({
+      kind: "auth-status",
+      connected: true,
+      login: "octocat",
+      detail: "CONNECTED",
+    });
+  });
+
+  it("authLogin stores a token and reports the connected identity", async () => {
+    const store = new FakeCredentialStore();
+    const gateway = new FakeGateway();
+    const handlers = await bootstrap(
+      createConfig({ KESTREL_HOME: dir, GITHUB_CLIENT_ID: "cid" }),
+      { credentialStore: store, gateway, writeAuth: () => undefined },
+    );
+    const view = await handlers.authLogin({});
+    expect(view).toEqual({
+      kind: "auth-status",
+      connected: true,
+      login: "octocat",
+      detail: "CONNECTED",
+    });
+    expect(store.stored).toEqual([
+      { service: "github", account: "octocat", token: "fresh-token" },
+    ]);
+  });
+
+  it("authLogin opens the browser at the verification uri", async () => {
+    const launcher = new FakeBrowserLauncher();
+    const handlers = await bootstrap(
+      createConfig({ KESTREL_HOME: dir, GITHUB_CLIENT_ID: "cid" }),
+      {
+        credentialStore: new FakeCredentialStore(),
+        gateway: new FakeGateway(),
+        browserLauncher: launcher,
+        openBrowser: true,
+        writeAuth: () => undefined,
+      },
+    );
+    await handlers.authLogin({});
+    expect(launcher.opened).toEqual(["https://github.com/login/device"]);
+  });
+
+  it("authLogin never passes the device code or token to the browser", async () => {
+    const launcher = new FakeBrowserLauncher();
+    const handlers = await bootstrap(
+      createConfig({ KESTREL_HOME: dir, GITHUB_CLIENT_ID: "cid" }),
+      {
+        credentialStore: new FakeCredentialStore(),
+        gateway: new FakeGateway(),
+        browserLauncher: launcher,
+        openBrowser: true,
+        writeAuth: () => undefined,
+      },
+    );
+    await handlers.authLogin({});
+    const all = launcher.opened.join(" ");
+    expect(all).not.toContain("device-code-secret");
+    expect(all).not.toContain("fresh-token");
+  });
+
+  it("authLogin does not open the browser when the launch is suppressed", async () => {
+    const launcher = new FakeBrowserLauncher();
+    const handlers = await bootstrap(
+      createConfig({ KESTREL_HOME: dir, GITHUB_CLIENT_ID: "cid" }),
+      {
+        credentialStore: new FakeCredentialStore(),
+        gateway: new FakeGateway(),
+        browserLauncher: launcher,
+        openBrowser: false,
+        writeAuth: () => undefined,
+      },
+    );
+    await handlers.authLogin({});
+    expect(launcher.opened).toEqual([]);
+  });
+
+  it("reports the device authorization before attempting the launch", async () => {
+    const launcher = new FakeBrowserLauncher();
+    const events: string[] = [];
+    launcher.open = async (url: string) => {
+      events.push("launch:" + url);
+      return true;
+    };
+    const handlers = await bootstrap(
+      createConfig({ KESTREL_HOME: dir, GITHUB_CLIENT_ID: "cid" }),
+      {
+        credentialStore: new FakeCredentialStore(),
+        gateway: new FakeGateway(),
+        browserLauncher: launcher,
+        openBrowser: true,
+        writeAuth: () => undefined,
+      },
+    );
+    await handlers.authLogin({
+      onDeviceAuthorization: (view) => {
+        events.push("guidance:" + String(view.browserOpened));
+      },
+    });
+    expect(events).toEqual([
+      "guidance:false",
+      "launch:https://github.com/login/device",
+      "guidance:true",
+    ]);
+  });
+
+  it("still reports guidance when the browser launch fails", async () => {
+    const launcher = new FakeBrowserLauncher();
+    launcher.result = false;
+    const seen: boolean[] = [];
+    const handlers = await bootstrap(
+      createConfig({ KESTREL_HOME: dir, GITHUB_CLIENT_ID: "cid" }),
+      {
+        credentialStore: new FakeCredentialStore(),
+        gateway: new FakeGateway(),
+        browserLauncher: launcher,
+        openBrowser: true,
+        writeAuth: () => undefined,
+      },
+    );
+    const view = await handlers.authLogin({
+      onDeviceAuthorization: (authorization) => {
+        seen.push(authorization.browserOpened);
+      },
+    });
+    expect(seen).toEqual([false]);
+    expect(view.kind).toBe("auth-status");
+  });
+
+  it("authLogin fails without starting device flow in a non-interactive session", async () => {
+    const gateway = new FakeGateway();
+    const handlers = await bootstrap(
+      createConfig({ KESTREL_HOME: dir, GITHUB_CLIENT_ID: "cid" }),
+      { interactive: false, credentialStore: new FakeCredentialStore(), gateway },
+    );
+    await expect(handlers.authLogin({})).rejects.toMatchObject({
+      code: "DM_GITHUB_AUTH_REQUIRED",
+    });
+    expect(gateway.deviceFlowCalls).toBe(0);
+  });
+
+  it("authLogout refuses without a confirmation and deletes nothing", async () => {
+    const store = new FakeCredentialStore();
+    store.credential = { service: "github", account: "octocat", token: "cached-token" };
+    const handlers = await bootstrap(createConfig({ KESTREL_HOME: dir }), {
+      credentialStore: store,
+      gateway: new FakeGateway(),
+    });
+    await expect(handlers.authLogout({})).rejects.toMatchObject({ category: "INVALID_INPUT" });
+    expect(store.deleted).toEqual([]);
+  });
+
+  it("authLogout clears the credential when confirmed", async () => {
+    const store = new FakeCredentialStore();
+    store.credential = { service: "github", account: "octocat", token: "cached-token" };
+    const handlers = await bootstrap(createConfig({ KESTREL_HOME: dir }), {
+      credentialStore: store,
+      gateway: new FakeGateway(),
+    });
+    const view = await handlers.authLogout({ confirmation: "github.com" });
+    expect(view).toEqual({
+      kind: "auth-status",
+      connected: false,
+      login: null,
+      detail: "LOGGED_OUT",
+    });
+    expect(store.deleted).toEqual(["octocat"]);
   });
 });
 

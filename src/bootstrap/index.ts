@@ -33,9 +33,14 @@ import { OctokitGateway } from "../infrastructure/github/octokit-gateway.js";
 import { GithubChallengeSource } from "../infrastructure/github/github-challenge-source.js";
 import { genericPromptRenderer } from "../application/agent/generic-prompt-renderer.js";
 import { authenticateGitHub } from "../application/auth/authenticate-github.js";
+import { getAuthStatus } from "../application/auth/get-auth-status.js";
+import { logoutGitHub } from "../application/auth/logout-github.js";
+import { ProcessBrowserLauncher } from "../infrastructure/system/process-browser-launcher.js";
+import { detectPlatform } from "../infrastructure/platform/platform.js";
 import type { ChallengeSource } from "../ports/challenge-source.js";
+import type { BrowserLauncher } from "../ports/browser-launcher.js";
 import type { CredentialStore } from "../ports/credential-store.js";
-import type { GitHubGateway } from "../ports/github-gateway.js";
+import type { GitHubGateway, DeviceFlowAuthorization } from "../ports/github-gateway.js";
 import { findChallenge } from "../application/discovery/find-challenge.js";
 import { acceptMission } from "../application/mission/accept-mission.js";
 import {
@@ -71,13 +76,15 @@ import type { ChallengeType } from "../domain/challenge/challenge.js";
 import type { Mission } from "../domain/mission/mission.js";
 import type { MissionId } from "../domain/shared/identifiers.js";
 import type { CommandHandlers } from "../cli/command-handlers.js";
-import type { ViewModel } from "../cli/presentation/view-models.js";
+import type { DeviceAuthorizationViewModel, ViewModel } from "../cli/presentation/view-models.js";
 
 export interface KestrelConfig {
   readonly home: string;
   readonly workspaceRoot: string;
   readonly githubClientId: string | undefined;
   readonly githubApiUrl: string | undefined;
+  /** Whether KESTREL_NO_BROWSER suppresses the device-flow browser launch. */
+  readonly noBrowser: boolean;
 }
 
 export interface BootstrapOptions {
@@ -89,9 +96,12 @@ export interface BootstrapOptions {
   readonly recover?: boolean;
   /** Writes user-facing device-flow instructions (verification URI and user code). */
   readonly writeAuth?: (text: string) => void;
+  /** Whether the device-flow verification URI may be opened in a browser. */
+  readonly openBrowser?: boolean;
   /** Overrides for adapters, used by tests and alternative compositions. */
   readonly credentialStore?: CredentialStore;
   readonly gateway?: GitHubGateway;
+  readonly browserLauncher?: BrowserLauncher;
   readonly challengeSourceFactory?: (token: string) => ChallengeSource;
 }
 
@@ -101,6 +111,25 @@ export function createConfig(env: Record<string, string | undefined>): KestrelCo
     workspaceRoot: env.KESTREL_WORKSPACE ?? join(homedir(), "Kestrel", "missions"),
     githubClientId: env.GITHUB_CLIENT_ID,
     githubApiUrl: env.GITHUB_API_URL,
+    noBrowser: env.KESTREL_NO_BROWSER !== undefined,
+  };
+}
+
+/**
+ * Project a device-flow authorization into presentation.
+ *
+ * Only the verification URI and the short user code cross this boundary. The
+ * device code and the access token never reach a view model.
+ */
+function deviceAuthorizationView(
+  authorization: DeviceFlowAuthorization,
+  browserOpened: boolean,
+): DeviceAuthorizationViewModel {
+  return {
+    kind: "device-authorization",
+    verificationUri: authorization.verificationUri,
+    userCode: authorization.userCode,
+    browserOpened,
   };
 }
 
@@ -226,6 +255,18 @@ export async function bootstrap(
   // composition root may supply an explicit presentation channel instead.
   const writeAuth = options.writeAuth ?? ((text: string) => process.stderr.write(text));
   const interactive = options.interactive ?? true;
+  const browserLauncher =
+    options.browserLauncher ??
+    new ProcessBrowserLauncher(
+      runner,
+      detectPlatform({
+        platform: process.platform,
+        ...(process.env.WSL_DISTRO_NAME !== undefined ? { isWsl: true } : {}),
+      }).kind,
+    );
+  // Defaults to false so no composition spawns a browser process implicitly.
+  // The CLI entry point decides this explicitly via shouldOpenBrowser.
+  const openBrowser = options.openBrowser ?? false;
 
   // Journal replay runs before ordinary commands so pending transactions finish
   // first. Recovery mode (the exact `mission break-lock` invocation) skips this
@@ -511,6 +552,53 @@ export async function bootstrap(
   });
 
   return {
+    authLogin: async ({ onDeviceAuthorization }) => {
+      const auth = await authenticateGitHub(
+        { credentialStore, gateway },
+        {
+          account: "github",
+          interactive,
+          ...(options.signal !== undefined ? { signal: options.signal } : {}),
+          onAuthorization: async (authorization) => {
+            // Present the URI and code before attempting any launch, so a slow
+            // or failed browser never delays the user seeing what to do. Only
+            // the verification URI and short user code are safe to display; the
+            // device code and access token are never written out.
+            onDeviceAuthorization?.(deviceAuthorizationView(authorization, false));
+            if (!openBrowser) {
+              return;
+            }
+            const opened = await browserLauncher.open(
+              authorization.verificationUri,
+              options.signal,
+            );
+            if (opened) {
+              onDeviceAuthorization?.(deviceAuthorizationView(authorization, true));
+            }
+          },
+        },
+      );
+      return {
+        kind: "auth-status",
+        connected: true,
+        login: auth.account,
+        detail: "CONNECTED",
+      };
+    },
+    authStatus: async () => {
+      const status = await getAuthStatus(
+        { credentialStore, gateway },
+        {
+          account: "github",
+          ...(options.signal !== undefined ? { signal: options.signal } : {}),
+        },
+      );
+      return { kind: "auth-status", ...status };
+    },
+    authLogout: async ({ confirmation }) => {
+      const result = await logoutGitHub({ credentialStore }, { confirmation });
+      return { kind: "auth-status", ...result };
+    },
     find: async ({ mood, type }) => {
       const result = await discover(mood, type);
       if (result.kind === "empty") {

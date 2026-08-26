@@ -6,6 +6,15 @@ import type { ViewModel } from "./presentation/view-models.js";
 
 type Call = { handler: string; args: unknown };
 
+function authStatusView(detail: "CONNECTED" | "LOGGED_OUT"): ViewModel {
+  return {
+    kind: "auth-status",
+    connected: detail === "CONNECTED",
+    login: detail === "CONNECTED" ? "octocat" : null,
+    detail,
+  };
+}
+
 function handlers(overrides: Partial<CommandHandlers> = {}): {
   handlers: CommandHandlers;
   calls: Call[];
@@ -17,6 +26,9 @@ function handlers(overrides: Partial<CommandHandlers> = {}): {
   };
   const base: CommandHandlers = {
     find: async (args) => record("find", [args], { kind: "verification", text: "find" }),
+    authLogin: async (args) => record("authLogin", [args], authStatusView("CONNECTED")),
+    authStatus: async () => record("authStatus", [], authStatusView("CONNECTED")),
+    authLogout: async (args) => record("authLogout", [args], authStatusView("LOGGED_OUT")),
     missionAccept: async (args) =>
       record("missionAccept", [args], { kind: "verification", text: "accept" }),
     missionPrepare: async (args) =>

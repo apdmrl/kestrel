@@ -9,6 +9,9 @@ describe("session controller", () => {
   function handlers(): CommandHandlers {
     return {
       find: vi.fn().mockResolvedValue(view),
+      authLogin: vi.fn().mockResolvedValue(view),
+      authStatus: vi.fn().mockResolvedValue(view),
+      authLogout: vi.fn().mockResolvedValue(view),
       missionAccept: vi.fn().mockResolvedValue(view),
       missionPrepare: vi.fn().mockResolvedValue(view),
       missionResume: vi.fn().mockResolvedValue(view),

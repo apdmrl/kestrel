@@ -18,6 +18,30 @@ function renderMission(view: ViewModel & { kind: "mission" }): string {
   return lines.join("\n");
 }
 
+function renderDeviceAuthorization(view: ViewModel & { kind: "device-authorization" }): string {
+  const lines = ["Open " + view.verificationUri + " and enter the code " + view.userCode];
+  if (view.browserOpened) {
+    lines.push("Opened your browser to complete authentication.");
+  }
+  return lines.join("\n");
+}
+
+function renderAuthStatus(view: ViewModel & { kind: "auth-status" }): string {
+  switch (view.detail) {
+    case "CONNECTED":
+      return "Connected to GitHub as " + (view.login ?? "(unknown)");
+    case "EXPIRED":
+      return [
+        "The stored GitHub credential has expired",
+        "Run 'kestrel auth login' to authenticate again",
+      ].join("\n");
+    case "LOGGED_OUT":
+      return "Logged out of GitHub";
+    case "NOT_CONNECTED":
+      return ["Not connected to GitHub", "Run 'kestrel auth login' to connect"].join("\n");
+  }
+}
+
 /** Render a view model as plain, ANSI-free text. */
 export function renderPlain(view: ViewModel): string {
   switch (view.kind) {
@@ -60,6 +84,10 @@ export function renderPlain(view: ViewModel): string {
       return "Handoff " + view.handoffId + " (prompt hash " + view.renderedPromptHash + ")";
     case "verification":
       return view.text;
+    case "device-authorization":
+      return renderDeviceAuthorization(view);
+    case "auth-status":
+      return renderAuthStatus(view);
     case "error":
       return (
         "Error [" +

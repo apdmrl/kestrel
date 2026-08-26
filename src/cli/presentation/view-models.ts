@@ -57,6 +57,30 @@ export interface VerificationViewModel {
   readonly text: string;
 }
 
+/**
+ * Device-flow instructions for the user.
+ *
+ * Carries only what is safe to display: the verification URI and the short user
+ * code. The device code and the access token never reach presentation.
+ */
+export interface DeviceAuthorizationViewModel {
+  readonly kind: "device-authorization";
+  readonly verificationUri: string;
+  readonly userCode: string;
+  readonly browserOpened: boolean;
+}
+
+/**
+ * GitHub connection state, shared by auth login, status, and logout so there is
+ * exactly one machine-readable shape for authentication state.
+ */
+export interface AuthStatusViewModel {
+  readonly kind: "auth-status";
+  readonly connected: boolean;
+  readonly login: string | null;
+  readonly detail: "CONNECTED" | "NOT_CONNECTED" | "EXPIRED" | "LOGGED_OUT";
+}
+
 export interface ErrorViewModel {
   readonly kind: "error";
   readonly code: string;
@@ -72,6 +96,8 @@ export type ViewModel =
   | PreferencesViewModel
   | HandoffViewModel
   | VerificationViewModel
+  | DeviceAuthorizationViewModel
+  | AuthStatusViewModel
   | ErrorViewModel;
 
 export function errorViewModel(error: unknown): ErrorViewModel {

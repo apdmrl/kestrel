@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Credential, CredentialStore } from "../../ports/credential-store.js";
+import { isKestrelError } from "../errors/kestrel-error.js";
 import { confirmLogout, logoutConfirmationToken, logoutGitHub } from "./logout-github.js";
 
 class FakeCredentialStore implements CredentialStore {
@@ -70,16 +71,19 @@ describe("logoutGitHub", () => {
 
   it("names the required token and the shared-credential consequence when refusing", async () => {
     const credentialStore = new FakeCredentialStore();
-    await expect(
-      logoutGitHub({ credentialStore }, { confirmation: undefined }),
-    ).rejects.toMatchObject({
-      userMessage: expect.stringContaining("github.com") as unknown as string,
-    });
-    const error = await logoutGitHub({ credentialStore }, { confirmation: undefined }).catch(
-      (caught: unknown) => caught as { suggestedActions: readonly string[] },
+    const caught: unknown = await logoutGitHub(
+      { credentialStore },
+      { confirmation: undefined },
+    ).then(
+      () => undefined,
+      (error: unknown) => error,
     );
-    expect(error.suggestedActions.join(" ")).toContain("--confirm github.com");
-    expect(error.suggestedActions.join(" ").toLowerCase()).toContain("git");
+    if (!isKestrelError(caught)) {
+      throw new Error("expected a classified KestrelError");
+    }
+    expect(caught.userMessage).toContain("github.com");
+    expect(caught.suggestedActions.join(" ")).toContain("--confirm github.com");
+    expect(caught.userMessage.toLowerCase()).toContain("git");
   });
 
   it("is idempotent when nothing is stored", async () => {
