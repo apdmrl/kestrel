@@ -19,7 +19,7 @@ import type {
   MergeInfo,
   PullRequestInfo,
 } from "../ports/github-gateway.js";
-import { bootstrap, createConfig, DEFAULT_GITHUB_CLIENT_ID } from "./index.js";
+import { bootstrap, createConfig } from "./index.js";
 
 let dir: string;
 
@@ -41,19 +41,6 @@ describe("bootstrap", () => {
     expect(config.home).toBe("/tmp/home");
     expect(config.workspaceRoot).toBe("/tmp/ws");
     expect(config.githubClientId).toBe("client-id");
-  });
-
-  it("ships a default GitHub client id so an installed copy needs no setup", () => {
-    // The published tool authenticates against Kestrel's own OAuth App; users
-    // supply their own GitHub account through the device flow, not their own app.
-    expect(createConfig({}).githubClientId).toBe(DEFAULT_GITHUB_CLIENT_ID);
-    expect(DEFAULT_GITHUB_CLIENT_ID.trim().length).toBeGreaterThan(0);
-  });
-
-  it("treats a blank client-id override as unset", () => {
-    // An exported-but-empty variable must not strand the user on an unusable id.
-    expect(createConfig({ GITHUB_CLIENT_ID: "" }).githubClientId).toBe(DEFAULT_GITHUB_CLIENT_ID);
-    expect(createConfig({ GITHUB_CLIENT_ID: "   " }).githubClientId).toBe(DEFAULT_GITHUB_CLIENT_ID);
   });
 
   it("returns an empty journey without credentials", async () => {
@@ -104,12 +91,7 @@ describe("bootstrap", () => {
       process.env.GIT_CONFIG_NOSYSTEM = "1";
       process.env.GIT_CONFIG_GLOBAL = join(dir, "empty-gitconfig");
       process.env.GIT_TERMINAL_PROMPT = "0";
-      // A composition with no client id at all: the shipped default is bypassed
-      // so the classified error is asserted without reaching a real endpoint.
-      const handlers = await bootstrap({
-        ...createConfig({ KESTREL_HOME: dir }),
-        githubClientId: "",
-      });
+      const handlers = await bootstrap(createConfig({ KESTREL_HOME: dir }));
       await expect(handlers.find({ mood: "QUICK_WIN" })).rejects.toMatchObject({
         code: "DM_GITHUB_AUTH_REQUIRED",
       });

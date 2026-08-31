@@ -82,7 +82,7 @@ import type { DeviceAuthorizationViewModel, ViewModel } from "../cli/presentatio
 export interface KestrelConfig {
   readonly home: string;
   readonly workspaceRoot: string;
-  readonly githubClientId: string;
+  readonly githubClientId: string | undefined;
   readonly githubApiUrl: string | undefined;
   /** Whether KESTREL_NO_BROWSER suppresses the device-flow browser launch. */
   readonly noBrowser: boolean;
@@ -106,24 +106,11 @@ export interface BootstrapOptions {
   readonly challengeSourceFactory?: (token: string) => ChallengeSource;
 }
 
-/**
- * Kestrel's own OAuth App client id, shipped with the tool so an installed copy
- * authenticates with no setup: each user completes the device flow against their
- * own GitHub account and their token stays in their own credential store. A
- * device-flow client id is a public application identifier, not a secret, and
- * the flow uses no client secret. `GITHUB_CLIENT_ID` overrides it for GitHub
- * Enterprise hosts and for tests that drive a stubbed endpoint.
- */
-export const DEFAULT_GITHUB_CLIENT_ID = "Ov23lizdZtG8goMx2GZC";
-
 export function createConfig(env: Record<string, string | undefined>): KestrelConfig {
-  // A blank override counts as "not configured": an exported-but-empty variable
-  // must not strand the user with an unusable client id.
-  const clientIdOverride = env.GITHUB_CLIENT_ID?.trim() ?? "";
   return {
     home: env.KESTREL_HOME ?? join(homedir(), ".kestrel"),
     workspaceRoot: env.KESTREL_WORKSPACE ?? join(homedir(), "Kestrel", "missions"),
-    githubClientId: clientIdOverride === "" ? DEFAULT_GITHUB_CLIENT_ID : clientIdOverride,
+    githubClientId: env.GITHUB_CLIENT_ID,
     githubApiUrl: env.GITHUB_API_URL,
     noBrowser: env.KESTREL_NO_BROWSER !== undefined,
   };
@@ -257,7 +244,11 @@ export async function bootstrap(
   const octokitOptions = config.githubApiUrl !== undefined ? { baseUrl: config.githubApiUrl } : {};
   const gateway =
     options.gateway ??
-    new OctokitGateway(new Octokit(octokitOptions), config.githubClientId, createOAuthDeviceAuth);
+    new OctokitGateway(
+      new Octokit(octokitOptions),
+      config.githubClientId ?? "",
+      createOAuthDeviceAuth,
+    );
   // Authorization guidance is presentation, never machine output: default it
   // to stderr so --json stdout stays a single parseable JSON document. The CLI
   // composition root may supply an explicit presentation channel instead.
