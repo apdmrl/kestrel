@@ -35,6 +35,7 @@ import { genericPromptRenderer } from "../application/agent/generic-prompt-rende
 import { authenticateGitHub } from "../application/auth/authenticate-github.js";
 import { getAuthStatus } from "../application/auth/get-auth-status.js";
 import { logoutGitHub } from "../application/auth/logout-github.js";
+import { requireValidatedGitHubCredential } from "../application/auth/require-validated-github-credential.js";
 import { ProcessBrowserLauncher } from "../infrastructure/system/process-browser-launcher.js";
 import { detectPlatform } from "../infrastructure/platform/platform.js";
 import type { ChallengeSource } from "../ports/challenge-source.js";
@@ -81,7 +82,7 @@ import type { DeviceAuthorizationViewModel, ViewModel } from "../cli/presentatio
 export interface KestrelConfig {
   readonly home: string;
   readonly workspaceRoot: string;
-  readonly githubClientId: string | undefined;
+  readonly githubClientId: string;
   readonly githubApiUrl: string | undefined;
   /** Whether KESTREL_NO_BROWSER suppresses the device-flow browser launch. */
   readonly noBrowser: boolean;
@@ -105,11 +106,24 @@ export interface BootstrapOptions {
   readonly challengeSourceFactory?: (token: string) => ChallengeSource;
 }
 
+/**
+ * Kestrel's own OAuth App client id, shipped with the tool so an installed copy
+ * authenticates with no setup: each user completes the device flow against their
+ * own GitHub account and their token stays in their own credential store. A
+ * device-flow client id is a public application identifier, not a secret, and
+ * the flow uses no client secret. `GITHUB_CLIENT_ID` overrides it for GitHub
+ * Enterprise hosts and for tests that drive a stubbed endpoint.
+ */
+export const DEFAULT_GITHUB_CLIENT_ID = "Ov23lizdZtG8goMx2GZC";
+
 export function createConfig(env: Record<string, string | undefined>): KestrelConfig {
+  // A blank override counts as "not configured": an exported-but-empty variable
+  // must not strand the user with an unusable client id.
+  const clientIdOverride = env.GITHUB_CLIENT_ID?.trim() ?? "";
   return {
     home: env.KESTREL_HOME ?? join(homedir(), ".kestrel"),
     workspaceRoot: env.KESTREL_WORKSPACE ?? join(homedir(), "Kestrel", "missions"),
-    githubClientId: env.GITHUB_CLIENT_ID,
+    githubClientId: clientIdOverride === "" ? DEFAULT_GITHUB_CLIENT_ID : clientIdOverride,
     githubApiUrl: env.GITHUB_API_URL,
     noBrowser: env.KESTREL_NO_BROWSER !== undefined,
   };
@@ -243,11 +257,7 @@ export async function bootstrap(
   const octokitOptions = config.githubApiUrl !== undefined ? { baseUrl: config.githubApiUrl } : {};
   const gateway =
     options.gateway ??
-    new OctokitGateway(
-      new Octokit(octokitOptions),
-      config.githubClientId ?? "",
-      createOAuthDeviceAuth,
-    );
+    new OctokitGateway(new Octokit(octokitOptions), config.githubClientId, createOAuthDeviceAuth);
   // Authorization guidance is presentation, never machine output: default it
   // to stderr so --json stdout stays a single parseable JSON document. The CLI
   // composition root may supply an explicit presentation channel instead.
@@ -287,30 +297,6 @@ export async function bootstrap(
   }> => {
     const { explicit, learned, version } = await getPreferences({ preferencesStore, journeyStore });
     return { explicit, learned, version };
-  };
-
-  const requireGithubToken = async (): Promise<string> => {
-    // Always validate cached tokens and present the device-flow verification
-    // code. The verification URI and short user code are safe to display; the
-    // device code and access token are never written out.
-    const auth = await authenticateGitHub(
-      { credentialStore, gateway },
-      {
-        account: "github",
-        interactive,
-        ...(options.signal !== undefined ? { signal: options.signal } : {}),
-        onAuthorization: (authorization) => {
-          writeAuth(
-            "To authenticate, open " +
-              authorization.verificationUri +
-              " and enter the code " +
-              authorization.userCode +
-              "\n",
-          );
-        },
-      },
-    );
-    return auth.token;
   };
 
   const resolveMission = async (
@@ -505,12 +491,20 @@ export async function bootstrap(
   const discover = async (mood: string, type?: string) => {
     const moodValue: Mood = isMood(mood) ? mood : "QUICK_WIN";
     const typeValue = type !== undefined ? validateChallengeType(type) : undefined;
-    const token = await requireGithubToken();
+    // Always fail closed: never begin device flow from a discovery operation.
+    // Explicit `auth login` (or `/auth login` in the shell) is the only path
+    // that may start the device flow, so an unauthenticated `find` tells the
+    // user to authenticate first instead of silently binding the operation to
+    // a freshly created OAuth identity.
+    const auth = await requireValidatedGitHubCredential(
+      { credentialStore, gateway },
+      { account: "github", ...(options.signal === undefined ? {} : { signal: options.signal }) },
+    );
     const source =
       options.challengeSourceFactory !== undefined
-        ? options.challengeSourceFactory(token)
+        ? options.challengeSourceFactory(auth.token)
         : new GithubChallengeSource(
-            new Octokit({ ...octokitOptions, auth: token }),
+            new Octokit({ ...octokitOptions, auth: auth.token }),
             clock,
             idGenerator,
           );
@@ -770,7 +764,10 @@ export async function bootstrap(
     verifySubmission: async ({ missionId, prNumber }) => {
       validatePrNumber(prNumber);
       const resolved = await resolveMission(missionId);
-      const token = await requireGithubToken();
+      const { token } = await requireValidatedGitHubCredential(
+        { credentialStore, gateway },
+        { account: "github", ...(options.signal === undefined ? {} : { signal: options.signal }) },
+      );
       const repositoryPath = resolved.mission.workspace?.repositoryPath ?? "";
       const result = await verifySubmission(
         {
@@ -806,7 +803,10 @@ export async function bootstrap(
     verifyLink: async ({ missionId, prNumber }) => {
       validatePrNumber(prNumber);
       const resolved = await resolveMission(missionId);
-      const token = await requireGithubToken();
+      const { token } = await requireValidatedGitHubCredential(
+        { credentialStore, gateway },
+        { account: "github", ...(options.signal === undefined ? {} : { signal: options.signal }) },
+      );
       const result = await verifyIssueLink(
         { lock, journal, missionStore, journeyStore, indexStore, gateway, idGenerator, clock },
         {
@@ -827,7 +827,10 @@ export async function bootstrap(
     verifyMerge: async ({ missionId, prNumber }) => {
       validatePrNumber(prNumber);
       const resolved = await resolveMission(missionId);
-      const token = await requireGithubToken();
+      const { token } = await requireValidatedGitHubCredential(
+        { credentialStore, gateway },
+        { account: "github", ...(options.signal === undefined ? {} : { signal: options.signal }) },
+      );
       const result = await verifyMerge(
         { lock, journal, missionStore, journeyStore, indexStore, gateway, idGenerator, clock },
         {

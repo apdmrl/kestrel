@@ -19,7 +19,7 @@ import type {
   MergeInfo,
   PullRequestInfo,
 } from "../ports/github-gateway.js";
-import { bootstrap, createConfig } from "./index.js";
+import { bootstrap, createConfig, DEFAULT_GITHUB_CLIENT_ID } from "./index.js";
 
 let dir: string;
 
@@ -41,6 +41,19 @@ describe("bootstrap", () => {
     expect(config.home).toBe("/tmp/home");
     expect(config.workspaceRoot).toBe("/tmp/ws");
     expect(config.githubClientId).toBe("client-id");
+  });
+
+  it("ships a default GitHub client id so an installed copy needs no setup", () => {
+    // The published tool authenticates against Kestrel's own OAuth App; users
+    // supply their own GitHub account through the device flow, not their own app.
+    expect(createConfig({}).githubClientId).toBe(DEFAULT_GITHUB_CLIENT_ID);
+    expect(DEFAULT_GITHUB_CLIENT_ID.trim().length).toBeGreaterThan(0);
+  });
+
+  it("treats a blank client-id override as unset", () => {
+    // An exported-but-empty variable must not strand the user on an unusable id.
+    expect(createConfig({ GITHUB_CLIENT_ID: "" }).githubClientId).toBe(DEFAULT_GITHUB_CLIENT_ID);
+    expect(createConfig({ GITHUB_CLIENT_ID: "   " }).githubClientId).toBe(DEFAULT_GITHUB_CLIENT_ID);
   });
 
   it("returns an empty journey without credentials", async () => {
@@ -91,7 +104,12 @@ describe("bootstrap", () => {
       process.env.GIT_CONFIG_NOSYSTEM = "1";
       process.env.GIT_CONFIG_GLOBAL = join(dir, "empty-gitconfig");
       process.env.GIT_TERMINAL_PROMPT = "0";
-      const handlers = await bootstrap(createConfig({ KESTREL_HOME: dir }));
+      // A composition with no client id at all: the shipped default is bypassed
+      // so the classified error is asserted without reaching a real endpoint.
+      const handlers = await bootstrap({
+        ...createConfig({ KESTREL_HOME: dir }),
+        githubClientId: "",
+      });
       await expect(handlers.find({ mood: "QUICK_WIN" })).rejects.toMatchObject({
         code: "DM_GITHUB_AUTH_REQUIRED",
       });
@@ -184,9 +202,31 @@ const emptyChallengeSource: ChallengeSource = {
 };
 
 describe("bootstrap github authentication", () => {
-  it("defaults device authorization guidance to stderr, never stdout", async () => {
+  it("fails closed during interactive bootstrap without a cached credential", async () => {
     const store = new FakeCredentialStore();
     const gateway = new FakeGateway();
+    let factoryCalls = 0;
+    const factory = () => {
+      factoryCalls += 1;
+      return emptyChallengeSource;
+    };
+    const handlers = await bootstrap(createConfig({ KESTREL_HOME: dir, GITHUB_CLIENT_ID: "cid" }), {
+      interactive: true,
+      credentialStore: store,
+      gateway,
+      challengeSourceFactory: factory,
+    });
+    await expect(handlers.find({ mood: "QUICK_WIN" })).rejects.toMatchObject({
+      code: "DM_GITHUB_AUTH_REQUIRED",
+    });
+    // The source factory must NOT be invoked when auth is missing: building
+    // a challenge source before validating identity would mask the failure
+    // and could leak credentials into a half-constructed adapter.
+    expect(factoryCalls).toBe(0);
+    expect(gateway.deviceFlowCalls).toBe(0);
+  });
+
+  it("never writes device-flow authorization to stderr or writeAuth from find", async () => {
     const written: string[] = [];
     const stderrSpy = vi
       .spyOn(process.stderr, "write")
@@ -195,41 +235,27 @@ describe("bootstrap github authentication", () => {
         return true;
       });
     try {
+      const store = new FakeCredentialStore();
+      const gateway = new FakeGateway();
       const handlers = await bootstrap(
         createConfig({ KESTREL_HOME: dir, GITHUB_CLIENT_ID: "cid" }),
         {
           interactive: true,
+          writeAuth: (text) => written.push(text),
           credentialStore: store,
           gateway,
           challengeSourceFactory: () => emptyChallengeSource,
         },
       );
-      await handlers.find({ mood: "QUICK_WIN" });
+      await expect(handlers.find({ mood: "QUICK_WIN" })).rejects.toMatchObject({
+        code: "DM_GITHUB_AUTH_REQUIRED",
+      });
     } finally {
       stderrSpy.mockRestore();
     }
     const output = written.join("\n");
-    expect(output).toContain("https://github.com/login/device");
-    expect(output).toContain("ABCD");
-    expect(output).not.toContain("device-code-secret");
-    expect(output).not.toContain("fresh-token");
-  });
-
-  it("presents the verification URI and user code during interactive device flow", async () => {
-    const written: string[] = [];
-    const store = new FakeCredentialStore();
-    const gateway = new FakeGateway();
-    const handlers = await bootstrap(createConfig({ KESTREL_HOME: dir, GITHUB_CLIENT_ID: "cid" }), {
-      interactive: true,
-      writeAuth: (text) => written.push(text),
-      credentialStore: store,
-      gateway,
-      challengeSourceFactory: () => emptyChallengeSource,
-    });
-    await handlers.find({ mood: "QUICK_WIN" });
-    const output = written.join("\n");
-    expect(output).toContain("https://github.com/login/device");
-    expect(output).toContain("ABCD");
+    expect(output).not.toContain("https://github.com/login/device");
+    expect(output).not.toContain("ABCD");
     expect(output).not.toContain("device-code-secret");
     expect(output).not.toContain("fresh-token");
   });

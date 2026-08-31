@@ -86,6 +86,10 @@ describe("built CLI", () => {
   it("reports find auth errors to stderr with a nonzero exit code", async () => {
     const home = mkdtempSync(join(tmpdir(), "kestrel-cli-"));
     try {
+      // No cached credential and no device-flow escape hatch: `find` must fail
+      // closed so a built CLI never starts an implicit device flow. The shipped
+      // OAuth client id is present, but no token exists and no interactive
+      // prompt is allowed, so the classified error reaches the user unchanged.
       const result = await runCli(["find"], {
         KESTREL_HOME: home,
         GIT_CONFIG_NOSYSTEM: "1",
@@ -93,8 +97,8 @@ describe("built CLI", () => {
         GIT_TERMINAL_PROMPT: "0",
       });
       expect(result.code).not.toBe(0);
-      expect(result.stdout).toBe("");
-      expect(result.stderr).toContain("Error");
+      expect(result.stderr).toContain("DM_GITHUB_AUTH_REQUIRED");
+      expect(result.stderr).not.toContain("login/device");
     } finally {
       rmSync(home, { recursive: true, force: true });
     }
