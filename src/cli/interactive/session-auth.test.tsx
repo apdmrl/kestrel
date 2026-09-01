@@ -428,7 +428,7 @@ describe("session auth interaction — prompt clearing on synchronous admission"
       // occurrences. A duplicate (e.g. clearing twice or re-adding
       // during the finally) would surface as a count > 1; a missing
       // addEntry would surface as 0.
-      const inputEntryMatches = admittedFrame.match(/› \/progress/u) ?? [];
+      const inputEntryMatches = admittedFrame.match(/› \/progress/gu) ?? [];
       expect(inputEntryMatches.length).toBe(1);
       // The handler is still pending. Pressing Enter WITHOUT typing
       // must be a no-op: the prompt is empty, so `commandText` is `""`
@@ -511,7 +511,7 @@ describe("session auth interaction — prompt clearing on synchronous admission"
       // The admitted `/progress` command must be recorded in the
       // transcript exactly once (override path also adds an input
       // entry, so the transcript reflects the submitted command).
-      const progressEntryMatches = midFrame.match(/› \/progress/u) ?? [];
+      const progressEntryMatches = midFrame.match(/› \/progress/gu) ?? [];
       expect(progressEntryMatches.length).toBe(1);
       // Resolve `/progress` so the slot releases and the next Enter
       // can admit `/journey`.
