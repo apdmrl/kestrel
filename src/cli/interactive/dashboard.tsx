@@ -215,7 +215,7 @@ export function contextActionsRowCount(
   }
   const innerMargin = compact ? 0 : 1;
   const borders = compact ? 0 : 2;
-  const borderedContentWidth = Math.max(1, paneWidth - 2 - (compact ? 0 : 2));
+  const borderedContentWidth = Math.max(1, paneWidth - 4 - (compact ? 0 : 2));
   const indentedWidth = Math.max(1, borderedContentWidth - 4);
   const bodyRows = actions.reduce((sum, action) => {
     const labelRows = wrapLineToWidth(`--- ${action.label}`, borderedContentWidth);
@@ -300,15 +300,19 @@ function finalizeWindowedEntries(
     }
   }
 
-  const selectedNoncritical = new Set<number>();
+  const selectedNoncritical = new Map<number, RenderableTranscriptEntry>();
   for (let index = entries.length - 1; index >= 0; index -= 1) {
     const entry = entries[index];
     if (entry === undefined || criticalBounded.has(entry.id) || entry.criticality === "critical") {
       continue;
     }
-    if (entry.rows <= remaining) {
-      selectedNoncritical.add(entry.id);
-      remaining -= entry.rows;
+    const measured = {
+      ...entry,
+      rows: estimateEntryRows(entry.text, entry.kind, paneWidth),
+    };
+    if (measured.rows <= remaining) {
+      selectedNoncritical.set(entry.id, measured);
+      remaining -= measured.rows;
     }
   }
 
@@ -317,9 +321,10 @@ function finalizeWindowedEntries(
     const bounded = criticalBounded.get(entry.id);
     if (bounded !== undefined) {
       result.push(bounded);
-    } else if (selectedNoncritical.has(entry.id)) {
-      result.push(entry);
+      continue;
     }
+    const noncritical = selectedNoncritical.get(entry.id);
+    if (noncritical !== undefined) result.push(noncritical);
   }
   return result;
 }

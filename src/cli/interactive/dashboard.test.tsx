@@ -1200,6 +1200,26 @@ describe("DashboardShell wide-pane + production ContextActions", () => {
     // 6 disabled actions × 3 rows each = 18 body rows. Plus chrome.
     expect(computed).toBeGreaterThanOrEqual(18);
   });
+  it("counts compact action wrapping at the production nested padding width", () => {
+    const compactCaps: TerminalCapabilities = { columns: 44, rows: 24, color: true };
+    const paneWidth = transcriptPaneWidth(compactCaps);
+    const actions: SessionAction[] = [
+      {
+        id: "recommendation.accept",
+        label: "Accept recommendation",
+        command: `/mission accept --id ${"r".repeat(16)}`,
+        availability: { status: "enabled" },
+      },
+    ];
+    const computed = contextActionsRowCount(actions, paneWidth, true);
+    const { lastFrame } = render(
+      <Box width={paneWidth} paddingX={1}>
+        <ContextActions actions={actions} compact />
+      </Box>,
+    );
+    expect((lastFrame() ?? "").split("\n").length).toBe(computed);
+  });
+
 });
 
 describe("windowTranscriptEntries (bounded critical retention)", () => {
@@ -1439,7 +1459,7 @@ describe("DashboardShell wide-mode 57–80 cell row cap (live pane width)", () =
         text,
         kind: "output",
         criticality: "noncritical",
-        rows: estimateEntryRows(text, "output", paneWidth),
+        rows: estimateEntryRows(text, "output", wideCaps.columns),
       });
     }
     const { lastFrame } = render(

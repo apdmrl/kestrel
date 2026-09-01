@@ -1574,3 +1574,25 @@ Duration    7.59s
 LSP diagnostics reported no TypeScript errors in `dashboard.tsx` or
 `session-state.ts`; the ESLint language-server integration was unavailable, so
 repository lint remains an integration-gate check.
+
+### Final Re-review Corrections
+
+The next scoped review found two remaining measurement gaps:
+
+- Noncritical entries retained their original full-terminal row metadata.
+  Windowing now remeasures every noncritical entry at the live transcript pane
+  width before admission.
+- Context action wrapping omitted the inner action box's horizontal padding.
+  The row counter now subtracts both the production wrapper and inner padding,
+  plus noncompact borders.
+
+The wide-frame regression deliberately supplies stale 80-column entry metadata;
+the shell remeasures it at 56 columns. A 44-column compact regression places a
+recommendation accept command exactly across the old two-cell boundary and
+compares the production nested mount with `contextActionsRowCount`.
+
+```text
+Test Files  8 passed (8)
+Tests       248 passed (248)
+Duration    8.65s
+```
