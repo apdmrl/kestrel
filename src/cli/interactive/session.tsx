@@ -355,6 +355,14 @@ export function Session({
     if (admission === null) return;
     admissionSlot.current = admission.slot;
     admissionToken.current = admission.token;
+    // Record the admitted command in the transcript exactly once, before
+    // clearing the prompt. The parse-error / clear / exit / aborted branches
+    // above already record their own input entry; a rejected overlapping
+    // submission returns above this point so it never records an entry.
+    // The exact recommendation accept command must remain in the typed
+    // command line of the transcript — `commandText` is already the trimmed
+    // raw input the user typed, so we pass it through verbatim.
+    addEntry("input", commandText);
     // Restore prompt clearing for ordinary interactive submit: the user
     // typed a command and pressed Enter, the synchronous guard passed,
     // and no `commandOverride` was supplied (which would be a separately

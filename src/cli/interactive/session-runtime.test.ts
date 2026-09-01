@@ -432,13 +432,20 @@ describe("runStartupAuth", () => {
     handle.dispose();
   });
 
-  it("clears the deadline timer (vi.getTimerCount===0), detaches the parent listener (spy), and absorbs a late parent abort after dispose", async () => {
+  it("clears the deadline timer (vi.getTimerCount===0), removes every registered parent abort listener (paired add/remove spies), and absorbs a late parent abort after dispose", async () => {
     // Disposal contract: the runtime must release every resource it
     // acquired during startup. The deadline timer is the long-lived
     // setTimeout the runtime installs; the parent listener forwards
     // process shutdown to the child. After dispose, both must be gone.
+    //
+    // Spy on BOTH addEventListener and removeEventListener so the test
+    // can pair every registration with its corresponding removal. A
+    // removal that does not match a prior registration indicates a
+    // leaked listener; a registration without a removal indicates a
+    // dangling listener.
     vi.useFakeTimers();
     const parent = new AbortController();
+    const addSpy = vi.spyOn(parent.signal, "addEventListener");
     const removeSpy = vi.spyOn(parent.signal, "removeEventListener");
     let capturedSignal: AbortSignal | undefined;
     const authStatus = vi.fn(async (_args: unknown, ctx: CommandContext) => {
@@ -454,19 +461,25 @@ describe("runStartupAuth", () => {
     });
     // The deadline timer is installed; vi.getTimerCount is > 0.
     expect(vi.getTimerCount()).toBeGreaterThan(0);
+    // Snapshot the runtime-registered abort listeners BEFORE dispose
+    // so we can prove every registration was paired with a removal.
+    const registeredAbortListeners = addSpy.mock.calls
+      .filter((call) => call[0] === "abort" && typeof call[1] === "function")
+      .map((call) => call[1] as (...args: unknown[]) => unknown);
+    expect(registeredAbortListeners.length).toBeGreaterThan(0);
     // Dispose: must abort the child, clear the timer, and remove the
     // parent listener.
     handle.dispose();
     // Timer cleared immediately — no leaked setTimeout.
     expect(vi.getTimerCount()).toBe(0);
-    // The parent listener registered with `{ once: true }` must be
-    // removed (the runtime adds its own `abort` listener on top of any
-    // the test fixture may have set).
-    expect(
-      removeSpy.mock.calls.some(
-        (call) => call[0] === "abort" && typeof call[1] === "function",
-      ),
-    ).toBe(true);
+    // Every registered parent abort callback must have been removed.
+    for (const listener of registeredAbortListeners) {
+      expect(
+        removeSpy.mock.calls.some(
+          (call) => call[0] === "abort" && call[1] === listener,
+        ),
+      ).toBe(true);
+    }
     // Child signal was aborted so handler-side cleanup can run.
     expect(capturedSignal?.aborted).toBe(true);
     expect(events).toEqual([]);
@@ -474,6 +487,7 @@ describe("runStartupAuth", () => {
     parent.abort(new Error("late lifetime"));
     await vi.runAllTimersAsync();
     expect(events).toEqual([]);
+    addSpy.mockRestore();
     removeSpy.mockRestore();
   });
 
