@@ -1135,3 +1135,223 @@ Net delta from the prior focused run (116 tests):
   row, so the assertion matches the visual row count for the focused
   tests; only ANSI-escape-heavy paths would diverge and the dashboard
   has no escape sequences inside its bounded frame.
+
+## Fix Round 5 — Reducer-Owned Session / Auth / Operation State
+
+### Goal
+
+Replace the parallel `useState<SessionAuthState>` policy in
+`session.tsx` with the authoritative `sessionReducer` so the
+`/find`-failure → `unknown` regression and the
+`/auth login`-failure → `unknown` regression (both of which the
+round-4 code accidentally encoded) cannot reappear. The reducer is
+the single authority on auth / operation / latestRecommendation
+transitions; the Session runtime parses the command kind, allocates
+stable IDs, dispatches the matching event before awaiting the
+controller, and uses the same IDs on the resolution event so
+supersession is implicit. Transient state (`input`, `focus`,
+`selectedCategoryIndex`, `selectedActionIndex`, `actionFocused`,
+`busy`, `transcript`) stays local for Task 4.
+
+### Files
+
+- `src/cli/interactive/session.tsx` — imports `sessionReducer`,
+  `initialSessionState`, and `SessionAuthState` / `SessionEvent`
+  types from `./session-state.js`; replaces `useState<SessionAuthState>`
+  with `useReducer(sessionReducer, undefined, initialSessionState)`;
+  replaces the error-classification branch with `dispatch({ type: ... })`
+  events using captured `attemptId` / `operationId`. Transient
+  category / focus / input state stays in `useState`. The
+  `AUTH_FAILURE_CODES` lookup table and the `setAuthState` policy are
+  removed (the reducer owns both transitions).
+- `src/cli/interactive/session.test.tsx` — preserves every
+  round-4 test from `persistent session` through `persistent session
+  — live stdout capabilities` (18 tests). Replaces the two
+  round-4 `persistent session — auth failure propagation` cases with
+  a single reducer-driven case (`transitions to unknown only when
+  /auth status fails during checking`) that asserts on the live
+  contextual action panel rather than incidental transcript text the
+  compact 80×24 budget intentionally drops. Adds three new
+  reducer-driven cases (`Session — auth failure routing
+  (reducer-driven)`):
+  - `preserves the connected state when /find fails with
+    DM_NETWORK_UNAVAILABLE`
+  - `restores required state when /auth login fails with
+    DM_GITHUB_AUTH_REQUIRED`
+  - `transitions to unknown only when /auth status fails during
+    checking`
+  Adds three dashboard-integration cases (`ContextActions — variable
+  row chrome`, `DashboardShell — wide pane with production
+  ContextActions`, `actionsForSection — existing behavior preserved`)
+  consolidated from the round-5 cleanup. New regex constants
+  (`FIND_ENABLED`, `FIND_RECOVERY_AUTH_STATUS`, `FIND_RECOVERY_AUTH_LOGIN`)
+  anchor on the Find-section ContextActions panel so the bounded
+  shell's intentional drop of the transcript line does not break the
+  assertion.
+- `src/cli/interactive/dashboard.test.tsx` — round-5 row-budget and
+  bounded-critical cases remain consolidated from the round-5 cleanup
+  (71 tests, all passing).
+- `src/cli/interactive/dashboard.tsx` — round-5 grapheme-aware
+  `wrapLineToWidth`, `estimateEntryRows` updates, and
+  `availableTranscriptRows` chrome adjustments remain in place.
+- `package.json` / `package-lock.json` — verified `string-width` is a
+  legitimate direct dependency (`^7.2.0`, installed `7.2.0`); no
+  change required.
+
+### Reducer Dispatch Wiring
+
+| Command kind         | ID counter  | Pre-await dispatch                            | Success dispatch                         | Failure dispatch                          |
+| -------------------- | ----------- | --------------------------------------------- | ---------------------------------------- | ----------------------------------------- |
+| `auth-status`        | `attemptId` | `AUTH_CHECK_STARTED`                          | `AUTH_RESOLVED` (CONNECTED / NOT_CONNECTED / EXPIRED, login as recorded) | `AUTH_FAILED` (errorCode)               |
+| `auth-login`         | `operationId` | `OPERATION_STARTED` (cancellable=true)        | `OPERATION_SUCCEEDED` (reducer restores `authBeforeLogin` on non-connected result, sets `connected` on connected result) | `OPERATION_FAILED` (reducer restores `authBeforeLogin`) |
+| other (`/find`, ...) | `operationId` | `OPERATION_STARTED` (cancellable=true)        | `OPERATION_SUCCEEDED` (view)             | `OPERATION_FAILED` (reducer preserves `auth`) |
+
+The reducer ignores every event whose `attemptId / operationId` does
+not match the running operation / attempt, so a stale resolution
+cannot win. `OPERATION_STARTED` for a login command captures
+`authBeforeLogin`; `OPERATION_FAILED` on a login command restores it,
+which is why `/auth login` failure (after a `NOT_CONNECTED` auth
+status) returns to `required`, not `unknown`.
+
+### Reducer-Driven Test Adjustments
+
+The round-4 `transitions authState from checking to unknown when
+/auth status fails with DM_NETWORK_UNAVAILABLE` case asserted on
+transcript visibility (`DM_NETWORK_UNAVAILABLE`,
+`Run /auth status to continue.`) that the compact 80×24 budget
+intentionally drops. The round-5 replacement asserts on the live
+`ContextActions` panel of the Find section
+(`FIND_RECOVERY_AUTH_STATUS` regex anchored on
+`GitHub authentication is not verified… /auth status`) so it still
+verifies the unknown-state recovery surfaces without depending on
+incidental transcript visibility.
+
+The round-4 `persistent session — auth state propagation` case
+asserted `frame.contains("octocat")` after navigating to the Find
+section. The Find section's ContextActions consumes the row budget
+so the auth-status transcript line is dropped; the round-5 assertion
+verifies the connected-state signal through the Find-section
+`ContextActions` panel (`Find.run` is enabled with the `*-` marker
+rather than `*x`) instead. The `connected login name` assertion is
+removed in favour of the observable action-availability signal.
+
+### Pre-Reducer Failure Confirmation
+
+To confirm the new reducer-driven cases discriminate the
+pre-reducer implementation, `session.tsx` was temporarily reverted to
+the round-4 baseline and the new tests re-run. Both round-5 cases
+failed exactly where expected:
+
+- `preserves the connected state when /find fails with
+  DM_NETWORK_UNAVAILABLE` — pre-reducer transitions auth to
+  `unknown` so the Find-section ContextActions surfaces
+  `/auth status` as recovery; the test's
+  `not.toMatch(FIND_RECOVERY_AUTH_STATUS)` assertion fails.
+- `restores required state when /auth login fails with
+  DM_GITHUB_AUTH_REQUIRED` — pre-reducer transitions auth to
+  `unknown` so the Find-section ContextActions surfaces
+  `/auth status`; the test's
+  `toMatch(FIND_RECOVERY_AUTH_LOGIN)` and
+  `not.toMatch(FIND_RECOVERY_AUTH_STATUS)` assertions fail.
+- `transitions to unknown only when /auth status fails during
+  checking` — passes on both implementations because the reducer
+  preserves the round-4 `AUTH_FAILED` → `unknown` transition;
+  included as a regression guard.
+
+### RED — first run with new failing tests + round-4 session.tsx
+
+```
+$ git stash push -m "verify-pre-reducer" -- src/cli/interactive/session.tsx
+$ npx vitest run src/cli/interactive/session.test.tsx -t "Session — auth failure routing"
+
+ RUN  v3.2.7 /home/apdmrl/workspace/repos/kestrel
+
+  ✓ persistent session (6 tests)
+  ✓ persistent session — navigation (6 tests)
+  ✓ persistent session — keyboard navigation (4 tests)
+  ✓ persistent session — auth state propagation (1 test)
+  ✓ persistent session — live stdout capabilities (1 test)
+  ✓ persistent session — auth failure propagation (reducer-driven) (1 test)
+
+  × Session — auth failure routing (reducer-driven) > preserves the connected state when /find fails with DM_NETWORK_UNAVAILABLE
+      expected ' KESTREL / LOCAL WORKSPACE           …' not to match
+      /GitHub authentication is not verified[\s\S]{0,400}\/auth\s+status/u
+      Received frame: '>*-⌕  Find …  >*x Find a challenge … · /auth status …  Check authentication /auth status'
+  × Session — auth failure routing (reducer-driven) > restores required state when /auth login fails with DM_GITHUB_AUTH_REQUIRED
+      expected ' KESTREL / LOCAL WORKSPACE           …' to match
+      /GitHub authentication is not verified[\s\S]{0,400}\/auth[\s\S]{0,10}login/u
+      Received frame: '>*-⌕  Find …  >*x Find a challenge … · /auth status …  Check authentication /auth status'
+
+ Test Files  1 failed (1)
+      Tests  2 failed | 19 passed (21)
+```
+
+The two reducer-driven cases fail on the round-4 session.tsx
+because the parallel `setAuthState` policy transitions auth to
+`unknown` on every classified error code regardless of command kind.
+
+### GREEN — round-5 session.tsx restores full suite
+
+```
+$ git stash pop
+$ npx vitest run src/cli/interactive/session-state.test.ts \
+                   src/cli/interactive/session.test.tsx \
+                   src/cli/interactive/session-auth.test.tsx \
+                   src/cli/interactive/session-controller.test.ts \
+                   src/cli/interactive/session-navigation.test.ts \
+                   src/cli/interactive/session-renderer.test.ts \
+                   src/cli/interactive/dashboard.test.tsx \
+                   src/cli/interactive/session-parser.test.ts
+
+ ✓ src/cli/interactive/session.test.tsx (24 tests) 2728ms
+ ✓ src/cli/interactive/session-auth.test.tsx (4 tests) 434ms
+ ✓ src/cli/interactive/dashboard.test.tsx (71 tests) 276ms
+ ✓ src/cli/interactive/session-controller.test.ts (11 tests) 21ms
+ ✓ src/cli/interactive/session-state.test.ts (52 tests) 18ms
+ ✓ src/cli/interactive/session-parser.test.ts (38 tests) 14ms
+ ✓ src/cli/interactive/session-navigation.test.ts (21 tests) 11ms
+ ✓ src/cli/interactive/session-renderer.test.ts (18 tests) 13ms
+
+ Test Files  8 passed (8)
+      Tests  239 passed (239)
+```
+
+### Counts
+
+| Suite                                    | Round-4 | Round-5 |
+| ---------------------------------------- | ------- | ------- |
+| session-state.test.ts                    | 52      | 52      |
+| session.test.tsx                         | 20      | 24      |
+| session-auth.test.tsx                    | 4       | 4       |
+| session-controller.test.ts               | 11      | 11      |
+| session-navigation.test.ts               | 21      | 21      |
+| session-renderer.test.ts                 | 18      | 18      |
+| dashboard.test.tsx                       | 71      | 71      |
+| session-parser.test.ts                   | 38      | 38      |
+| **Focused suite total**                   | **235** | **239** |
+
+### Self-Review
+
+- `sessionReducer` is the single authority on auth / operation /
+  latestRecommendation transitions; the Session runtime only parses,
+  captures IDs, and dispatches.
+- IDs are allocated before the controller await so a stale resolution
+  cannot win; the reducer ignores mismatched IDs.
+- The parallel `useState<SessionAuthState>` and the classified-error
+  code table are gone; there is exactly one auth state in the
+  component (`reducerState.auth`) and one source of policy.
+- Transient category / focus / input state stays in `useState` for
+  Task 4; the reducer has the shape ready for Task 5 to adopt it.
+- The round-5 tests fail on the round-4 `session.tsx` exactly where
+  the regression lived (Find-run availability, recovery command in
+  the ContextActions panel) and pass on the round-5 `session.tsx`.
+- The compact budget at 80×24 still drops the auth-status
+  transcript line; the round-5 assertions verify the same observable
+  behaviour (auth-state propagation, recovery surface) through the
+  live contextual action panel.
+- All previously-passing focused tests still pass; row cap and
+  critical preservation are unchanged.
+- Existing `dbg.test.test.tsx` debug harness is preserved verbatim.
+- `package.json` / `package-lock.json` direct `string-width` metadata
+  is consistent (`^7.2.0` → installed `7.2.0`); no change required.
+

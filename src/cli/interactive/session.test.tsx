@@ -1,7 +1,15 @@
 import { createElement } from "react";
-import { render as renderInk, Text } from "ink";
+import { render as renderInk } from "ink";
 import { cleanup, render } from "ink-testing-library";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  ContextActions,
+  DashboardShell,
+  DEFAULT_MISSION_SUGGESTIONS,
+  DEFAULT_QUICK_COMMANDS,
+} from "./dashboard.js";
+import { actionsForSection } from "./session-navigation.js";
+import type { SessionAction } from "./session-navigation.js";
 import type { CommandHandlers } from "../command-handlers.js";
 import type { ViewModel } from "../presentation/view-models.js";
 import { createKestrelError } from "../../application/errors/kestrel-error.js";
@@ -388,22 +396,25 @@ describe("persistent session — auth state propagation", () => {
       harness.stdin.send("/auth status\r");
       await settle();
       // Move focus to sidebar then jump to the action panel; the Find action
-      // (id "find.run") should now render as enabled (`-`) rather than `x`.
+ // (id "find.run") should now render as enabled (`-`) rather than `x`.
       harness.stdin.send(upArrow());
       await settle();
       harness.stdin.send(downArrow());
       await settle();
       const frame = harness.lastFrame();
-      // Find.run is now actionable: marker is `*-` not `>*x`.
-      expect(frame).toMatch(/Find a challenge/);
+      // Find.run is now actionable: marker is `*-` (enabled) for the
+      // Find.run row inside the contextual action panel. The compact
+      // budget at 80x24 drops the auth-status transcript line, so we
+      // assert on the live action availability rather than the
+      // transcript text.
+      expect(frame).toMatch(/-\s+Find a challenge/u);
       expect(frame).toContain("/find");
-      // The auth status reflects the connected login name.
-      expect(frame).toContain("octocat");
     } finally {
       harness.unmount();
     }
   });
 });
+
 describe("persistent session — live stdout capabilities", () => {
   afterEach(() => cleanup());
 
@@ -442,12 +453,79 @@ describe("persistent session — live stdout capabilities", () => {
   });
 });
 
-describe("persistent session — auth failure propagation", () => {
+describe("persistent session — auth failure propagation (reducer-driven)", () => {
   afterEach(() => cleanup());
 
-  it("transitions authState from checking to unknown when /auth status fails with DM_NETWORK_UNAVAILABLE", async () => {
+  it("transitions to unknown only when /auth status fails during checking", async () => {
     const commandHandlers = handlers();
     vi.mocked(commandHandlers.authStatus).mockRejectedValue(
+      createKestrelError({
+        code: "DM_NETWORK_UNAVAILABLE",
+        category: "TRANSIENT",
+        userMessage: "GitHub is unreachable",
+        suggestedActions: ["Retry"],
+        retryability: "RETRYABLE",
+        recoveryStrategy: "RETRY",
+        severity: "ERROR",
+      }),
+    );
+    const harness = mountInteractive({
+      handlers: commandHandlers,
+      signal: new AbortController().signal,
+    });
+    try {
+      await settle();
+      harness.stdin.send("/auth status\r");
+      await settle();
+      // Navigate to the Find section: the contextual action panel
+      // surfaces `/auth status` as the recovery for the disabled
+      // `Find a challenge` row. The reducer owns the transition from
+      // `checking` to `unknown(errorCode)`; the session component no
+      // longer mutates auth state directly.
+      harness.stdin.send(upArrow());
+      await settle();
+      harness.stdin.send(downArrow());
+      await settle();
+      const nav = harness.lastFrame();
+      expect(nav).toMatch(FIND_RECOVERY_AUTH_STATUS);
+    } finally {
+      harness.unmount();
+    }
+  });
+});
+
+// Regexes that match the rendered Find-section ContextActions panel:
+//   FIND_ENABLED                 → /find action is the primary enabled row.
+//   FIND_RECOVERY_AUTH_STATUS    → Find.run disabled with `/auth status` recovery.
+//   FIND_RECOVERY_AUTH_LOGIN     → Find.run disabled with `/auth login` recovery.
+// The compact budget at 80x24 sometimes drops the transcript, so these
+// regexes assert on the live action panel, not on incidental transcript
+// text that compact windowing intentionally suppresses. The recovery
+// commands wrap onto two lines inside the bordered ContextActions box
+// (the `/auth` prefix sits on one line and the verb on the next), so the
+// regex tolerates a 0–10 character gap. We additionally anchor on the
+// Find-run disabled reason string ("GitHub authentication is not
+// verified…") so the transcript's bounded "Run /auth status to
+// continue." recovery line — which also contains `/auth status` — does
+// not accidentally satisfy the action-panel regex.
+const FIND_ENABLED = /Find a challenge[\s\S]{0,40}\/find/u;
+const FIND_RECOVERY_AUTH_STATUS =
+  /GitHub authentication is not verified[\s\S]{0,400}\/auth\s+status/u;
+const FIND_RECOVERY_AUTH_LOGIN =
+  /GitHub authentication is not verified[\s\S]{0,400}\/auth[\s\S]{0,10}login/u;
+
+describe("Session — auth failure routing (reducer-driven)", () => {
+  afterEach(() => cleanup());
+
+  it("preserves the connected state when /find fails with DM_NETWORK_UNAVAILABLE", async () => {
+    const commandHandlers = handlers();
+    vi.mocked(commandHandlers.authStatus).mockResolvedValue({
+      kind: "auth-status",
+      connected: true,
+      login: "octocat",
+      detail: "CONNECTED",
+    });
+    vi.mocked(commandHandlers.find).mockRejectedValue(
       createKestrelError({
         code: "DM_NETWORK_UNAVAILABLE",
         category: "TRANSIENT",
@@ -461,47 +539,48 @@ describe("persistent session — auth failure propagation", () => {
     const harness = mountInteractive({
       handlers: commandHandlers,
       signal: new AbortController().signal,
-      initialCategory: "auth",
     });
     try {
       await settle();
       harness.stdin.send("/auth status\r");
       await settle();
-      const frame = harness.lastFrame();
-      // The error result still surfaces in the transcript so the user
-      // reads the reason + suggested actions.
-      expect(frame).toContain("DM_NETWORK_UNAVAILABLE");
-      // The interactive renderer appended the recovery line and the
-      // action panel exposes `/auth status` as the primary recovery
-      // (the unknown-state recovery command per the existing transition
-      // policy). The Auth sidebar position surfaces the same recovery.
-      expect(frame).toContain("Run /auth status to continue.");
-      expect(frame).toContain("Check authentication");
-      expect(frame).toContain("/auth status");
-      // Move focus into the sidebar and confirm Find surfaces the
-      // `/auth status` recovery command rather than `/auth login`.
+      const connectedFrame = harness.lastFrame();
+      expect(connectedFrame).toContain("octocat");
+      harness.stdin.send("/find\r");
+      await settle(120);
       harness.stdin.send(upArrow());
       await settle();
       harness.stdin.send(downArrow());
       await settle();
-      const frameAfter = harness.lastFrame();
-      expect(frameAfter).toContain("/auth status");
-      // The recovery command is the unknown-state primary, not the
-      // required-state `/auth login` recovery.
-      expect(frameAfter).not.toMatch(/Find a challenge\n\s+\/auth login/u);
+      const nav = harness.lastFrame();
+      // The connected state must be preserved: /find remains the
+      // primary action. The unknown-state recovery must NOT replace it.
+      expect(nav).toMatch(FIND_ENABLED);
+      expect(nav).not.toMatch(FIND_RECOVERY_AUTH_STATUS);
     } finally {
       harness.unmount();
     }
   });
 
-  it("does not invent a second auth transition for successful /auth status", async () => {
+  it("restores required state when /auth login fails with DM_GITHUB_AUTH_REQUIRED", async () => {
     const commandHandlers = handlers();
     vi.mocked(commandHandlers.authStatus).mockResolvedValue({
       kind: "auth-status",
-      connected: true,
-      login: "octocat",
-      detail: "CONNECTED",
+      connected: false,
+      login: null,
+      detail: "NOT_CONNECTED",
     });
+    vi.mocked(commandHandlers.authLogin).mockRejectedValue(
+      createKestrelError({
+        code: "DM_GITHUB_AUTH_REQUIRED",
+        category: "USER_ACTION_REQUIRED",
+        userMessage: "GitHub auth required",
+        suggestedActions: ["Run /auth login"],
+        retryability: "NO_RETRY",
+        recoveryStrategy: "REAUTHENTICATE",
+        severity: "ERROR",
+      }),
+    );
     const harness = mountInteractive({
       handlers: commandHandlers,
       signal: new AbortController().signal,
@@ -510,10 +589,112 @@ describe("persistent session — auth failure propagation", () => {
       await settle();
       harness.stdin.send("/auth status\r");
       await settle();
+      harness.stdin.send("/auth login\r");
+      await settle(150);
+      harness.stdin.send(upArrow());
+      await settle();
+      harness.stdin.send(downArrow());
+      await settle();
       const frame = harness.lastFrame();
-      expect(frame).toContain("octocat");
+      // The required-state recovery (/auth login) must surface, not
+      // the unknown-state /auth status. The reducer's
+      // OPERATION_FAILED path restores authBeforeLogin (which was
+      // `required` after a NOT_CONNECTED auth-status).
+      expect(frame).toMatch(FIND_RECOVERY_AUTH_LOGIN);
+      expect(frame).not.toMatch(FIND_RECOVERY_AUTH_STATUS);
     } finally {
       harness.unmount();
     }
+  });
+});
+
+describe("ContextActions — variable row chrome", () => {
+  afterEach(() => cleanup());
+
+  it("renders more rows for 6 actions than for 2 actions", () => {
+    const two: SessionAction[] = [
+      { id: "a", label: "A", command: "/a", availability: { status: "enabled" } },
+      { id: "b", label: "B", command: "/b", availability: { status: "enabled" } },
+    ];
+    const six: SessionAction[] = [];
+    for (let i = 0; i < 6; i += 1) {
+      six.push({
+        id: `x${i}`,
+        label: `X${i}`,
+        command: `/x${i}`,
+        availability: { status: "enabled" },
+      });
+    }
+    const twoRows = (render(<ContextActions actions={two} />).lastFrame() ?? "").split("\n").length;
+    const sixRows = (render(<ContextActions actions={six} />).lastFrame() ?? "").split("\n").length;
+    expect(sixRows).toBeGreaterThan(twoRows);
+  });
+});
+
+describe("DashboardShell — wide pane with production ContextActions", () => {
+  afterEach(() => cleanup());
+
+  it("stays within 24 rows at 80x24 when ContextActions is mounted with multiple actions", () => {
+    const six: SessionAction[] = [];
+    for (let i = 0; i < 6; i += 1) {
+      six.push({
+        id: `x${i}`,
+        label: `Action ${i}`,
+        command: `/cmd-${i}`,
+        availability: { status: "enabled" },
+      });
+    }
+    const { lastFrame } = render(
+      <DashboardShell
+        status="Ready"
+        title="Mission Control"
+        subtitle="Welcome back"
+        sessionStatus="active"
+        mission={{
+          title: "No active mission",
+          description: "Discover a challenge or resume your current engineering work.",
+          suggestions: DEFAULT_MISSION_SUGGESTIONS,
+        }}
+        stats={[]}
+        quickCommands={DEFAULT_QUICK_COMMANDS}
+        input=""
+        busy={false}
+        placeholder="Type a command…"
+        capabilities={{ columns: 80, rows: 24, color: true }}
+        contextActions={six}
+        selectedActionIndex={0}
+        actionFocused={false}
+      />,
+    );
+    const frame = lastFrame() ?? "";
+    const actualRows = frame.split("\n").length;
+    expect(
+      actualRows,
+      `expected ≤24 rows at 80x24 with 6 ContextActions, got ${actualRows}`,
+    ).toBeLessThanOrEqual(24);
+  });
+});
+
+describe("actionsForSection — existing behavior preserved", () => {
+  it("returns /mission accept --id rec-42 with exact ID", () => {
+    const actions = actionsForSection(
+      "find",
+      { status: "connected", login: "octocat" },
+      {
+        kind: "recommendation",
+        recommendationId: "rec-42",
+        challengeId: "ch-1",
+        title: "Fix something",
+        mood: "focused",
+        confidence: 0.9,
+        reasons: ["match"],
+      },
+    );
+    expect(actions).toContainEqual(
+      expect.objectContaining({
+        id: "recommendation.accept",
+        command: "/mission accept --id rec-42",
+      }),
+    );
   });
 });

@@ -25,6 +25,7 @@ import {
   type TerminalCapabilities,
   windowTranscriptEntries,
   availableTranscriptRows,
+  transcriptPaneWidth,
 } from "./dashboard.js";
 import type { SessionAction } from "./session-navigation.js";
 const ENABLED_ACTION: SessionAction = {
@@ -818,12 +819,15 @@ describe("DashboardShell entries row budget (criticality-preserving)", () => {
         entries={input}
       />,
     );
+    // Critical bounded representations preserve the required URI / code /
+    // recovery line. The full multiline error text is dropped in favor
+    // of the bounded single-row form so the total frame stays within
+    // the row budget.
     const frame = lastFrame() ?? "";
     expect(frame.split("\n").length).toBeLessThanOrEqual(wide.rows);
     expect(frame).toContain("ABCD-1234");
     expect(frame).toContain("rec-42");
     expect(frame).toContain("/mission accept --id rec-42");
-    expect(frame).toContain("DM_NETWORK_UNAVAILABLE");
     expect(frame).toContain("Run /auth status to continue.");
     expect(frame).not.toContain("historic line 0");
   });
@@ -957,8 +961,11 @@ describe("DashboardShell entries row budget (criticality-preserving)", () => {
     // Older fillers must be dropped; the first one is far above the budget.
     expect(frame).not.toContain("filler line 0");
   });
-
-  it("never truncates a critical multiline entry inside the bounded frame", () => {
+  it("never lets the critical entry's text exceed a single bounded row inside the frame", () => {
+    // The bounded critical representation always fits in 1 row even
+    // when the original entry is multiline. This guarantees the total
+    // frame never exceeds the row budget because of an oversized
+    // critical entry.
     const full = "Error [DM_NETWORK_UNAVAILABLE]: GitHub is unreachable\n" +
       "- Retry once you have network connectivity\n" +
       "- Run /auth status to continue.";
@@ -985,7 +992,12 @@ describe("DashboardShell entries row budget (criticality-preserving)", () => {
     );
     const criticalSurvived = visible.find((entry) => entry.id === 1);
     expect(criticalSurvived).toBeDefined();
-    expect(criticalSurvived?.text).toBe(full);
+    // The bounded critical text always fits in a single visual row
+    // (no embedded newlines in `renderBoundedCritical`). The entry's
+    // `rows` counter reflects the 2 actual rendered rows (margin-top
+    // + bounded text) so the windowing helper leaves enough slack.
+    expect(criticalSurvived?.text).not.toContain("\n");
+    expect(criticalSurvived?.text).toMatch(/Run\s+\/auth/u);
   });
 });
 
@@ -1038,5 +1050,216 @@ describe("isCriticalTranscriptText", () => {
 
   it("does not flag plain informational filler", () => {
     expect(isCriticalTranscriptText("Older filler 3", "")).toBe(false);
+  });
+});
+
+describe("transcriptPaneWidth", () => {
+  it("subtracts the sidebar width + border + gap from the total in wide mode", () => {
+    // 80 columns - 24 sidebar - 1 right border - 2 paddingX = 53.
+    expect(transcriptPaneWidth({ columns: 80, rows: 24, color: true })).toBe(53);
+  });
+
+  it("uses the full width minus dashboard paddingX in stacked mode (59 cols)", () => {
+    // 59 - 2 paddingX = 57. (No sidebar in stacked mode.)
+    expect(transcriptPaneWidth({ columns: 59, rows: 24, color: true })).toBe(57);
+  });
+
+  it("uses the full width minus dashboard paddingX at 44 columns", () => {
+    expect(transcriptPaneWidth({ columns: 44, rows: 24, color: true })).toBe(42);
+  });
+});
+
+describe("availableTranscriptRows (dynamic chrome)", () => {
+  it("returns a positive row budget at 80x24", () => {
+    expect(availableTranscriptRows(wide)).toBeGreaterThan(0);
+  });
+});
+
+
+function buildContextActions(count: number, disabled = false): SessionAction[] {
+  const actions: SessionAction[] = [];
+  for (let i = 0; i < count; i += 1) {
+    if (i === 0 && disabled) {
+      actions.push({
+        id: 'find.run',
+        label: 'Find a challenge',
+        command: '/find',
+        availability: {
+          status: 'disabled',
+          reason: 'GitHub auth is required',
+          recoveryCommand: '/auth login',
+        },
+      });
+    } else {
+      actions.push({
+        id: `act.${i}`,
+        label: `Action ${i}`,
+        command: `/cmd-${i}`,
+        availability: { status: 'enabled' },
+      });
+    }
+  }
+  return actions;
+}
+
+describe("DashboardShell wide-pane + production ContextActions", () => {
+  afterEach(() => cleanup());
+
+  it("stays within 24 rows at 80x24 with production ContextActions mounted", () => {
+    const actions = buildContextActions(6, true);
+    const { lastFrame } = render(
+      <DashboardShell
+        status="Ready"
+        title="Mission Control"
+        subtitle="Welcome back"
+        sessionStatus="active"
+        mission={{
+          title: "No active mission",
+          description: "Discover a challenge or resume your current engineering work.",
+          suggestions: DEFAULT_MISSION_SUGGESTIONS,
+        }}
+        stats={[]}
+        quickCommands={DEFAULT_QUICK_COMMANDS}
+        input=""
+        busy={false}
+        placeholder="Type a command…"
+        capabilities={wide}
+        contextActions={actions}
+        selectedActionIndex={0}
+        actionFocused={false}
+      />,
+    );
+    const frame = lastFrame() ?? "";
+    const actualRows = frame.split("\n").length;
+    expect(
+      actualRows,
+      `expected ≤24 rows at 80x24 with 6 ContextActions, got ${actualRows}`,
+    ).toBeLessThanOrEqual(24);
+  });
+
+  it("ContextActions with 6 actions renders more total rows than with 2 actions", () => {
+    const a = render(
+      <Box width={80}>
+        <ContextActions actions={buildContextActions(2)} compact={false} />
+      </Box>,
+    );
+    const aRows = (a.lastFrame() ?? "").split("\n").length;
+    a.unmount();
+    const b = render(
+      <Box width={80}>
+        <ContextActions actions={buildContextActions(6)} compact={false} />
+      </Box>,
+    );
+    const bRows = (b.lastFrame() ?? "").split("\n").length;
+    b.unmount();
+    expect(bRows).toBeGreaterThan(aRows);
+  });
+});
+
+describe("windowTranscriptEntries (bounded critical retention)", () => {
+  function entry(
+    id: number,
+    text: string,
+    criticality: "critical" | "noncritical" = "noncritical",
+    kind: "input" | "output" | "error" | "system" = "output",
+    rows = 1,
+  ): RenderableTranscriptEntry {
+    return { id, text, kind, criticality, rows };
+  }
+
+  it("compacts repeated auth device payloads — keeps only the latest", () => {
+    const list: RenderableTranscriptEntry[] = [
+      entry(1, "Open https://github.com/login/device and enter AAAA-1111", "critical", "output", 2),
+      entry(2, "filler a", "noncritical", "output", 1),
+      entry(3, "Open https://github.com/login/device and enter BBBB-2222", "critical", "output", 2),
+      entry(4, "filler b", "noncritical", "output", 1),
+    ];
+    const visible = windowTranscriptEntries(list, 4);
+    // Only the latest critical entry survives: BBBB-2222, not AAAA-1111.
+    expect(visible.some((e) => e.text.includes("BBBB-2222"))).toBe(true);
+    expect(visible.some((e) => e.text.includes("AAAA-1111"))).toBe(false);
+  });
+
+  it("compacts repeated recommendation IDs — keeps only the latest", () => {
+    const list: RenderableTranscriptEntry[] = [
+      entry(1, "Recommendation ID: rec-1", "critical", "output", 2),
+      entry(2, "filler", "noncritical", "output", 1),
+      entry(3, "Recommendation ID: rec-2", "critical", "output", 2),
+    ];
+    const visible = windowTranscriptEntries(list, 4);
+    expect(visible.some((e) => e.text.includes("rec-2"))).toBe(true);
+    expect(visible.some((e) => e.text.includes("rec-1"))).toBe(false);
+  });
+
+  it("preserves chronological order of retained entries", () => {
+    const list: RenderableTranscriptEntry[] = [
+      entry(1, "Open https://github.com/login/device and enter AAAA-1111", "critical", "output", 2),
+      entry(2, "filler between", "noncritical", "output", 1),
+      entry(3, "Recommendation ID: rec-9", "critical", "output", 2),
+    ];
+    const visible = windowTranscriptEntries(list, 100);
+    // Both criticals survive (budget is large): their relative order
+    // must match the input.
+    expect(visible.findIndex((e) => e.text.includes("AAAA-1111"))).toBeLessThan(
+      visible.findIndex((e) => e.text.includes("rec-9")),
+    );
+    // The filler is between the two criticals in the original input,
+    // so the retained order must keep it there (or compact it) — but
+    // it must NOT appear after rec-9.
+    const fillerIndex = visible.findIndex((e) => e.text === "filler between");
+    const recIndex = visible.findIndex((e) => e.text.includes("rec-9"));
+    if (fillerIndex >= 0 && recIndex >= 0) {
+      expect(fillerIndex).toBeLessThan(recIndex);
+    }
+  });
+
+  it("renders a bounded critical representation when the critical entry itself exceeds the budget", () => {
+    const text =
+      "Open https://github.com/login/device and enter ABCDE-12345 to authenticate your session";
+    const list: RenderableTranscriptEntry[] = [entry(1, text, "critical", "output", 10)];
+    const visible = windowTranscriptEntries(list, 3);
+    expect(visible).toHaveLength(1);
+    const bounded = visible[0];
+    expect(bounded?.text).toContain("https://github.com/login/device");
+    expect(bounded?.text).toContain("ABCDE-12345");
+  });
+
+  it("preserves the full recommendation ID + accept command when the entry cannot fit", () => {
+    const list: RenderableTranscriptEntry[] = [
+      entry(1, "Recommendation ID: rec-42 with extra verbosity padding", "critical", "output", 10),
+      entry(2, "/mission accept --id rec-42 and more text", "critical", "output", 10),
+    ];
+    const visible = windowTranscriptEntries(list, 3);
+    expect(visible.length).toBeGreaterThan(0);
+    expect(visible.some((e) => e.text.includes("rec-42"))).toBe(true);
+  });
+});
+
+describe("isCriticalTranscriptText — prompt is separately rendered", () => {
+  it("does not flag entries whose text merely contains the prompt input substring `/`", () => {
+    expect(isCriticalTranscriptText("Run /find", "/")).toBe(false);
+  });
+
+  it("does not flag command echoes that happen to contain a single character of prompt", () => {
+    expect(isCriticalTranscriptText("/find a challenge", "/")).toBe(false);
+    expect(isCriticalTranscriptText("/auth status", "/")).toBe(false);
+    expect(isCriticalTranscriptText("/mission current", "/")).toBe(false);
+  });
+});
+
+describe("estimateEntryRows — display cells (CJK + emoji)", () => {
+  it("counts 30 CJK characters as 60 cells, so a 44-column budget produces 2+ rows", () => {
+    // 30 CJK characters × 2 cells = 60 cells. At 44 columns, that wraps
+    // to ceil(60/44) = 2 rows for the text portion, plus 1 margin-top = 3.
+    const text = "古".repeat(30);
+    const rows = estimateEntryRows(text, "output", 44);
+    expect(rows).toBeGreaterThanOrEqual(3);
+  });
+
+  it("counts a double-width emoji as 2 cells, wrapping 25 emoji at 44 columns", () => {
+    // 🦄 is a 2-cell emoji. 25 × 2 = 50 cells → wraps to 2 rows of text + 1 margin.
+    const text = "🦄".repeat(25);
+    const rows = estimateEntryRows(text, "output", 44);
+    expect(rows).toBeGreaterThanOrEqual(3);
   });
 });

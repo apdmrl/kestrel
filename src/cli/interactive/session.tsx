@@ -1,5 +1,5 @@
 import { Box, Text, useApp, useInput, useStdout } from "ink";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import type { CommandHandlers } from "../command-handlers.js";
 import type { RecommendationViewModel } from "../presentation/view-models.js";
 import { createSessionController } from "./session-controller.js";
@@ -15,7 +15,12 @@ import {
 import { actionsForSection, NAVIGATION_SECTIONS } from "./session-navigation.js";
 import { parseSessionCommand, SessionParseError } from "./session-parser.js";
 import { renderSessionView } from "./session-renderer.js";
-import type { SessionAuthState } from "./session-state.js";
+import {
+  initialSessionState,
+  sessionReducer,
+  type SessionAuthState,
+  type SessionEvent,
+} from "./session-state.js";
 import type { TranscriptEntry } from "./session-view-models.js";
 
 const MAX_TRANSCRIPT_ENTRIES = 200;
@@ -25,25 +30,14 @@ const PROMPT_PLACEHOLDER = "Type a command…";
 const DEFAULT_STDOUT_COLUMNS = 80;
 const DEFAULT_STDOUT_ROWS = 24;
 /**
- * Stable set of error codes that represent an authentication transition
- * failure. When the controller returns any of these codes (e.g.
- * `DM_NETWORK_UNAVAILABLE` from `/auth status`), the live session
- * propagates the result into `authState` as `unknown(errorCode)` so the
- * sidebar / contextual action panel exposes the `/auth status`
- * recovery — the same transition the `sessionReducer` policy applies.
+ * `sessionReducer` owns the authoritative auth / operation / latest
+ * recommendation state. The reducer dispatches `AUTH_FAILED` /
+ * `AUTH_RESOLVED` for `/auth status` and `OPERATION_STARTED` /
+ * `OPERATION_FAILED` for every other command, so a classified error
+ * code never directly mutates the live state from the component. This
+ * is the same transition policy that previously lived in the Session
+ * runtime, now centralised in the reducer.
  */
-const AUTH_FAILURE_CODES: Record<string, true> = {
-  DM_NETWORK_UNAVAILABLE: true,
-  DM_GITHUB_TIMEOUT: true,
-  DM_GITHUB_VALIDATION: true,
-  DM_GITHUB_RATE_LIMITED: true,
-  DM_GITHUB_ABUSE_LIMIT: true,
-  DM_GITHUB_AUTH_REQUIRED: true,
-  DM_GITHUB_AUTH_EXPIRED: true,
-  DM_GIT_AUTH_FAILED: true,
-};
-/** `DM_GITHUB_AUTH_CANCELLED` is informational; cancellation leaves the
- * live state untouched. */
 export interface SessionProps {
   readonly handlers: CommandHandlers;
   readonly signal: AbortSignal;
@@ -236,16 +230,29 @@ export function Session({
   const [focus, setFocus] = useState<SessionFocus>("prompt");
   const [selectedActionIndex, setSelectedActionIndex] = useState(0);
   const [actionFocused, setActionFocused] = useState(false);
+  const [reducerState, dispatch] = useReducer(sessionReducer, undefined, initialSessionState);
+  const authState: SessionAuthState = reducerState.auth;
+  const reducerLatestRecommendation = reducerState.latestRecommendation;
   const [latestRecommendation, setLatestRecommendation] =
     useState<RecommendationViewModel | null>(latestRecommendationProp);
-  // The controller reports `latestRecommendation` via `OPERATION_SUCCEEDED`
-  // through the reducer; until that wiring lands we capture the value from
-  // the controller's `notify` channel and from successful controller results.
   const latestRecommendationRef = useRef<RecommendationViewModel | null>(latestRecommendationProp);
-  const [authState, setAuthState] = useState<SessionAuthState>({
-    status: "checking",
-    attemptId: 1,
-  });
+  // The reducer reports `latestRecommendation` via `OPERATION_SUCCEEDED`;
+  // mirror it into React state so the contextual action panel sees the
+  // latest value. The reducer remains the authoritative source.
+  // `submit` bumps the matching counter, captures the value, and uses
+  // it as the `operationId` / `attemptId` on the dispatched event. The
+  // reducer ignores events whose IDs no longer match the running
+  // operation / attempt, so supersession is implicit.
+  const nextOperationId = useRef(1);
+  const nextAttemptId = useRef(1);
+  useEffect(() => {
+    if (reducerLatestRecommendation !== null) {
+      if (latestRecommendationRef.current?.recommendationId !== reducerLatestRecommendation.recommendationId) {
+        latestRecommendationRef.current = reducerLatestRecommendation;
+        setLatestRecommendation(reducerLatestRecommendation);
+      }
+    }
+  }, [reducerLatestRecommendation]);
   const addEntry = (kind: TranscriptEntry["kind"], text: string): void => {
     const id = nextId.current;
     nextId.current += 1;
@@ -295,6 +302,28 @@ export function Session({
       addEntry("error", "! Operation cancelled");
       return;
     }
+    // Allocate the reducer IDs for this command BEFORE awaiting the
+    // controller. The reducer ignores events whose IDs don't match the
+    // running operation/attempt, so a later in-flight event can't
+    // accidentally overwrite an older result. The capture-local
+    // variables are also how the success/failure branches know which ID
+    // to attach to the matching event.
+    const commandKind = parsed.kind;
+    const isAuthStatus = commandKind === "auth-status";
+    const attemptId = isAuthStatus ? ++nextAttemptId.current : nextAttemptId.current;
+    const operationId = isAuthStatus ? nextOperationId.current : ++nextOperationId.current;
+    if (isAuthStatus) {
+      // AUTH_CHECK_STARTED first so a stale AUTH_RESOLVED / AUTH_FAILED
+      // from the prior attempt cannot win.
+      dispatch({ type: "AUTH_CHECK_STARTED", attemptId });
+    } else {
+      dispatch({
+        type: "OPERATION_STARTED",
+        operationId,
+        command: commandText,
+        cancellable: true,
+      });
+    }
     setBusy(true);
     try {
       const result = await controller(parsed, { signal });
@@ -305,40 +334,54 @@ export function Session({
       } else if (result.kind === "error") {
         const rendered = renderSessionView(result.view);
         addEntry(rendered.kind, rendered.text);
-        // Propagate auth-related error results through the existing
-        // transition policy: `/auth status` (or any auth-touching
-        // command) returning a known failure code moves the live
-        // `authState` from `checking` into `unknown(errorCode)` so the
-        // sidebar / contextual action panel exposes the login
-        // recovery (`/auth status`) without a second dispatch. This is
-        // the same transition `sessionReducer` applies via
-        // `AUTH_FAILED`; the Session runtime mirrors it locally until
-        // the reducer lands.
-        if (result.view.kind === "error" && AUTH_FAILURE_CODES[result.view.code] === true) {
-          setAuthState({ status: "unknown", errorCode: result.view.code });
+        // Dispatch the matching reducer event for the captured IDs.
+        // The reducer is the sole authority on auth state — the
+        // component no longer carries a parallel `setAuthState` policy.
+        // For `/auth status` the reducer's AUTH_FAILED path maps a
+        // classified code onto `unknown(errorCode)`. For all other
+        // operations OPERATION_FAILED preserves the current auth
+        // (which is the connected state when auth-status already
+        // succeeded) so the Find.run action remains enabled.
+        if (isAuthStatus) {
+          const errorCode = result.view.kind === "error" ? result.view.code : "UNKNOWN";
+          dispatch({ type: "AUTH_FAILED", attemptId, errorCode });
+        } else {
+          const errorCode = result.view.kind === "error" ? result.view.code : "UNKNOWN";
+          dispatch({ type: "OPERATION_FAILED", operationId, errorCode });
         }
       } else {
         const rendered = renderSessionView(result.view);
         addEntry(rendered.kind, rendered.text);
-        // Mirror the controller's authoritative auth status into the live
-        // auth state so the contextual action panel reflects the same view
-        // the renderer just displayed. The controller's `auth-status`
-        // result is the single source of truth; we don't introduce a
-        // second policy.
-        if (result.view.kind === "auth-status") {
-          if (result.view.connected && result.view.login !== null) {
-            setAuthState({ status: "connected", login: result.view.login });
-          } else if (result.view.detail === "EXPIRED") {
-            setAuthState({ status: "expired" });
-          } else if (result.view.detail === "NOT_CONNECTED") {
-            setAuthState({ status: "required" });
-          } else if (result.view.detail === "LOGGED_OUT") {
-            setAuthState({ status: "required" });
-          } else {
-            // Auth status returned CONNECTED with a null login (impossible
-            // by the controller's invariant), or some future detail.
-            // Keep the current state rather than guessing.
+        if (isAuthStatus) {
+          const view = result.view;
+          if (view.kind === "auth-status") {
+            if (view.connected && view.login !== null) {
+              dispatch({
+                type: "AUTH_RESOLVED",
+                attemptId,
+                detail: "CONNECTED",
+                login: view.login,
+              });
+            } else if (view.detail === "EXPIRED") {
+              dispatch({ type: "AUTH_RESOLVED", attemptId, detail: "EXPIRED", login: null });
+            } else if (view.detail === "NOT_CONNECTED") {
+              dispatch({
+                type: "AUTH_RESOLVED",
+                attemptId,
+                detail: "NOT_CONNECTED",
+                login: null,
+              });
+            } else if (view.detail === "LOGGED_OUT") {
+              dispatch({
+                type: "AUTH_RESOLVED",
+                attemptId,
+                detail: "NOT_CONNECTED",
+                login: null,
+              });
+            }
           }
+        } else {
+          dispatch({ type: "OPERATION_SUCCEEDED", operationId, view: result.view });
         }
         if (result.view.kind === "recommendation") {
           captureRecommendation(result.view);
@@ -346,6 +389,11 @@ export function Session({
       }
     } catch (error) {
       addEntry("error", formatError(error));
+      if (isAuthStatus) {
+        dispatch({ type: "AUTH_FAILED", attemptId, errorCode: "UNKNOWN" });
+      } else {
+        dispatch({ type: "OPERATION_FAILED", operationId, errorCode: "UNKNOWN" });
+      }
     } finally {
       setBusy(false);
     }

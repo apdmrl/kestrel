@@ -1,6 +1,7 @@
 import { Children } from "react";
 import type { ReactNode } from "react";
 import { Box, Text } from "ink";
+import stringWidth from "string-width";
 import { NAVIGATION_SECTIONS } from "./session-navigation.js";
 import type { SessionAction } from "./session-navigation.js";
 
@@ -19,32 +20,50 @@ export interface RenderableTranscriptEntry {
   readonly criticality: "critical" | "noncritical";
   readonly rows: number;
 }
-
 /**
  * Wrap a single line of text to the available width, breaking on
  * whitespace when possible. Mirrors the wrapping Ink performs inside a
  * `<Text>` block so the row estimate matches what actually renders.
+ * Width is measured in terminal display cells (CJK / emoji are
+ * double-cell), not JS code points.
  */
 function wrapLineToWidth(line: string, width: number): number {
   if (width <= 0) return 1;
-  const cellWidth = [...line].length;
-  if (cellWidth <= width) return 1;
-  // Greedy wrap: count characters per chunk of `width`, breaking on the
-  // last whitespace boundary when one exists within the chunk.
+  if (line.length === 0) return 1;
+  const cellLength = stringWidth(line);
+  if (cellLength <= width) return 1;
+  // Grapheme-aware walk: consume `width` cells per row, breaking on the
+  // last whitespace boundary when one exists inside the consumed range.
+  const graphemes = Array.from(line);
+  const cells: number[] = graphemes.map((g) => stringWidth(g));
+  let consumed = 0;
   let rows = 0;
-  let cursor = 0;
-  while (cursor < cellWidth) {
-    const remaining = cellWidth - cursor;
-    if (remaining <= width) {
-      rows += 1;
-      break;
+  while (consumed < graphemes.length) {
+    let rowCells = 0;
+    let rowEnd = consumed;
+    while (rowEnd < graphemes.length && rowCells + (cells[rowEnd] ?? 0) <= width) {
+      rowCells += cells[rowEnd] ?? 0;
+      rowEnd += 1;
     }
-    let breakAt = cursor + width;
-    const slice = [...line].slice(cursor, breakAt).join("");
-    const lastSpace = slice.lastIndexOf(" ");
-    if (lastSpace > 0) breakAt = cursor + lastSpace + 1;
+    if (rowEnd === consumed) {
+      // Single grapheme is wider than the budget — hard-break to keep
+      // progress and avoid an infinite loop.
+      rowEnd = consumed + 1;
+    }
+    let breakAt = rowEnd;
+    if (rowEnd < graphemes.length) {
+      for (let i = rowEnd - 1; i > consumed; i -= 1) {
+        if (graphemes[i] === " ") {
+          breakAt = i;
+          break;
+        }
+      }
+    }
     rows += 1;
-    cursor = breakAt;
+    consumed = breakAt;
+    if (consumed < graphemes.length && graphemes[consumed] === " ") {
+      consumed += 1;
+    }
   }
   return Math.max(1, rows);
 }
@@ -65,7 +84,6 @@ export function estimateEntryRows(
   // Per-entry chrome in rows (border + padding + label + margin-top).
   const chromeRows =
     kind === "error" ? 3 + 1 : kind === "system" ? 2 + 1 : 1;
-  // Width inside the chrome. Error uses paddingX={1}; system uses a
   // marginTop={1}; input/output render full width with marginTop={1}.
   const innerWidth = Math.max(
     1,
@@ -108,10 +126,17 @@ export function toRenderableEntry(
  * typed-input echoes, or the explicit "Run /auth login to continue"
  * recovery are critical. Everything else is noncritical so it can be
  * dropped when the budget is tight.
+/**
+ * Classify an entry's criticality from its text. Entries that contain
+ * a verification URI / user code, recommendation ID / accept command,
+ * or the explicit "/auth login" / "/auth status" recovery line are
+ * critical. The typed prompt is rendered separately by PromptLine and
+ * is NOT promoted to critical here — typing "/" would otherwise match
+ * every command echo and blow past the budget.
  */
 export function isCriticalTranscriptText(text: string, promptInput: string): boolean {
   const trimmed = text;
-  if (promptInput.length > 0 && trimmed.includes(promptInput)) return true;
+  void promptInput; // deliberately unused: the prompt is rendered separately
   if (/https?:\/\/github\.com\/login\/device/u.test(trimmed)) return true;
   if (/Recommendation ID:\s*\S+/u.test(trimmed)) return true;
   if (/\/mission\s+accept\s+--id\s+\S+/u.test(trimmed)) return true;
@@ -119,45 +144,143 @@ export function isCriticalTranscriptText(text: string, promptInput: string): boo
   return false;
 }
 /**
- * Window transcript entries to honour the row budget. Every critical
- * entry (verification URI / code, recommendation ID / accept command,
- * typed-input echo, recovery line) is retained. The remaining budget is
- * filled with the newest noncritical entries, and the oldest
- * noncritical entries are dropped first.
+ * Window transcript entries to honour the row budget. Critical entries
+ * are bounded: only the most recent device-flow payload (verification
+ * URI / user code) and the most recent recommendation / accept
+ * command are retained. Older critical entries are superseded. The
+ * remaining budget is filled with the newest noncritical entries, and
+ * the oldest noncritical entries are dropped first.
  *
- * Order in the returned array matches the order in `entries` (oldest
- * first, newest last). The shell renders the array in that order so the
- * newest visible content sits at the bottom of the bounded frame.
+ * When a critical entry itself cannot fit the budget, a bounded
+ * representation is rendered: the latest verification URI / user code
+ * is preserved verbatim for the auth device payload, and the latest
+ * recommendation ID / accept command is preserved verbatim for the
+ * recommendation / action. The total frame always remains ≤ rowBudget
+ * (1 row for the bounded critical plus the rest of the budget for
+ * noncritical fillers).
+ *
+ * The returned array preserves the chronological order of the
+ * retained entries (oldest first, newest last). Entries are selected
+ * by identity from the original array — concatenating all criticals
+ * before all noncriticals would reorder interleaved history.
  */
 export function windowTranscriptEntries(
   entries: readonly RenderableTranscriptEntry[],
   rowBudget: number,
 ): readonly RenderableTranscriptEntry[] {
   if (rowBudget <= 0 || entries.length === 0) return [];
-  const critical: RenderableTranscriptEntry[] = [];
-  const noncritical: RenderableTranscriptEntry[] = [];
+  // The most recent entry of each critical kind wins. Older critical
+  // entries are superseded so a busy transcript never grows past the
+  // budget. Each retained critical is rendered as a single bounded
+  // row that preserves the required URI / user code or the exact
+  // recommendation ID / action.
+  const latestAuthDevice = [...entries]
+    .reverse()
+    .find((e) => /https?:\/\/github\.com\/login\/device/u.test(e.text));
+  const latestRecommendation = [...entries]
+    .reverse()
+    .find(
+      (e) =>
+        /Recommendation ID:\s*\S+/u.test(e.text) ||
+        /\/mission\s+accept\s+--id\s+\S+/u.test(e.text),
+    );
+  const latestRecovery = [...entries]
+    .reverse()
+    .find((e) => /Run\s+\/auth\s+(login|status)\s+to\s+continue/u.test(e.text));
+  const criticalEntries = [latestAuthDevice, latestRecommendation, latestRecovery].filter(
+    (e): e is RenderableTranscriptEntry => e !== undefined,
+  );
+  return finalizeWindowedEntries(entries, criticalEntries, rowBudget);
+}
+
+function finalizeWindowedEntries(
+  entries: readonly RenderableTranscriptEntry[],
+  criticalEntries: readonly RenderableTranscriptEntry[],
+  rowBudget: number,
+): readonly RenderableTranscriptEntry[] {
+  // Build a map of bounded critical text by id so we can swap the
+  // original entry for its bounded representation at the original
+  // chronological position. Each bounded critical still occupies one
+  // `<Box marginTop={1}>` row above the single-line bounded text —
+  // count that margin-top row in the budget so the frame stays within
+  // the row budget.
+  // Each bounded critical still renders as 2 rows: one margin-top row
+  // above the bounded text. Count that in the budget so the frame stays
+  // within the row budget.
+  const BOUNDED_CRITICAL_ROWS = 2;
+  const criticalBounded = new Map<number, RenderableTranscriptEntry>();
+  for (const c of criticalEntries) {
+    criticalBounded.set(c.id, {
+      ...c,
+      text: renderBoundedCritical(c),
+      rows: BOUNDED_CRITICAL_ROWS,
+    });
+  }
+  const retained: RenderableTranscriptEntry[] = [];
   for (const entry of entries) {
-    if (entry.criticality === "critical") critical.push(entry);
-    else noncritical.push(entry);
+    if (criticalBounded.has(entry.id)) {
+      retained.push(criticalBounded.get(entry.id)!);
+      continue;
+    }
+    if (entry.criticality === "noncritical") retained.push(entry);
   }
-  const criticalRows = critical.reduce((sum, entry) => sum + entry.rows, 0);
-  if (criticalRows >= rowBudget) {
-    // Critical entries alone exceed the budget; still keep every critical
-    // entry so the user sees the recovery path. The frame may exceed
-    // `rows` (the caller warns via test); we never drop a critical line.
-    return critical;
-  }
+  // Greedy fill from the newest noncritical, then drop oldest until
+  // the total row count fits `rowBudget` with bounded criticals
+  // counted at their actual rendered row count (margin-top + text).
+  const criticalRows = criticalBounded.size * BOUNDED_CRITICAL_ROWS;
   let remaining = rowBudget - criticalRows;
-  const visibleNoncritical: RenderableTranscriptEntry[] = [];
-  for (let i = noncritical.length - 1; i >= 0 && remaining > 0; i -= 1) {
-    const candidate = noncritical[i];
-    if (candidate === undefined) continue;
-    if (candidate.rows <= remaining) {
-      visibleNoncritical.unshift(candidate);
-      remaining -= candidate.rows;
+  // Keep the newest noncritical entries that fit the remaining budget.
+  const newNoncriticals: RenderableTranscriptEntry[] = [];
+  for (let i = retained.length - 1; i >= 0; i -= 1) {
+    const e = retained[i];
+    if (e === undefined) continue;
+    if (criticalBounded.has(e.id)) continue;
+    if (e.rows <= remaining) {
+      newNoncriticals.unshift(e);
+      remaining -= e.rows;
     }
   }
-  return [...critical, ...visibleNoncritical];
+  // Reassemble: walk `entries` again, in original order, including
+  // criticals (with bounded text) and the selected noncriticals.
+  const selected = new Set(newNoncriticals.map((e) => e.id));
+  const result: RenderableTranscriptEntry[] = [];
+  for (const entry of entries) {
+    if (criticalBounded.has(entry.id)) {
+      result.push(criticalBounded.get(entry.id)!);
+    } else if (selected.has(entry.id)) {
+      result.push(entry);
+    }
+  }
+  return result;
+}
+function renderBoundedCritical(entry: RenderableTranscriptEntry): string {
+  // Always render a single-line bounded representation. The original
+  // entry may be many rows; the bounded slot is always 1 row of chrome
+  // so the total frame stays within the row budget. The bounded text
+  // preserves the required URI / user code or exact recommendation ID.
+  const lines = entry.text.split("\n");
+  // Prefer a real bounded form that keeps the user-actionable
+  // information: the verification URI + user code, the recommendation
+  // ID, or the exact accept command.
+  if (/https?:\/\/github\.com\/login\/device/u.test(entry.text)) {
+    const match = entry.text.match(/(https?:\/\/github\.com\/login\/device\S*)\s+and\s+enter\s+(\S+)/u);
+    if (match !== null) return `${match[1]} (code ${match[2]})`;
+    const uri = entry.text.match(/https?:\/\/github\.com\/login\/device\S*/u);
+    if (uri !== null) return uri[0];
+  }
+  if (/Recommendation ID:\s*\S+/u.test(entry.text)) {
+    const id = entry.text.match(/Recommendation ID:\s*(\S+)/u);
+    if (id !== null) return `Recommendation ID: ${id[1]}`;
+  }
+  if (/\/mission\s+accept\s+--id\s+\S+/u.test(entry.text)) {
+    const id = entry.text.match(/\/mission\s+accept\s+--id\s+(\S+)/u);
+    if (id !== null) return `/mission accept --id ${id[1]}`;
+  }
+  if (/Run\s+\/auth\s+(login|status)\s+to\s+continue/u.test(entry.text)) {
+    return lines.find((l) => /Run\s+\/auth/u.test(l)) ?? lines[0] ?? entry.text;
+  }
+  // Fallback: first non-empty line of the original text.
+  return lines.find((l) => l.trim().length > 0) ?? entry.text;
 }
 
 
@@ -243,7 +366,59 @@ export function compactnessTier(caps: TerminalCapabilities): CompactnessTier {
   if (caps.rows < 26) return "standard";
   return "full";
 }
-export function availableTranscriptRows(caps: TerminalCapabilities): number {
+
+/**
+ * Width of the transcript pane (the column that hosts the actual
+ * transcript entries) in display cells. In wide mode this subtracts
+ * the 24-column sidebar, its right border, and the dashboard's
+ * `paddingX={1}` (2 cells) so the wrap estimate matches what Ink
+ * renders. In stacked mode the sidebar stacks above the main column
+ * and the transcript takes the full width minus the dashboard padding.
+ */
+export function transcriptPaneWidth(caps: TerminalCapabilities): number {
+  const wide = isWideTerminal(caps);
+  const DASHBOARD_PADDING_X = 2;
+  const SIDEBAR_WIDTH = 24;
+  const SIDEBAR_RIGHT_BORDER = 1;
+  if (wide) {
+    return Math.max(1, caps.columns - SIDEBAR_WIDTH - SIDEBAR_RIGHT_BORDER - DASHBOARD_PADDING_X);
+  }
+  return Math.max(1, caps.columns - DASHBOARD_PADDING_X);
+}
+
+export interface TranscriptChrome {
+  /**
+   * Number of contextual action rows currently rendered. Each enabled
+   * action is 1 row; disabled actions add a second reason / recovery
+   * row. The section also contributes its label and a top border.
+   */
+  readonly contextActionRows: number;
+}
+
+/**
+ * Compute the actual row budget for transcript entries after reserving
+ * chrome for the sections currently rendered. The caller passes the
+ * dynamic chrome (e.g. the rendered ContextActions row count) so the
+ * total frame always fits `caps.rows`. The returned value is the
+ * maximum row count the transcript pane can consume; the shell windows
+ * entries against this value.
+ *
+ * Chrome breakdown:
+ *  - Header: 2 rows (status row + bottom border)
+ *  - Sidebar: 1 row of header + N category rows + 2 hint rows
+ *    (N = NAVIGATION_SECTIONS.length). Compact horizontal mode is 1 row.
+ *  - Mission card: 1 border + content rows + 1 border. `full`/standard
+ *    = 6, `compact` (standard tier in wide mode) = 4, `minimal` = 0.
+ *  - Quick commands card: only at `full` tier, contributes 2 chrome.
+ *  - Context actions: 1 label + 1 border (when actions are present) +
+ *    1 row per action.
+ *  - Footer: 2 rows (status + commands). `full` tier only.
+ *  - Prompt: 1 row.
+ */
+export function availableTranscriptRows(
+  caps: TerminalCapabilities,
+  chrome: TranscriptChrome = { contextActionRows: 0 },
+): number {
   // Reserve rows for chrome (header, sidebar, mission card, quick commands
   // panel, footer, contextual action panel) plus the prompt line. Older
   // noncritical transcript lines are dropped first; the critical URI, code,
@@ -251,14 +426,36 @@ export function availableTranscriptRows(caps: TerminalCapabilities): number {
   // live in the most recently appended entries.
   const tier = compactnessTier(caps);
   const wide = isWideTerminal(caps);
-  const chrome =
+  // Sidebar chrome: full (stacked) renders 1 label + N categories + 2 hints.
+  // Compact (single horizontal row) is 1 row. Wide non-compact renders the
+  // same as full but next to the main column.
+  const sidebarCompact = tier === "compact" || tier === "minimal";
+  const sidebarRows = sidebarCompact ? 1 : 1 + NAVIGATION_SECTIONS.length + 2;
+  // Mission card chrome: full tier = 8 (with description, suggestions,
+  // border). Standard tier = 4 (compact card, no description, no
+  // suggestions, single border). Compact/minimal = 3 (compact card
+  // inside the compact dashboard).
+  const missionCardRows =
+    tier === "full"
+      ? 8
+      : tier === "standard"
+        ? 4
+        : tier === "compact"
+          ? 4
+          : 0;
+  const quickCommandsRows = tier === "full" ? 2 : 0;
+  const footerRows = tier === "full" ? 2 : 0;
+  // Context actions: 1 label + 1 border + 1 row per action when present.
+  const contextChrome = chrome.contextActionRows > 0 ? 2 + chrome.contextActionRows : 0;
+  const fixed =
     2 + // header (status row + bottom border)
-    (wide ? 1 : 5) + // sidebar (compact stacks above content)
-    (tier === "full" ? 8 : tier === "standard" ? 6 : tier === "compact" ? 2 : 0) +
-    (tier === "full" ? 2 : 0) + // footer
-    2 + // context actions panel header + border
-    1; // prompt line
-  return Math.max(0, caps.rows - chrome);
+    sidebarRows +
+    missionCardRows +
+    quickCommandsRows +
+    footerRows +
+    contextChrome +
+    2; // prompt line + its top border
+  return Math.max(0, caps.rows - fixed);
 }
 
 
@@ -920,7 +1117,14 @@ export function DashboardShell({
   // Critical entries (verification URI, user code, recommendation ID, accept
   // command, typed input) are always retained; older noncritical content is
   // dropped first so the bounded frame fits `capabilities.rows`.
-  const transcriptBudget = availableTranscriptRows(capabilities);
+  // The ContextActions section is variable: every enabled action is one
+  // row, every disabled action adds a reason / recovery row. The shell
+  // passes the actual rendered row count so the budget reflects what
+  // the user sees, not a constant 2-row reservation.
+  const contextActionRows = contextActions !== undefined ? contextActions.length : 0;
+  const transcriptBudget = availableTranscriptRows(capabilities, {
+    contextActionRows,
+  });
   const structuredEntries = entries !== undefined
     ? windowTranscriptEntries(entries, transcriptBudget)
     : null;
