@@ -3,12 +3,12 @@
 ## Status
 
 PASS — startup auth deadline + child operation cancellation land in commit
-`0d22926`; the four focused test files run together at 98 passing. The
+`1871371`; the four focused test files run together at 98 passing. The
 user's pre-existing uncommitted work and the unrelated stash are preserved.
 
 ## Commit
 
-- SHA: `0d22926`
+- SHA: `1871371`
 - Subject: `feat(tui): check auth without blocking session startup`
 - Files committed (6, 1019 insertions / 44 deletions):
   - `src/cli/interactive/session-runtime.ts` (new, 201 lines)
