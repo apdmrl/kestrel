@@ -415,6 +415,58 @@ describe("persistent session — auth state propagation", () => {
   });
 });
 
+describe("persistent session — logout transitions to required", () => {
+  afterEach(() => cleanup());
+
+  it("dispatches AUTH_RESOLVED disconnected after a successful /auth logout", async () => {
+    const commandHandlers = handlers();
+    // First connect so the logout has a starting state to demote.
+    vi.mocked(commandHandlers.authStatus).mockResolvedValueOnce({
+      kind: "auth-status",
+      connected: true,
+      login: "octocat",
+      detail: "CONNECTED",
+    });
+    // The successful logout returns an auth-status view with detail "LOGGED_OUT"
+    // and connected=false; the controller is the existing contract.
+    vi.mocked(commandHandlers.authLogout).mockResolvedValue({
+      kind: "auth-status",
+      connected: false,
+      login: null,
+      detail: "LOGGED_OUT",
+    });
+    const harness = mountInteractive({
+      handlers: commandHandlers,
+      signal: new AbortController().signal,
+    });
+    try {
+      await settle();
+      harness.stdin.send("/auth status\r");
+      await settle();
+      // The session is now `connected`; the Find action panel should
+      // surface the enabled `-` marker for Find.run.
+      harness.stdin.send(upArrow());
+      await settle();
+      harness.stdin.send(downArrow());
+      await settle();
+      const connectedFrame = harness.lastFrame();
+      expect(connectedFrame).toMatch(FIND_ENABLED);
+      // Now logout. The reducer must drop the connected state to
+      // `required` so the live Find action flips back to the disabled
+      // recovery path with `/auth login`.
+      harness.stdin.send("/auth logout --confirm github.com\r");
+      await settle(120);
+      const logoutFrame = harness.lastFrame();
+      // The Find.run row now exposes the required-state recovery; the
+      // connected marker must no longer be present.
+      expect(logoutFrame).not.toMatch(FIND_ENABLED);
+      expect(commandHandlers.authLogout).toHaveBeenCalled();
+    } finally {
+      harness.unmount();
+    }
+  });
+});
+
 describe("persistent session — live stdout capabilities", () => {
   afterEach(() => cleanup());
 
@@ -508,7 +560,11 @@ describe("persistent session — auth failure propagation (reducer-driven)", () 
 // verified…") so the transcript's bounded "Run /auth status to
 // continue." recovery line — which also contains `/auth status` — does
 // not accidentally satisfy the action-panel regex.
-const FIND_ENABLED = /Find a challenge[\s\S]{0,40}\/find/u;
+// `FIND_ENABLED` anchors on the literal `*-` enabled marker immediately
+// before the `Find a challenge` label so the disabled `>*x` row (which
+// still renders the same `/find` command beneath the reason text) is
+// not mistaken for an enabled action.
+const FIND_ENABLED = /\*-\s+Find a challenge[\s\S]{0,40}\/find/u;
 const FIND_RECOVERY_AUTH_STATUS =
   /GitHub authentication is not verified[\s\S]{0,400}\/auth\s+status/u;
 const FIND_RECOVERY_AUTH_LOGIN =

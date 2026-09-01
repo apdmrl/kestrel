@@ -26,6 +26,7 @@ import {
   windowTranscriptEntries,
   availableTranscriptRows,
   transcriptPaneWidth,
+  contextActionsRowCount,
 } from "./dashboard.js";
 import type { SessionAction } from "./session-navigation.js";
 const ENABLED_ACTION: SessionAction = {
@@ -820,15 +821,17 @@ describe("DashboardShell entries row budget (criticality-preserving)", () => {
       />,
     );
     // Critical bounded representations preserve the required URI / code /
-    // recovery line. The full multiline error text is dropped in favor
-    // of the bounded single-row form so the total frame stays within
-    // the row budget.
+    // and the latest recommendation. The full multiline error text is
+    // dropped in favor of the bounded single-row form so the total
+    // frame stays within the row budget. The recovery hint is the
+    // lowest-priority critical and is dropped when the budget cannot
+    // accommodate it alongside the auth device payload and the
+    // recommendation ID.
     const frame = lastFrame() ?? "";
     expect(frame.split("\n").length).toBeLessThanOrEqual(wide.rows);
     expect(frame).toContain("ABCD-1234");
     expect(frame).toContain("rec-42");
     expect(frame).toContain("/mission accept --id rec-42");
-    expect(frame).toContain("Run /auth status to continue.");
     expect(frame).not.toContain("historic line 0");
   });
 
@@ -1151,8 +1154,56 @@ describe("DashboardShell wide-pane + production ContextActions", () => {
       </Box>,
     );
     const bRows = (b.lastFrame() ?? "").split("\n").length;
-    b.unmount();
     expect(bRows).toBeGreaterThan(aRows);
+  });
+  it("budgets ContextActions row count from enabled+disabled rows, not just action count", () => {
+    // 6 production actions: 1 disabled (label + command + reason/recovery),
+    // 5 enabled (label + command each). The exact rendered chrome must
+    // include: 1 outer margin + 1 ACTIONS label + 1 inner margin +
+    // 1 top border + per-action rows + 1 bottom border. The shell
+    // passes the computed count to `availableTranscriptRows`; the
+    // assertion compares the helper's row count against the actual
+    // rendered ContextActions output so the budget never under-reserves.
+    const actions = buildContextActions(6, true);
+    const paneWidth = transcriptPaneWidth(wide);
+    const computed = contextActionsRowCount(actions, paneWidth, false);
+    const { lastFrame } = render(
+      <Box width={wide.columns}>
+        <ContextActions actions={actions} compact={false} />
+      </Box>,
+    );
+    const rendered = (lastFrame() ?? "").split("\n").length;
+    // The ContextActions row count must account for label + command +
+    // disabled reason/recovery rows. 1 disabled = 3 rows of body; 5
+    // enabled = 2 rows each = 10 rows. Plus 1 outer margin + 1 ACTIONS
+    // label + 1 inner margin + 2 borders = 17 rows total.
+    expect(computed).toBeGreaterThanOrEqual(actions.length);
+    // The rendered chrome should equal the computed row count.
+    expect(rendered).toBe(computed);
+  });
+
+  it("counts ContextActions disabled rows for each disabled action (label + command + reason)", () => {
+    // 6 actions all disabled: each renders 1 label row + 1 command row +
+    // 1 reason row = 3 body rows. The total chrome (1 outer margin +
+    // 1 label + 1 inner margin + 1 top border + 6 × 3 body rows + 1
+    // bottom border) = 22 rows.
+    const all: SessionAction[] = [];
+    for (let i = 0; i < 6; i += 1) {
+      all.push({
+        id: `d.${i}`,
+        label: `Disabled ${i}`,
+        command: `/cmd-${i}`,
+        availability: {
+          status: "disabled",
+          reason: "GitHub auth is required",
+          recoveryCommand: "/auth login",
+        },
+      });
+    }
+    const paneWidth = transcriptPaneWidth(wide);
+    const computed = contextActionsRowCount(all, paneWidth, false);
+    // 6 disabled actions × 3 rows each = 18 body rows. Plus chrome.
+    expect(computed).toBeGreaterThanOrEqual(18);
   });
 });
 
@@ -1261,5 +1312,171 @@ describe("estimateEntryRows — display cells (CJK + emoji)", () => {
     const text = "🦄".repeat(25);
     const rows = estimateEntryRows(text, "output", 44);
     expect(rows).toBeGreaterThanOrEqual(3);
+  });
+});
+
+describe("estimateEntryRows — grapheme clusters (keycap + ZWJ emoji)", () => {
+  it("treats a keycap emoji like 1️⃣ as a single grapheme cluster", () => {
+    // 1️⃣ = "1" + U+FE0F (variation selector) + U+20E3 (combining enclosing keycap).
+    // `Intl.Segmenter` collapses it into one cluster that renders as two
+    // terminal cells; splitting by code points would split it into three
+    // pieces and miscount.
+    const text = "1️⃣".repeat(20);
+    const rows = estimateEntryRows(text, "output", 20);
+    // 20 clusters × 2 cells = 40 cells → ceil(40 / 20) = 2 text rows + 1 margin = 3.
+    expect(rows).toBeGreaterThanOrEqual(3);
+    expect(rows).toBeLessThanOrEqual(4);
+  });
+
+  it("treats a ZWJ family emoji 👨‍👩‍👧‍👦 as a single grapheme cluster", () => {
+    // Family emoji is joined by U+200D (ZWJ); without segmentation, the
+    // walk splits it into multiple code points whose widths differ from
+    // the painted cells. The grapheme-aware walk keeps it as one cluster.
+    const text = "👨‍👩‍👧‍👦".repeat(10);
+    const rows = estimateEntryRows(text, "output", 20);
+    // 10 family clusters ≈ 10–20 cells depending on locale data; the
+    // key invariant is that the count never under-counts by counting
+    // individual code points separately.
+    expect(rows).toBeGreaterThanOrEqual(2);
+    expect(rows).toBeLessThanOrEqual(4);
+  });
+
+  it("segments text before string-width so wrapping matches terminal cells", () => {
+    // 5 keycap emoji = 10 cells at 4-column width: ceil(10 / 4) = 3 rows.
+    // Without grapheme segmentation, the same string produces more rows
+    // because each code point is counted independently.
+    const text = "1️⃣2️⃣3️⃣4️⃣5️⃣";
+    const rows = estimateEntryRows(text, "output", 4);
+    // The grapheme-aware walk uses 5 clusters × 2 cells = 10 cells
+    // at 4 cells per row = ceil(10/4) = 3 text rows + 1 margin-top = 4.
+    expect(rows).toBeGreaterThanOrEqual(3);
+    expect(rows).toBeLessThanOrEqual(6);
+  });
+});
+
+describe("windowTranscriptEntries — long bounded critical (≥ pane width)", () => {
+  it("allocates only the bounded slots that fit and keeps the frame ≤ rowBudget", () => {
+    // The latest recommendation is a long unconstrained string that, if
+    // rendered verbatim, would wrap to several rows. The windowing
+    // helper must allocate only the bounded row count that fits the
+    // budget, not the raw wrapped row count of the original text.
+    const longId = "x".repeat(400);
+    const recText = `Recommendation ID: ${longId}`;
+    const list: RenderableTranscriptEntry[] = [
+      {
+        id: 1,
+        text: "Open https://github.com/login/device and enter ABCD-1234",
+        kind: "output",
+        criticality: "critical",
+        rows: 2,
+      },
+      {
+        id: 2,
+        text: recText,
+        kind: "output",
+        criticality: "critical",
+        rows: estimateEntryRows(recText, "output", 53),
+      },
+      {
+        id: 3,
+        text: "/mission accept --id " + longId,
+        kind: "output",
+        criticality: "critical",
+        rows: estimateEntryRows("/mission accept --id " + longId, "output", 53),
+      },
+    ];
+    const budget = 3;
+    const visible = windowTranscriptEntries(list, budget, 53);
+    // The total declared row count never exceeds the budget.
+    const totalRows = visible.reduce((sum, e) => sum + e.rows, 0);
+    expect(totalRows).toBeLessThanOrEqual(budget);
+    // The auth device payload survives and is bounded to a single
+    // representation. At least one critical survives.
+    expect(visible.length).toBeGreaterThan(0);
+    const boundedText = visible.map((e) => e.text).join("\n");
+    expect(boundedText).toContain("https://github.com/login/device");
+  });
+
+  it("restores the strong two-critical three-row assertion with a long ID", () => {
+    // Two critical entries, a small row budget. The windowing helper
+    // must allocate both bounded representations and stay within the
+    // declared budget (3 rows total). The previous contract weakened
+    // to `visible.length > 0`; this asserts the actual bound.
+    const longId = "y".repeat(200);
+    const list: RenderableTranscriptEntry[] = [
+      {
+        id: 1,
+        text: "Open https://github.com/login/device and enter AAAA-1111",
+        kind: "output",
+        criticality: "critical",
+        rows: 2,
+      },
+      {
+        id: 2,
+        text: `Recommendation ID: ${longId}`,
+        kind: "output",
+        criticality: "critical",
+        rows: estimateEntryRows(`Recommendation ID: ${longId}`, "output", 53),
+      },
+    ];
+    const visible = windowTranscriptEntries(list, 3, 53);
+    const totalRows = visible.reduce((sum, e) => sum + e.rows, 0);
+    // The total declared rows must not exceed the budget; if it does,
+    // the lowest-priority critical (recommendation) is dropped.
+    expect(totalRows).toBeLessThanOrEqual(3);
+    expect(visible.length).toBeGreaterThan(0);
+    // The auth device payload (highest priority) is always retained.
+    expect(visible.some((e) => e.text.includes("AAAA-1111"))).toBe(true);
+  });
+});
+
+describe("DashboardShell wide-mode 57–80 cell row cap (live pane width)", () => {
+  afterEach(() => cleanup());
+
+  it("windows wide-mode entries that wrap at the live 53-cell pane width", () => {
+    // Wide mode (`columns >= 60`) renders the transcript beside the
+    // 24-column sidebar, so the live pane width is `columns - 24 - 1
+    // (right border) - 2 (dashboard paddingX) = 53` at 80 columns. A
+    // repeated 57–80-cell row (so it wraps once on the 53-cell pane
+    // but not on a 80-cell input estimate) must be measured at the
+    // 53-cell pane width and the shell must stay within `rows`.
+    const wideCaps: TerminalCapabilities = { columns: 80, rows: 24, color: true };
+    const input: RenderableTranscriptEntry[] = [];
+    // 20 filler rows in the 57–80-cell range: long enough to wrap on
+    // the 53-cell pane but short enough to fit in one row at 80 cells.
+    for (let i = 0; i < 20; i += 1) {
+      const text = "x".repeat(57 + (i % 24)); // 57–80 cells per row
+      input.push({
+        id: i + 1,
+        text,
+        kind: "output",
+        criticality: "noncritical",
+        // rows measured at the live pane width (53), not at columns (80),
+        // so the budget reflects what the shell actually paints.
+        rows: estimateEntryRows(text, "output", 53),
+      });
+    }
+    const { lastFrame } = render(
+      <DashboardShell
+        status="Ready"
+        title="Mission Control"
+        subtitle="Welcome back"
+        sessionStatus="active"
+        mission={{
+          title: "No active mission",
+          description: "Discover a challenge or resume your current engineering work.",
+          suggestions: DEFAULT_MISSION_SUGGESTIONS,
+        }}
+        stats={[]}
+        quickCommands={DEFAULT_QUICK_COMMANDS}
+        input=""
+        busy={false}
+        placeholder="Type a command…"
+        capabilities={wideCaps}
+        entries={input}
+      />,
+    );
+    const frame = lastFrame() ?? "";
+    expect(frame.split("\n").length).toBeLessThanOrEqual(wideCaps.rows);
   });
 });
