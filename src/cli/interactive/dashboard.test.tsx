@@ -1057,18 +1057,13 @@ describe("isCriticalTranscriptText", () => {
 });
 
 describe("transcriptPaneWidth", () => {
-  it("subtracts the sidebar width + border + gap from the total in wide mode", () => {
-    // 80 columns - 24 sidebar - 1 right border - 2 paddingX = 53.
-    expect(transcriptPaneWidth({ columns: 80, rows: 24, color: true })).toBe(53);
+  it("subtracts only the sibling sidebar width in wide mode", () => {
+    expect(transcriptPaneWidth({ columns: 80, rows: 24, color: true })).toBe(56);
   });
 
-  it("uses the full width minus dashboard paddingX in stacked mode (59 cols)", () => {
-    // 59 - 2 paddingX = 57. (No sidebar in stacked mode.)
-    expect(transcriptPaneWidth({ columns: 59, rows: 24, color: true })).toBe(57);
-  });
-
-  it("uses the full width minus dashboard paddingX at 44 columns", () => {
-    expect(transcriptPaneWidth({ columns: 44, rows: 24, color: true })).toBe(42);
+  it("uses the full containing-pane width in stacked mode", () => {
+    expect(transcriptPaneWidth({ columns: 59, rows: 24, color: true })).toBe(59);
+    expect(transcriptPaneWidth({ columns: 44, rows: 24, color: true })).toBe(44);
   });
 });
 
@@ -1168,7 +1163,7 @@ describe("DashboardShell wide-pane + production ContextActions", () => {
     const paneWidth = transcriptPaneWidth(wide);
     const computed = contextActionsRowCount(actions, paneWidth, false);
     const { lastFrame } = render(
-      <Box width={wide.columns}>
+      <Box width={paneWidth} marginTop={1} paddingX={1}>
         <ContextActions actions={actions} compact={false} />
       </Box>,
     );
@@ -1433,27 +1428,18 @@ describe("windowTranscriptEntries — long bounded critical (≥ pane width)", (
 describe("DashboardShell wide-mode 57–80 cell row cap (live pane width)", () => {
   afterEach(() => cleanup());
 
-  it("windows wide-mode entries that wrap at the live 53-cell pane width", () => {
-    // Wide mode (`columns >= 60`) renders the transcript beside the
-    // 24-column sidebar, so the live pane width is `columns - 24 - 1
-    // (right border) - 2 (dashboard paddingX) = 53` at 80 columns. A
-    // repeated 57–80-cell row (so it wraps once on the 53-cell pane
-    // but not on a 80-cell input estimate) must be measured at the
-    // 53-cell pane width and the shell must stay within `rows`.
+  it("windows wide-mode entries that wrap at the live main-pane width", () => {
     const wideCaps: TerminalCapabilities = { columns: 80, rows: 24, color: true };
+    const paneWidth = transcriptPaneWidth(wideCaps);
     const input: RenderableTranscriptEntry[] = [];
-    // 20 filler rows in the 57–80-cell range: long enough to wrap on
-    // the 53-cell pane but short enough to fit in one row at 80 cells.
     for (let i = 0; i < 20; i += 1) {
-      const text = "x".repeat(57 + (i % 24)); // 57–80 cells per row
+      const text = "x".repeat(57 + (i % 24));
       input.push({
         id: i + 1,
         text,
         kind: "output",
         criticality: "noncritical",
-        // rows measured at the live pane width (53), not at columns (80),
-        // so the budget reflects what the shell actually paints.
-        rows: estimateEntryRows(text, "output", 53),
+        rows: estimateEntryRows(text, "output", paneWidth),
       });
     }
     const { lastFrame } = render(

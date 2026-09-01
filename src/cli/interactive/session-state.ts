@@ -199,6 +199,15 @@ export function sessionReducer(state: SessionState, event: SessionEvent): Sessio
           auth: running.authBeforeLogin ?? { status: "required" },
         };
       }
+      if (event.view.kind === "auth-status") {
+        const auth: SessionAuthState =
+          event.view.connected && event.view.login !== null
+            ? { status: "connected", login: event.view.login }
+            : event.view.detail === "EXPIRED"
+              ? { status: "expired" }
+              : { status: "required" };
+        return { ...state, operation: { status: "idle" }, auth };
+      }
       if (event.view.kind === "recommendation") {
         return { ...state, operation: { status: "idle" }, latestRecommendation: event.view };
       }

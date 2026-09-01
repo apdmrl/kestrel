@@ -1529,3 +1529,48 @@ kestrel@0.1.0 /home/apdmrl/workspace/repos/kestrel
 - Existing `dbg.test.test.tsx` debug harness is preserved verbatim.
 - No formatter / lint / typecheck / build / full test suite run per the
   directive.
+
+## Final Geometry Correction
+
+The final scoped review found that the row model still subtracted padding
+belonging to a sibling `Dashboard`, counted `ContextActions` outside its
+production wrapper, admitted critical entries whose measured rows exceeded the
+remaining budget, and left logout state changes outside the reducer's
+non-login success policy.
+
+Corrections:
+
+- `transcriptPaneWidth` now models the actual containing pane: 56 cells at
+  80 columns (`80 - 24` sidebar) and the full width in stacked layouts.
+- `DashboardShell` passes that width to both entry measurement and windowing.
+- `contextActionsRowCount` includes the production wrapper, tier-dependent
+  margins and borders, label/command rows, and wrapped disabled recovery text;
+  `availableTranscriptRows` consumes that complete contribution once.
+- Critical entries are compacted, measured with `estimateEntryRows`, admitted
+  only while they fit, and reassembled in transcript order. Auth-device content
+  has priority over recommendation and recovery content.
+- Wide sidebars consume horizontal space, not transcript rows.
+- `OPERATION_SUCCEEDED` now maps returned `auth-status` views into reducer-owned
+  connected, expired, or required state, so successful logout exposes
+  `/auth login` recovery rather than retaining connected actions.
+
+Focused verification:
+
+```text
+$ npx vitest run src/cli/interactive/dashboard.test.tsx \
+    src/cli/interactive/session.test.tsx \
+    src/cli/interactive/session-state.test.ts \
+    src/cli/interactive/session-auth.test.tsx \
+    src/cli/interactive/session-controller.test.ts \
+    src/cli/interactive/session-navigation.test.ts \
+    src/cli/interactive/session-renderer.test.ts \
+    src/cli/interactive/session-parser.test.ts
+
+Test Files  8 passed (8)
+Tests       247 passed (247)
+Duration    7.59s
+```
+
+LSP diagnostics reported no TypeScript errors in `dashboard.tsx` or
+`session-state.ts`; the ESLint language-server integration was unavailable, so
+repository lint remains an integration-gate check.

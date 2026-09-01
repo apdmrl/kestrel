@@ -22,22 +22,46 @@ export interface RenderableTranscriptEntry {
 }
 /**
  * Wrap a single line of text to the available width, breaking on
+ * Wrap a single line of text to the available width, breaking on
  * whitespace when possible. Mirrors the wrapping Ink performs inside a
  * `<Text>` block so the row estimate matches what actually renders.
  * Width is measured in terminal display cells (CJK / emoji are
  * double-cell), not JS code points.
  */
-function wrapLineToWidth(line: string, width: number): number {
-  if (width <= 0) return 1;
+/**
+ * Split a string into Unicode grapheme clusters using
+ * `Intl.Segmenter({ granularity: "grapheme" })`. A keycap emoji
+ * (`1️⃣` = `1` + VS16 + combining keycap) is one cluster with two
+ * terminal cells; a ZWJ family (`👨‍👩‍👧‍👦`) is also one cluster. Code-point
+ * splitting (`Array.from`) breaks both into multiple pieces whose cell
+ * widths differ from the painted glyph and mis-counts when wrapping.
+ */
+export function segmentGraphemes(line: string): readonly string[] {
+  const segmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+  const out: string[] = [];
+  for (const segment of segmenter.segment(line)) {
+    out.push(segment.segment);
+  }
+  return out;
+}
+
+export function wrapLineToWidth(line: string, width: number): number {
   if (line.length === 0) return 1;
+  // Pre-compute the cell width of every code point; for plain ASCII
+  // the array length matches the cell count, but CJK / emoji are
+  // double-cell. Per-grapheme cluster would be more correct (so a
+  // multi-codepoint emoji like 🦄 is one cell) — string-width already
+  // does that internally.
   const cellLength = stringWidth(line);
   if (cellLength <= width) return 1;
-  // Grapheme-aware walk: consume `width` cells per row, breaking on the
-  // last whitespace boundary when one exists inside the consumed range.
-  const graphemes = Array.from(line);
+  let rows = 0;
+  let cursor = 0;
+  // Grapheme-aware walk: each iteration consumes `width` cells worth of
+  // grapheme clusters. The cells-per-grapheme map is derived once per
+  // line to avoid the quadratic cost on long inputs.
+  const graphemes = segmentGraphemes(line);
   const cells: number[] = graphemes.map((g) => stringWidth(g));
   let consumed = 0;
-  let rows = 0;
   while (consumed < graphemes.length) {
     let rowCells = 0;
     let rowEnd = consumed;
@@ -50,6 +74,7 @@ function wrapLineToWidth(line: string, width: number): number {
       // progress and avoid an infinite loop.
       rowEnd = consumed + 1;
     }
+    // Try a soft break on whitespace within the consumed range.
     let breakAt = rowEnd;
     if (rowEnd < graphemes.length) {
       for (let i = rowEnd - 1; i > consumed; i -= 1) {
@@ -59,8 +84,10 @@ function wrapLineToWidth(line: string, width: number): number {
         }
       }
     }
+    cursor = breakAt;
     rows += 1;
-    consumed = breakAt;
+    consumed = cursor;
+    // Skip the leading space on the next line if we broke on one.
     if (consumed < graphemes.length && graphemes[consumed] === " ") {
       consumed += 1;
     }
@@ -71,7 +98,7 @@ function wrapLineToWidth(line: string, width: number): number {
 /**
  * Estimate the rows an entry consumes once rendered. Accounts for:
  *  - embedded `\n` newlines (error rendering produces a header + bullets)
- *  - narrow-width wrapping per logical line (cols - chrome overhead)
+ *  - narrow-width wrapping per logical line (cells - chrome overhead)
  *  - the entry's own chrome: error = 3 chrome rows (border top + inner
  *    padding + border bottom) plus 1 margin-top; system = 2 chrome rows
  *    (label + spacing) plus 1 margin-top; input/output = 1 margin-top.
@@ -81,10 +108,9 @@ export function estimateEntryRows(
   kind: RenderableTranscriptEntry["kind"],
   columns: number,
 ): number {
-  // Per-entry chrome in rows (border + padding + label + margin-top).
   const chromeRows =
     kind === "error" ? 3 + 1 : kind === "system" ? 2 + 1 : 1;
-  // marginTop={1}; input/output render full width with marginTop={1}.
+
   const innerWidth = Math.max(
     1,
     columns - (kind === "error" ? 4 : kind === "system" ? 0 : 0),
@@ -96,12 +122,6 @@ export function estimateEntryRows(
   );
   return Math.max(1, chromeRows + lineRows);
 }
-/**
- * Build a `RenderableTranscriptEntry` from a plain entry (the legacy
- * `TranscriptEntry` shape used by the Session transcript) plus an
- * explicit criticality hint. The helper exists so tests and the Session
- * share a single row-measurement path.
- */
 export function toRenderableEntry(
   entry: {
     readonly id: number;
@@ -163,91 +183,141 @@ export function isCriticalTranscriptText(text: string, promptInput: string): boo
  * retained entries (oldest first, newest last). Entries are selected
  * by identity from the original array — concatenating all criticals
  * before all noncriticals would reorder interleaved history.
+/**
+ * Compute the actual row count that the `ContextActions` panel will
+ * render given the supplied action list. Mirrors the component's
+ * chrome path exactly so the row budget reflects what Ink paints, not
+ * a constant per-action reservation:
+ *
+ *   - Outer `<Box flexDirection="column" marginTop={1}>` (non-compact
+ *     only) — one row.
+ *   - `<SectionLabel label="Actions" />` — one row.
+ *   - Inner `<Box marginTop={1}>` on the bordered container — one row.
+ *   - Top + bottom border of the inner container — two rows.
+ *   - Per-action body rows: enabled = 2 (label + command), disabled = 3
+ *     (label + command + reason/recovery). The reason may wrap on
+ *     narrow panes; the cell width is remeasured against `paneWidth`
+ *     so long reasons never push the helper past the rendered output.
+ *
+ * `paneWidth` is the transcript pane width (see `transcriptPaneWidth`).
+ * `compact` mirrors the production `compactnessTier` flag.
+ */
+export function contextActionsRowCount(
+  actions: readonly SessionAction[],
+  paneWidth: number,
+  compact: boolean,
+): number {
+  const wrapperMargin = compact ? 0 : 1;
+  const outerMargin = compact ? 0 : 1;
+  const sectionLabel = 1;
+  if (actions.length === 0) {
+    return wrapperMargin + outerMargin + sectionLabel + 1;
+  }
+  const innerMargin = compact ? 0 : 1;
+  const borders = compact ? 0 : 2;
+  const borderedContentWidth = Math.max(1, paneWidth - 2 - (compact ? 0 : 2));
+  const indentedWidth = Math.max(1, borderedContentWidth - 4);
+  const bodyRows = actions.reduce((sum, action) => {
+    const labelRows = wrapLineToWidth(`--- ${action.label}`, borderedContentWidth);
+    const commandRows = wrapLineToWidth(action.command, indentedWidth);
+    if (action.availability.status === "disabled") {
+      const reasonText =
+        action.availability.reason +
+        (action.availability.recoveryCommand !== undefined
+          ? ` · ${action.availability.recoveryCommand}`
+          : "");
+      return sum + labelRows + commandRows + wrapLineToWidth(reasonText, indentedWidth);
+    }
+    return sum + labelRows + commandRows;
+  }, 0);
+  return (
+    wrapperMargin +
+    outerMargin +
+    sectionLabel +
+    innerMargin +
+    borders +
+    bodyRows
+  );
+}
+
+/**
+ * Window transcript entries to fit the row budget. Older noncritical
+ * entries are dropped first so the critical entries are retained and
+ * the rendered frame stays within `capabilities.rows`. Critical entries
+ * are bounded: only the most recent device-flow payload (verification
+ * URI / user code) and the most recent recommendation / accept command
+ * are retained. Older critical entries are superseded. The remaining
+ * budget is filled with the newest noncritical entries, and the oldest
+ * noncritical entries are dropped first.
+ *
+ * When `paneWidth` is supplied the helper re-measures each entry's row
+ * count against the actual live pane width so the bounded critical
+ * totals do not exceed the declared budget at narrow viewports.
  */
 export function windowTranscriptEntries(
   entries: readonly RenderableTranscriptEntry[],
   rowBudget: number,
+  paneWidth = 80,
 ): readonly RenderableTranscriptEntry[] {
   if (rowBudget <= 0 || entries.length === 0) return [];
-  // The most recent entry of each critical kind wins. Older critical
-  // entries are superseded so a busy transcript never grows past the
-  // budget. Each retained critical is rendered as a single bounded
-  // row that preserves the required URI / user code or the exact
-  // recommendation ID / action.
   const latestAuthDevice = [...entries]
     .reverse()
-    .find((e) => /https?:\/\/github\.com\/login\/device/u.test(e.text));
+    .find((entry) => /https?:\/\/github\.com\/login\/device/u.test(entry.text));
   const latestRecommendation = [...entries]
     .reverse()
     .find(
-      (e) =>
-        /Recommendation ID:\s*\S+/u.test(e.text) ||
-        /\/mission\s+accept\s+--id\s+\S+/u.test(e.text),
+      (entry) =>
+        /Recommendation ID:\s*\S+/u.test(entry.text) ||
+        /\/mission\s+accept\s+--id\s+\S+/u.test(entry.text),
     );
   const latestRecovery = [...entries]
     .reverse()
-    .find((e) => /Run\s+\/auth\s+(login|status)\s+to\s+continue/u.test(e.text));
+    .find((entry) => /Run\s+\/auth\s+(login|status)\s+to\s+continue/u.test(entry.text));
   const criticalEntries = [latestAuthDevice, latestRecommendation, latestRecovery].filter(
-    (e): e is RenderableTranscriptEntry => e !== undefined,
+    (entry): entry is RenderableTranscriptEntry => entry !== undefined,
   );
-  return finalizeWindowedEntries(entries, criticalEntries, rowBudget);
+  return finalizeWindowedEntries(entries, criticalEntries, rowBudget, paneWidth);
 }
 
 function finalizeWindowedEntries(
   entries: readonly RenderableTranscriptEntry[],
   criticalEntries: readonly RenderableTranscriptEntry[],
   rowBudget: number,
+  paneWidth: number,
 ): readonly RenderableTranscriptEntry[] {
-  // Build a map of bounded critical text by id so we can swap the
-  // original entry for its bounded representation at the original
-  // chronological position. Each bounded critical still occupies one
-  // `<Box marginTop={1}>` row above the single-line bounded text —
-  // count that margin-top row in the budget so the frame stays within
-  // the row budget.
-  // Each bounded critical still renders as 2 rows: one margin-top row
-  // above the bounded text. Count that in the budget so the frame stays
-  // within the row budget.
-  const BOUNDED_CRITICAL_ROWS = 2;
+  let remaining = rowBudget;
   const criticalBounded = new Map<number, RenderableTranscriptEntry>();
-  for (const c of criticalEntries) {
-    criticalBounded.set(c.id, {
-      ...c,
-      text: renderBoundedCritical(c),
-      rows: BOUNDED_CRITICAL_ROWS,
-    });
+  for (const entry of criticalEntries) {
+    const text = renderBoundedCritical(entry);
+    const bounded = {
+      ...entry,
+      text,
+      rows: estimateEntryRows(text, entry.kind, paneWidth),
+    };
+    if (bounded.rows <= remaining) {
+      criticalBounded.set(entry.id, bounded);
+      remaining -= bounded.rows;
+    }
   }
-  const retained: RenderableTranscriptEntry[] = [];
-  for (const entry of entries) {
-    if (criticalBounded.has(entry.id)) {
-      retained.push(criticalBounded.get(entry.id)!);
+
+  const selectedNoncritical = new Set<number>();
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index];
+    if (entry === undefined || criticalBounded.has(entry.id) || entry.criticality === "critical") {
       continue;
     }
-    if (entry.criticality === "noncritical") retained.push(entry);
-  }
-  // Greedy fill from the newest noncritical, then drop oldest until
-  // the total row count fits `rowBudget` with bounded criticals
-  // counted at their actual rendered row count (margin-top + text).
-  const criticalRows = criticalBounded.size * BOUNDED_CRITICAL_ROWS;
-  let remaining = rowBudget - criticalRows;
-  // Keep the newest noncritical entries that fit the remaining budget.
-  const newNoncriticals: RenderableTranscriptEntry[] = [];
-  for (let i = retained.length - 1; i >= 0; i -= 1) {
-    const e = retained[i];
-    if (e === undefined) continue;
-    if (criticalBounded.has(e.id)) continue;
-    if (e.rows <= remaining) {
-      newNoncriticals.unshift(e);
-      remaining -= e.rows;
+    if (entry.rows <= remaining) {
+      selectedNoncritical.add(entry.id);
+      remaining -= entry.rows;
     }
   }
-  // Reassemble: walk `entries` again, in original order, including
-  // criticals (with bounded text) and the selected noncriticals.
-  const selected = new Set(newNoncriticals.map((e) => e.id));
+
   const result: RenderableTranscriptEntry[] = [];
   for (const entry of entries) {
-    if (criticalBounded.has(entry.id)) {
-      result.push(criticalBounded.get(entry.id)!);
-    } else if (selected.has(entry.id)) {
+    const bounded = criticalBounded.get(entry.id);
+    if (bounded !== undefined) {
+      result.push(bounded);
+    } else if (selectedNoncritical.has(entry.id)) {
       result.push(entry);
     }
   }
@@ -376,14 +446,8 @@ export function compactnessTier(caps: TerminalCapabilities): CompactnessTier {
  * and the transcript takes the full width minus the dashboard padding.
  */
 export function transcriptPaneWidth(caps: TerminalCapabilities): number {
-  const wide = isWideTerminal(caps);
-  const DASHBOARD_PADDING_X = 2;
   const SIDEBAR_WIDTH = 24;
-  const SIDEBAR_RIGHT_BORDER = 1;
-  if (wide) {
-    return Math.max(1, caps.columns - SIDEBAR_WIDTH - SIDEBAR_RIGHT_BORDER - DASHBOARD_PADDING_X);
-  }
-  return Math.max(1, caps.columns - DASHBOARD_PADDING_X);
+  return Math.max(1, caps.columns - (isWideTerminal(caps) ? SIDEBAR_WIDTH : 0));
 }
 
 export interface TranscriptChrome {
@@ -419,22 +483,9 @@ export function availableTranscriptRows(
   caps: TerminalCapabilities,
   chrome: TranscriptChrome = { contextActionRows: 0 },
 ): number {
-  // Reserve rows for chrome (header, sidebar, mission card, quick commands
-  // panel, footer, contextual action panel) plus the prompt line. Older
-  // noncritical transcript lines are dropped first; the critical URI, code,
-  // recommendation ID, action, and typed input strings survive because they
-  // live in the most recently appended entries.
   const tier = compactnessTier(caps);
   const wide = isWideTerminal(caps);
-  // Sidebar chrome: full (stacked) renders 1 label + N categories + 2 hints.
-  // Compact (single horizontal row) is 1 row. Wide non-compact renders the
-  // same as full but next to the main column.
-  const sidebarCompact = tier === "compact" || tier === "minimal";
-  const sidebarRows = sidebarCompact ? 1 : 1 + NAVIGATION_SECTIONS.length + 2;
-  // Mission card chrome: full tier = 8 (with description, suggestions,
-  // border). Standard tier = 4 (compact card, no description, no
-  // suggestions, single border). Compact/minimal = 3 (compact card
-  // inside the compact dashboard).
+  const sidebarRows = wide ? 0 : 1;
   const missionCardRows =
     tier === "full"
       ? 8
@@ -445,19 +496,16 @@ export function availableTranscriptRows(
           : 0;
   const quickCommandsRows = tier === "full" ? 2 : 0;
   const footerRows = tier === "full" ? 2 : 0;
-  // Context actions: 1 label + 1 border + 1 row per action when present.
-  const contextChrome = chrome.contextActionRows > 0 ? 2 + chrome.contextActionRows : 0;
   const fixed =
-    2 + // header (status row + bottom border)
+    2 +
     sidebarRows +
     missionCardRows +
     quickCommandsRows +
     footerRows +
-    contextChrome +
-    2; // prompt line + its top border
+    chrome.contextActionRows +
+    2;
   return Math.max(0, caps.rows - fixed);
 }
-
 
 const SECTION_ICONS: Readonly<Record<string, { readonly icon: string; readonly accent: Accent }>> = {
   home: { icon: "⌂", accent: "cyan" },
@@ -1121,12 +1169,16 @@ export function DashboardShell({
   // row, every disabled action adds a reason / recovery row. The shell
   // passes the actual rendered row count so the budget reflects what
   // the user sees, not a constant 2-row reservation.
-  const contextActionRows = contextActions !== undefined ? contextActions.length : 0;
+  const paneWidth = transcriptPaneWidth(capabilities);
+  const contextActionRows =
+    contextActions !== undefined
+      ? contextActionsRowCount(contextActions, paneWidth, compact)
+      : 0;
   const transcriptBudget = availableTranscriptRows(capabilities, {
     contextActionRows,
   });
   const structuredEntries = entries !== undefined
-    ? windowTranscriptEntries(entries, transcriptBudget)
+    ? windowTranscriptEntries(entries, transcriptBudget, paneWidth)
     : null;
   const allChildren = structuredEntries !== null
     ? structuredEntries.map((entry) => (
