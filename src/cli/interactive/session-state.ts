@@ -49,12 +49,14 @@ export interface SessionState {
 
 export type SessionEvent =
   | { readonly type: "AUTH_CHECK_STARTED"; readonly attemptId: number }
+  | { readonly type: "AUTH_RESOLVED"; readonly attemptId: number; readonly detail: "CONNECTED"; readonly login: string }
   | {
       readonly type: "AUTH_RESOLVED";
       readonly attemptId: number;
-      readonly detail: AuthResultDetail;
-      readonly login: string | null;
+      readonly detail: "NOT_CONNECTED";
+      readonly login: null;
     }
+  | { readonly type: "AUTH_RESOLVED"; readonly attemptId: number; readonly detail: "EXPIRED"; readonly login: null }
   | { readonly type: "AUTH_FAILED"; readonly attemptId: number; readonly errorCode: string }
   | {
       readonly type: "OPERATION_STARTED";
@@ -117,13 +119,16 @@ export function sessionReducer(state: SessionState, event: SessionEvent): Sessio
       if (state.auth.status !== "checking" || state.auth.attemptId !== event.attemptId) {
         return state;
       }
-      if (event.detail === "CONNECTED" && event.login !== null) {
+      if (event.detail === "CONNECTED" && typeof event.login === "string") {
         return { ...state, auth: { status: "connected", login: event.login } };
       }
-      if (event.detail === "NOT_CONNECTED") {
+      if (event.detail === "NOT_CONNECTED" && event.login === null) {
         return { ...state, auth: { status: "required" } };
       }
-      return { ...state, auth: { status: "expired" } };
+      if (event.detail === "EXPIRED" && event.login === null) {
+        return { ...state, auth: { status: "expired" } };
+      }
+      return state;
     }
     case "AUTH_FAILED": {
       if (state.auth.status !== "checking" || state.auth.attemptId !== event.attemptId) {
@@ -135,9 +140,14 @@ export function sessionReducer(state: SessionState, event: SessionEvent): Sessio
       if (state.operation.status === "running" && state.operation.operationId === event.operationId) {
         return state;
       }
+      const supersededAuth =
+        state.operation.status === "running" && isLoginCommand(state.operation.command)
+          ? (state.operation.authBeforeLogin ?? { status: "required" })
+          : state.auth;
       if (!isLoginCommand(event.command)) {
         return {
           ...state,
+          auth: supersededAuth,
           operation: {
             status: "running",
             operationId: event.operationId,
@@ -148,14 +158,14 @@ export function sessionReducer(state: SessionState, event: SessionEvent): Sessio
       }
       return {
         ...state,
+        auth: { status: "logging-in", phase: "starting" },
         operation: {
           status: "running",
           operationId: event.operationId,
           command: event.command,
           cancellable: event.cancellable,
-          authBeforeLogin: state.auth,
+          authBeforeLogin: supersededAuth,
         },
-        auth: { status: "logging-in", phase: "starting" },
       };
     }
     case "LOGIN_AUTHORIZATION": {
@@ -175,8 +185,19 @@ export function sessionReducer(state: SessionState, event: SessionEvent): Sessio
       const running = state.operation;
       if (running.status !== "running" || running.operationId !== event.operationId) return state;
       if (isLoginCommand(running.command)) {
-        const login = event.view.kind === "auth-status" && event.view.login !== null ? event.view.login : "unknown";
-        return { ...state, operation: { status: "idle" }, auth: { status: "connected", login } };
+        const view = event.view;
+        if (view.kind === "auth-status" && view.connected && view.login !== null) {
+          return {
+            ...state,
+            operation: { status: "idle" },
+            auth: { status: "connected", login: view.login },
+          };
+        }
+        return {
+          ...state,
+          operation: { status: "idle" },
+          auth: running.authBeforeLogin ?? { status: "required" },
+        };
       }
       if (event.view.kind === "recommendation") {
         return { ...state, operation: { status: "idle" }, latestRecommendation: event.view };
@@ -234,8 +255,13 @@ export function sessionReducer(state: SessionState, event: SessionEvent): Sessio
       return { ...state, focus: event.focus };
     }
     case "HOME_SELECTED": {
+      const restoredLoginAuth =
+        state.operation.status === "running" && isLoginCommand(state.operation.command)
+          ? (state.operation.authBeforeLogin ?? { status: "required" })
+          : state.auth;
       return {
         ...state,
+        auth: restoredLoginAuth,
         operation: { status: "idle" },
         latestRecommendation: null,
         input: "",

@@ -217,7 +217,7 @@ describe("session reducer", () => {
     expect(json).not.toContain("device_code");
   });
 
-  it("starts without a stored recommendation and never persists one to disk", () => {
+  it("starts without a stored recommendation and serializes no recommendation data from the initial state", () => {
     const state: SessionState = initialSessionState();
     expect(state.latestRecommendation).toBeNull();
     const json = JSON.stringify(state);
@@ -482,7 +482,274 @@ describe("session reducer", () => {
     });
     expect(connected.auth).toEqual({ status: "connected", login: "octocat" });
   });
-});
+
+  it("ignores AUTH_RESOLVED CONNECTED with a null login rather than misclassifying as expired", () => {
+    const checking = sessionReducer(initialSessionState(), { type: "AUTH_CHECK_STARTED", attemptId: 1 });
+    const inconsistent = {
+      type: "AUTH_RESOLVED",
+      attemptId: 1,
+      detail: "CONNECTED",
+      login: null,
+    } as unknown as SessionEvent;
+    const result = sessionReducer(checking, inconsistent);
+    expect(result).toBe(checking);
+  });
+
+  it("ignores AUTH_RESOLVED NOT_CONNECTED with a non-null login", () => {
+    const checking = sessionReducer(initialSessionState(), { type: "AUTH_CHECK_STARTED", attemptId: 1 });
+    const inconsistent = {
+      type: "AUTH_RESOLVED",
+      attemptId: 1,
+      detail: "NOT_CONNECTED",
+      login: "stale",
+    } as unknown as SessionEvent;
+    const result = sessionReducer(checking, inconsistent);
+    expect(result).toBe(checking);
+  });
+
+  it("ignores AUTH_RESOLVED EXPIRED with a non-null login", () => {
+    const checking = sessionReducer(initialSessionState(), { type: "AUTH_CHECK_STARTED", attemptId: 1 });
+    const inconsistent = {
+      type: "AUTH_RESOLVED",
+      attemptId: 1,
+      detail: "EXPIRED",
+      login: "stale",
+    } as unknown as SessionEvent;
+    const result = sessionReducer(checking, inconsistent);
+    expect(result).toBe(checking);
+  });
+
+  it("promotes a login operation success with a connected auth-status view to connected", () => {
+    const required = sessionReducer(initialSessionState(), {
+      type: "AUTH_RESOLVED",
+      attemptId: 1,
+      detail: "NOT_CONNECTED",
+      login: null,
+    });
+    const started = sessionReducer(required, {
+      type: "OPERATION_STARTED",
+      operationId: 4,
+      command: "/auth login",
+      cancellable: true,
+    });
+    const succeeded = sessionReducer(started, {
+      type: "OPERATION_SUCCEEDED",
+      operationId: 4,
+      view: {
+        kind: "auth-status",
+        connected: true,
+        login: "octocat",
+        detail: "CONNECTED",
+      },
+    });
+    expect(succeeded.auth).toEqual({ status: "connected", login: "octocat" });
+    expect(succeeded.operation).toEqual({ status: "idle" });
+  });
+
+  it("restores authBeforeLogin when a login operation succeeds with a non-auth-status view", () => {
+    const expired = sessionReducer(initialSessionState(), {
+      type: "AUTH_RESOLVED",
+      attemptId: 1,
+      detail: "EXPIRED",
+      login: null,
+    });
+    const started = sessionReducer(expired, {
+      type: "OPERATION_STARTED",
+      operationId: 4,
+      command: "/auth login",
+      cancellable: true,
+    });
+    const succeeded = sessionReducer(started, {
+      type: "OPERATION_SUCCEEDED",
+      operationId: 4,
+      view: { kind: "progress", counts: { completed: 0 }, summary: "ok" },
+    });
+    expect(succeeded.auth).toEqual({ status: "expired" });
+    expect(succeeded.operation).toEqual({ status: "idle" });
+  });
+
+  it("restores authBeforeLogin when a login operation succeeds with a not-connected auth-status view", () => {
+    const expired = sessionReducer(initialSessionState(), {
+      type: "AUTH_RESOLVED",
+      attemptId: 1,
+      detail: "EXPIRED",
+      login: null,
+    });
+    const started = sessionReducer(expired, {
+      type: "OPERATION_STARTED",
+      operationId: 4,
+      command: "/auth login",
+      cancellable: true,
+    });
+    const succeeded = sessionReducer(started, {
+      type: "OPERATION_SUCCEEDED",
+      operationId: 4,
+      view: {
+        kind: "auth-status",
+        connected: false,
+        login: null,
+        detail: "NOT_CONNECTED",
+      },
+    });
+    expect(succeeded.auth).toEqual({ status: "expired" });
+    expect(succeeded.operation).toEqual({ status: "idle" });
+  });
+
+  it("restores authBeforeLogin when a login operation succeeds with an auth-status view lacking a login", () => {
+    const expired = sessionReducer(initialSessionState(), {
+      type: "AUTH_RESOLVED",
+      attemptId: 1,
+      detail: "EXPIRED",
+      login: null,
+    });
+    const started = sessionReducer(expired, {
+      type: "OPERATION_STARTED",
+      operationId: 4,
+      command: "/auth login",
+      cancellable: true,
+    });
+    const succeeded = sessionReducer(started, {
+      type: "OPERATION_SUCCEEDED",
+      operationId: 4,
+      view: {
+        kind: "auth-status",
+        connected: true,
+        login: null,
+        detail: "CONNECTED",
+      },
+    });
+    expect(succeeded.auth).toEqual({ status: "expired" });
+    expect(succeeded.operation).toEqual({ status: "idle" });
+  });
+
+  it("restores authBeforeLogin when OPERATION_STARTED supersedes a running login with a non-login command", () => {
+    const expired = sessionReducer(initialSessionState(), {
+      type: "AUTH_RESOLVED",
+      attemptId: 1,
+      detail: "EXPIRED",
+      login: null,
+    });
+    const loginStarted = sessionReducer(expired, {
+      type: "OPERATION_STARTED",
+      operationId: 4,
+      command: "/auth login",
+      cancellable: true,
+    });
+    expect(loginStarted.auth).toEqual({ status: "logging-in", phase: "starting" });
+    const superseded = sessionReducer(loginStarted, {
+      type: "OPERATION_STARTED",
+      operationId: 5,
+      command: "/find",
+      cancellable: true,
+    });
+    expect(superseded.auth).toEqual({ status: "expired" });
+    expect(superseded.operation).toMatchObject({ status: "running", operationId: 5 });
+  });
+
+  it("restores authBeforeLogin when OPERATION_STARTED supersedes a running login with another login", () => {
+    const required = sessionReducer(initialSessionState(), {
+      type: "AUTH_RESOLVED",
+      attemptId: 1,
+      detail: "NOT_CONNECTED",
+      login: null,
+    });
+    const firstLogin = sessionReducer(required, {
+      type: "OPERATION_STARTED",
+      operationId: 4,
+      command: "/auth login",
+      cancellable: true,
+    });
+    const secondLogin = sessionReducer(firstLogin, {
+      type: "OPERATION_STARTED",
+      operationId: 5,
+      command: "/auth login",
+      cancellable: true,
+    });
+    expect(secondLogin.auth).toEqual({ status: "logging-in", phase: "starting" });
+    expect(secondLogin.operation).toMatchObject({
+      status: "running",
+      operationId: 5,
+      authBeforeLogin: { status: "required" },
+    });
+  });
+
+  it("restores authBeforeLogin when HOME_SELECTED abandons a running login", () => {
+    const expired = sessionReducer(initialSessionState(), {
+      type: "AUTH_RESOLVED",
+      attemptId: 1,
+      detail: "EXPIRED",
+      login: null,
+    });
+    const started = sessionReducer(expired, {
+      type: "OPERATION_STARTED",
+      operationId: 4,
+      command: "/auth login",
+      cancellable: true,
+    });
+    expect(started.auth).toEqual({ status: "logging-in", phase: "starting" });
+    const home = sessionReducer(started, { type: "HOME_SELECTED" });
+    expect(home.auth).toEqual({ status: "expired" });
+    expect(home.operation).toEqual({ status: "idle" });
+  });
+
+  describe.each([
+    [
+      "checking",
+      { type: "AUTH_CHECK_STARTED", attemptId: 1 } as const,
+      { status: "checking", attemptId: 1 } satisfies SessionAuthState,
+    ],
+    [
+      "connected",
+      { type: "AUTH_RESOLVED", attemptId: 1, detail: "CONNECTED", login: "octocat" } as const,
+      { status: "connected", login: "octocat" } satisfies SessionAuthState,
+    ],
+    [
+      "required",
+      { type: "AUTH_RESOLVED", attemptId: 1, detail: "NOT_CONNECTED", login: null } as const,
+      { status: "required" } satisfies SessionAuthState,
+    ],
+    [
+      "expired",
+      { type: "AUTH_RESOLVED", attemptId: 1, detail: "EXPIRED", login: null } as const,
+      { status: "expired" } satisfies SessionAuthState,
+    ],
+    [
+      "unknown",
+      { type: "AUTH_FAILED", attemptId: 1, errorCode: "DM_NETWORK_UNAVAILABLE" } as const,
+      { status: "unknown", errorCode: "DM_NETWORK_UNAVAILABLE" } satisfies SessionAuthState,
+    ],
+  ])("login cancellation and failure restoration from %s", (_name, seeding, expected) => {
+    it("restores authBeforeLogin on OPERATION_CANCELLED", () => {
+      const seeded = sessionReducer(initialSessionState(), seeding);
+      const started = sessionReducer(seeded, {
+        type: "OPERATION_STARTED",
+        operationId: 1,
+        command: "/auth login",
+        cancellable: true,
+      });
+      const cancelled = sessionReducer(started, { type: "OPERATION_CANCELLED", operationId: 1 });
+      expect(cancelled.auth).toEqual(expected);
+      expect(cancelled.operation).toEqual({ status: "idle" });
+    });
+
+    it("restores authBeforeLogin on OPERATION_FAILED", () => {
+      const seeded = sessionReducer(initialSessionState(), seeding);
+      const started = sessionReducer(seeded, {
+        type: "OPERATION_STARTED",
+        operationId: 1,
+        command: "/auth login",
+        cancellable: true,
+      });
+      const failed = sessionReducer(started, {
+        type: "OPERATION_FAILED",
+        operationId: 1,
+        errorCode: "DM_GITHUB_AUTH_CANCELLED",
+      });
+      expect(failed.auth).toEqual(expected);
+      expect(failed.operation).toEqual({ status: "idle" });
+    });
+  });
+  });
 
 describe("initialSessionState", () => {
   it("starts in the auth-checking phase on attempt 1 with no input or recommendation", () => {
