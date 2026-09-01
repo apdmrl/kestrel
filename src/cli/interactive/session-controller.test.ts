@@ -123,7 +123,10 @@ describe("session controller", () => {
     const commandHandlers = handlers();
     const controller = createSessionController(commandHandlers);
 
-    expect(await controller({ kind: "help" }, emptyContext)).toMatchObject({ kind: "output" });
+    expect(await controller({ kind: "help" }, emptyContext)).toMatchObject({
+      kind: "output",
+      view: { kind: "verification", text: expect.stringContaining("/auth") },
+    });
     expect(await controller({ kind: "clear" }, emptyContext)).toEqual({ kind: "clear" });
     expect(await controller({ kind: "exit" }, emptyContext)).toEqual({ kind: "exit" });
     for (const handler of Object.values(commandHandlers)) {
@@ -131,18 +134,18 @@ describe("session controller", () => {
     }
   });
 
-  it("renders successful view models and converts thrown errors", async () => {
+  it("carries the raw view model from successful and failed handlers", async () => {
     const commandHandlers = handlers();
     vi.mocked(commandHandlers.progress).mockRejectedValueOnce(new Error("boom"));
     const controller = createSessionController(commandHandlers);
 
-    expect(await controller({ kind: "progress" }, emptyContext)).toEqual({
+    const success = await controller({ kind: "journey" }, emptyContext);
+    expect(success).toMatchObject({ kind: "output", view: view });
+
+    const failure = await controller({ kind: "progress" }, emptyContext);
+    expect(failure).toMatchObject({
       kind: "error",
-      text: expect.stringContaining("boom"),
-    });
-    expect(await controller({ kind: "journey" }, emptyContext)).toEqual({
-      kind: "output",
-      text: "ok",
+      view: { kind: "error", code: "UNKNOWN", userMessage: "boom" },
     });
   });
   it("routes the auth commands to their handlers", async () => {
@@ -170,7 +173,7 @@ describe("session controller", () => {
     );
   });
 
-  it("delivers device authorization guidance through the notify channel", async () => {
+  it("delivers the device authorization view through the notify channel", async () => {
     const commandHandlers = handlers();
     vi.mocked(commandHandlers.authLogin).mockImplementationOnce(async (_args, context) => {
       context.onNotice?.({
@@ -180,14 +183,17 @@ describe("session controller", () => {
       });
       return view;
     });
-    const notices: string[] = [];
-    const controller = createSessionController(commandHandlers, (text) => notices.push(text));
+    const notices: ViewModel[] = [];
+    const controller = createSessionController(commandHandlers, (received) => notices.push(received));
 
     await controller({ kind: "auth-login" }, emptyContext);
 
     expect(notices).toHaveLength(1);
-    expect(notices[0]).toContain("https://github.com/login/device");
-    expect(notices[0]).toContain("ABCD-1234");
+    expect(notices[0]).toEqual({
+      kind: "device-authorization",
+      verificationUri: "https://github.com/login/device",
+      userCode: "ABCD-1234",
+    });
   });
 
   it("does not fail when no notify channel is supplied", async () => {
@@ -201,15 +207,19 @@ describe("session controller", () => {
       return view;
     });
     const controller = createSessionController(commandHandlers);
-    expect(await controller({ kind: "auth-login" }, emptyContext)).toEqual({
+    expect(await controller({ kind: "auth-login" }, emptyContext)).toMatchObject({
       kind: "output",
-      text: "ok",
+      view: view,
+      text: expect.any(String),
     });
   });
 
   it("lists /auth in the session help", async () => {
     const controller = createSessionController(handlers());
     const result = await controller({ kind: "help" }, emptyContext);
-    expect(result).toMatchObject({ kind: "output", text: expect.stringContaining("/auth") });
+    expect(result).toMatchObject({
+      kind: "output",
+      view: { kind: "verification", text: expect.stringContaining("/auth") },
+    });
   });
 });
