@@ -4,6 +4,7 @@ import { cleanup, render } from "ink-testing-library";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CommandHandlers } from "../command-handlers.js";
 import type { ViewModel } from "../presentation/view-models.js";
+import { createKestrelError } from "../../application/errors/kestrel-error.js";
 import { Session, sessionInputTransition, TranscriptLine } from "./session.js";
 import { FakeInkStdin, FakeInkStdout } from "../../test-utils/ink-stdin.js";
 
@@ -397,6 +398,119 @@ describe("persistent session — auth state propagation", () => {
       expect(frame).toMatch(/Find a challenge/);
       expect(frame).toContain("/find");
       // The auth status reflects the connected login name.
+      expect(frame).toContain("octocat");
+    } finally {
+      harness.unmount();
+    }
+  });
+});
+describe("persistent session — live stdout capabilities", () => {
+  afterEach(() => cleanup());
+
+  it("derives capabilities from Ink's stdout when no override is supplied", async () => {
+    // Use the FakeInkStdout harness with a non-default 59×24 viewport and
+    // no `capabilities` prop. The shell must read columns/rows from the
+    // stdout stream so the real production mount honors a 59×24
+    // terminal.
+    const stdin = new FakeInkStdin();
+    const stdout = new FakeInkStdout(59, 24);
+    const instance = renderInk(
+      createElement(Session, {
+        handlers: handlers(),
+        signal: new AbortController().signal,
+      }),
+      {
+        stdin: stdin as unknown as NodeJS.ReadStream,
+        stdout: stdout as unknown as NodeJS.WriteStream,
+        patchConsole: false,
+        exitOnCtrlC: false,
+        debug: true,
+      },
+    );
+    try {
+      await settle();
+      const frame = stdout.lastFrame();
+      // 59 columns means the sidebar stacks above the main column and
+      // the prompt retains `Type a command…` (no typed input yet).
+      expect(frame).toContain("Ready");
+      expect(frame).toContain("Type a command…");
+      // The frame never overflows the stdout's row budget.
+      expect(frame.split("\n").length).toBeLessThanOrEqual(24);
+    } finally {
+      instance.unmount();
+    }
+  });
+});
+
+describe("persistent session — auth failure propagation", () => {
+  afterEach(() => cleanup());
+
+  it("transitions authState from checking to unknown when /auth status fails with DM_NETWORK_UNAVAILABLE", async () => {
+    const commandHandlers = handlers();
+    vi.mocked(commandHandlers.authStatus).mockRejectedValue(
+      createKestrelError({
+        code: "DM_NETWORK_UNAVAILABLE",
+        category: "TRANSIENT",
+        userMessage: "GitHub is unreachable",
+        suggestedActions: ["Retry once you have network connectivity"],
+        retryability: "RETRYABLE",
+        recoveryStrategy: "RETRY",
+        severity: "ERROR",
+      }),
+    );
+    const harness = mountInteractive({
+      handlers: commandHandlers,
+      signal: new AbortController().signal,
+      initialCategory: "auth",
+    });
+    try {
+      await settle();
+      harness.stdin.send("/auth status\r");
+      await settle();
+      const frame = harness.lastFrame();
+      // The error result still surfaces in the transcript so the user
+      // reads the reason + suggested actions.
+      expect(frame).toContain("DM_NETWORK_UNAVAILABLE");
+      // The interactive renderer appended the recovery line and the
+      // action panel exposes `/auth status` as the primary recovery
+      // (the unknown-state recovery command per the existing transition
+      // policy). The Auth sidebar position surfaces the same recovery.
+      expect(frame).toContain("Run /auth status to continue.");
+      expect(frame).toContain("Check authentication");
+      expect(frame).toContain("/auth status");
+      // Move focus into the sidebar and confirm Find surfaces the
+      // `/auth status` recovery command rather than `/auth login`.
+      harness.stdin.send(upArrow());
+      await settle();
+      harness.stdin.send(downArrow());
+      await settle();
+      const frameAfter = harness.lastFrame();
+      expect(frameAfter).toContain("/auth status");
+      // The recovery command is the unknown-state primary, not the
+      // required-state `/auth login` recovery.
+      expect(frameAfter).not.toMatch(/Find a challenge\n\s+\/auth login/u);
+    } finally {
+      harness.unmount();
+    }
+  });
+
+  it("does not invent a second auth transition for successful /auth status", async () => {
+    const commandHandlers = handlers();
+    vi.mocked(commandHandlers.authStatus).mockResolvedValue({
+      kind: "auth-status",
+      connected: true,
+      login: "octocat",
+      detail: "CONNECTED",
+    });
+    const harness = mountInteractive({
+      handlers: commandHandlers,
+      signal: new AbortController().signal,
+    });
+    try {
+      await settle();
+      harness.stdin.send("/auth status\r");
+      await settle();
+      const frame = harness.lastFrame();
       expect(frame).toContain("octocat");
     } finally {
       harness.unmount();

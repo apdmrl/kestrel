@@ -1,5 +1,5 @@
-import { Box, Text, useApp, useInput } from "ink";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { Box, Text, useApp, useInput, useStdout } from "ink";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CommandHandlers } from "../command-handlers.js";
 import type { RecommendationViewModel } from "../presentation/view-models.js";
 import { createSessionController } from "./session-controller.js";
@@ -7,6 +7,9 @@ import {
   DashboardShell,
   DEFAULT_MISSION_SUGGESTIONS,
   DEFAULT_QUICK_COMMANDS,
+  estimateEntryRows,
+  isCriticalTranscriptText,
+  type RenderableTranscriptEntry,
   type TerminalCapabilities,
 } from "./dashboard.js";
 import { actionsForSection, NAVIGATION_SECTIONS } from "./session-navigation.js";
@@ -19,17 +22,39 @@ const MAX_TRANSCRIPT_ENTRIES = 200;
 const HELP_TEXT = "Try /help for commands · /find to discover a challenge";
 const FALLBACK_CAPABILITIES: TerminalCapabilities = { columns: 80, rows: 24, color: true };
 const PROMPT_PLACEHOLDER = "Type a command…";
-
+const DEFAULT_STDOUT_COLUMNS = 80;
+const DEFAULT_STDOUT_ROWS = 24;
+/**
+ * Stable set of error codes that represent an authentication transition
+ * failure. When the controller returns any of these codes (e.g.
+ * `DM_NETWORK_UNAVAILABLE` from `/auth status`), the live session
+ * propagates the result into `authState` as `unknown(errorCode)` so the
+ * sidebar / contextual action panel exposes the `/auth status`
+ * recovery — the same transition the `sessionReducer` policy applies.
+ */
+const AUTH_FAILURE_CODES: Record<string, true> = {
+  DM_NETWORK_UNAVAILABLE: true,
+  DM_GITHUB_TIMEOUT: true,
+  DM_GITHUB_VALIDATION: true,
+  DM_GITHUB_RATE_LIMITED: true,
+  DM_GITHUB_ABUSE_LIMIT: true,
+  DM_GITHUB_AUTH_REQUIRED: true,
+  DM_GITHUB_AUTH_EXPIRED: true,
+  DM_GIT_AUTH_FAILED: true,
+};
+/** `DM_GITHUB_AUTH_CANCELLED` is informational; cancellation leaves the
+ * live state untouched. */
 export interface SessionProps {
   readonly handlers: CommandHandlers;
   readonly signal: AbortSignal;
   readonly onExit?: () => void;
   readonly onCancel?: () => void;
   /**
-   * Test-injected terminal capabilities. Until Task 5 wires `useStdout`,
-   * the runtime session reads capabilities from `process.stdout`; this prop
-   * is the conservative 80x24 fallback so `ink-testing-library` and the
-   * session-auth harness can mount the shell deterministically.
+   * Test-injected terminal capabilities. When omitted (the runtime case
+   * `src/cli/main.ts` exercises), the Session derives columns/rows from
+   * Ink's `useStdout` and subscribes to the `resize` event so the live
+   * shell follows the actual terminal dimensions. Tests pass an explicit
+   * override so `ink-testing-library` mounts the shell deterministically.
    */
   readonly capabilities?: TerminalCapabilities;
   /**
@@ -153,12 +178,46 @@ export function Session({
   signal,
   onExit,
   onCancel,
-  capabilities = FALLBACK_CAPABILITIES,
+  capabilities: capabilitiesProp,
   initialInput = "",
   initialCategory,
   latestRecommendation: latestRecommendationProp = null,
 }: SessionProps) {
   const { exit } = useApp();
+  const { stdout } = useStdout();
+  // Derive the runtime capabilities from Ink's stdout so a real TUI
+  // session respects the actual terminal dimensions. The explicit
+  // `capabilities` prop keeps tests deterministic. Subscribe to `resize`
+  // so the live shell re-renders when the user resizes their window.
+  const [liveColumns, setLiveColumns] = useState<number>(() =>
+    typeof stdout.columns === "number" && stdout.columns > 0
+      ? stdout.columns
+      : DEFAULT_STDOUT_COLUMNS,
+  );
+  const [liveRows, setLiveRows] = useState<number>(() =>
+    typeof stdout.rows === "number" && stdout.rows > 0
+      ? stdout.rows
+      : DEFAULT_STDOUT_ROWS,
+  );
+  useEffect(() => {
+    const handleResize = (): void => {
+      if (typeof stdout.columns === "number" && stdout.columns > 0) {
+        setLiveColumns(stdout.columns);
+      }
+      if (typeof stdout.rows === "number" && stdout.rows > 0) {
+        setLiveRows(stdout.rows);
+      }
+    };
+    stdout.on("resize", handleResize);
+    return () => {
+      stdout.off("resize", handleResize);
+    };
+  }, [stdout]);
+  const liveCapabilities: TerminalCapabilities = useMemo(
+    () => ({ columns: liveColumns, rows: liveRows, color: stdout.isTTY !== false }),
+    [liveColumns, liveRows, stdout.isTTY],
+  );
+  const capabilities = capabilitiesProp ?? liveCapabilities;
   const [input, setInput] = useState(initialInput);
   const [busy, setBusy] = useState(false);
   const nextId = useRef(2);
@@ -187,7 +246,6 @@ export function Session({
     status: "checking",
     attemptId: 1,
   });
-
   const addEntry = (kind: TranscriptEntry["kind"], text: string): void => {
     const id = nextId.current;
     nextId.current += 1;
@@ -247,6 +305,18 @@ export function Session({
       } else if (result.kind === "error") {
         const rendered = renderSessionView(result.view);
         addEntry(rendered.kind, rendered.text);
+        // Propagate auth-related error results through the existing
+        // transition policy: `/auth status` (or any auth-touching
+        // command) returning a known failure code moves the live
+        // `authState` from `checking` into `unknown(errorCode)` so the
+        // sidebar / contextual action panel exposes the login
+        // recovery (`/auth status`) without a second dispatch. This is
+        // the same transition `sessionReducer` applies via
+        // `AUTH_FAILED`; the Session runtime mirrors it locally until
+        // the reducer lands.
+        if (result.view.kind === "error" && AUTH_FAILURE_CODES[result.view.code] === true) {
+          setAuthState({ status: "unknown", errorCode: result.view.code });
+        }
       } else {
         const rendered = renderSessionView(result.view);
         addEntry(rendered.kind, rendered.text);
@@ -260,8 +330,14 @@ export function Session({
             setAuthState({ status: "connected", login: result.view.login });
           } else if (result.view.detail === "EXPIRED") {
             setAuthState({ status: "expired" });
-          } else {
+          } else if (result.view.detail === "NOT_CONNECTED") {
             setAuthState({ status: "required" });
+          } else if (result.view.detail === "LOGGED_OUT") {
+            setAuthState({ status: "required" });
+          } else {
+            // Auth status returned CONNECTED with a null login (impossible
+            // by the controller's invariant), or some future detail.
+            // Keep the current state rather than guessing.
           }
         }
         if (result.view.kind === "recommendation") {
@@ -423,6 +499,39 @@ export function Session({
   // `sessionReducer` once that lands.
   const status = busy ? "Working" : "Ready";
   const sessionStatus = "active";
+  // Build the structured transcript entries with plain-text row metadata
+  // and criticality. The shell windows these against the row budget so a
+  // long transcript never blows past `capabilities.rows` and critical
+  // entries (verification URI, recommendation ID, typed command, auth
+  // recovery line) survive older noncritical fillers.
+  const renderableEntries = useMemo<readonly RenderableTranscriptEntry[]>(() => {
+    const width = capabilities.columns;
+    const base: RenderableTranscriptEntry[] = transcript.map((entry) => {
+      const criticality = isCriticalTranscriptText(entry.text, input)
+        ? "critical"
+        : "noncritical";
+      return {
+        id: entry.id,
+        text: entry.text,
+        kind: entry.kind,
+        criticality,
+        rows: estimateEntryRows(entry.text, entry.kind, width),
+      };
+    });
+    // Mirror the original Session fallback: when the transcript is just
+    // the welcome-back system entry, surface the `Try /help` hint as a
+    // noncritical filler so the calm status bar still nudges the user.
+    if (transcript.length === 1 && transcript[0]?.kind === "system") {
+      base.push({
+        id: -1,
+        text: HELP_TEXT,
+        kind: "output",
+        criticality: "noncritical",
+        rows: estimateEntryRows(HELP_TEXT, "output", width),
+      });
+    }
+    return base;
+  }, [transcript, capabilities.columns, input]);
   return (
     <DashboardShell
       status={status}
@@ -445,13 +554,7 @@ export function Session({
       contextActions={contextActions}
       selectedActionIndex={clampedActionIndex}
       actionFocused={actionFocused}
-    >
-      {transcript.map((entry) => (
-        <TranscriptLine key={entry.id} entry={entry} />
-      ))}
-      {transcript.length === 1 && transcript[0]?.kind === "system" ? (
-        <Text color="gray">{HELP_TEXT}</Text>
-      ) : null}
-    </DashboardShell>
+      entries={renderableEntries}
+    />
   );
 }

@@ -8,21 +8,25 @@ import {
   DashboardShell,
   DEFAULT_MISSION_SUGGESTIONS,
   DEFAULT_QUICK_COMMANDS,
+  estimateEntryRows,
   Footer,
   Header,
+  isCriticalTranscriptText,
   isWideTerminal,
   MissionCard,
   navigationRowMarkers,
   NavItem,
   PromptLine,
   QuickCommands,
+  type RenderableTranscriptEntry,
   SectionLabel,
   Sidebar,
   SmallStat,
   type TerminalCapabilities,
+  windowTranscriptEntries,
+  availableTranscriptRows,
 } from "./dashboard.js";
 import type { SessionAction } from "./session-navigation.js";
-
 const ENABLED_ACTION: SessionAction = {
   id: "find.run",
   label: "Find a challenge",
@@ -728,3 +732,311 @@ describe("DashboardShell row budget", () => {
     expect(frame).not.toContain("older filler 0");
   });
  });
+describe("DashboardShell entries row budget (criticality-preserving)", () => {
+  afterEach(() => cleanup());
+
+  function entries(
+    count: number,
+    options: {
+      readonly columns: number;
+      readonly fill: (index: number) => string;
+      readonly tail?: (index: number) => RenderableTranscriptEntry;
+    },
+  ): RenderableTranscriptEntry[] {
+    const list: RenderableTranscriptEntry[] = [];
+    for (let i = 0; i < count; i += 1) {
+      const tail = options.tail?.(i);
+      if (tail !== undefined) {
+        list.push(tail);
+      } else {
+        list.push({
+          id: i + 1,
+          text: options.fill(i),
+          kind: "output",
+          criticality: "noncritical",
+          rows: estimateEntryRows(options.fill(i), "output", options.columns),
+        });
+      }
+    }
+    return list;
+  }
+
+  it("windows multiline entries to honor the row budget at 80x24", () => {
+    const input: RenderableTranscriptEntry[] = entries(60, {
+      columns: 80,
+      fill: (i) => `historic line ${i}`,
+    });
+    input.push({
+      id: 999,
+      text:
+        "Error [DM_NETWORK_UNAVAILABLE]: GitHub is unreachable\n" +
+        "- Retry once you have network connectivity\n" +
+        "- Run /auth status to continue.",
+      kind: "error",
+      criticality: "critical",
+      rows: estimateEntryRows(
+        "Error [DM_NETWORK_UNAVAILABLE]: GitHub is unreachable\n- Retry once you have network connectivity\n- Run /auth status to continue.",
+        "error",
+        80,
+      ),
+    });
+    input.push({
+      id: 1000,
+      text: "Open https://github.com/login/device and enter ABCD-1234",
+      kind: "output",
+      criticality: "critical",
+      rows: estimateEntryRows(
+        "Open https://github.com/login/device and enter ABCD-1234",
+        "output",
+        80,
+      ),
+    });
+    input.push({
+      id: 1001,
+      text: "Recommendation ID: rec-42",
+      kind: "output",
+      criticality: "critical",
+      rows: estimateEntryRows("Recommendation ID: rec-42", "output", 80),
+    });
+    const { lastFrame } = render(
+      <DashboardShell
+        status="Ready"
+        title="Mission Control"
+        subtitle="Welcome back"
+        sessionStatus="active"
+        mission={{
+          title: "No active mission",
+          description: "Discover a challenge or resume your current engineering work.",
+          suggestions: DEFAULT_MISSION_SUGGESTIONS,
+        }}
+        stats={[]}
+        quickCommands={DEFAULT_QUICK_COMMANDS}
+        input="/mission accept --id rec-42"
+        busy={false}
+        placeholder="Type a command…"
+        capabilities={wide}
+        entries={input}
+      />,
+    );
+    const frame = lastFrame() ?? "";
+    expect(frame.split("\n").length).toBeLessThanOrEqual(wide.rows);
+    expect(frame).toContain("ABCD-1234");
+    expect(frame).toContain("rec-42");
+    expect(frame).toContain("/mission accept --id rec-42");
+    expect(frame).toContain("DM_NETWORK_UNAVAILABLE");
+    expect(frame).toContain("Run /auth status to continue.");
+    expect(frame).not.toContain("historic line 0");
+  });
+
+  it("windows wrapped narrow entries at 59x24, 44x24, and 80x19", () => {
+    const cases: ReadonlyArray<{
+      readonly label: string;
+      readonly capabilities: TerminalCapabilities;
+    }> = [
+      { label: "59x24", capabilities: { columns: 59, rows: 24, color: true } },
+      { label: "44x24", capabilities: { columns: 44, rows: 24, color: true } },
+      { label: "80x19", capabilities: { columns: 80, rows: 19, color: true } },
+    ];
+    for (const { label, capabilities } of cases) {
+      const input: RenderableTranscriptEntry[] = entries(80, {
+        columns: capabilities.columns,
+        fill: (i) => `older line ${i}`,
+      });
+      const uri =
+        "Open https://github.com/login/device and enter ABCD-1234 to authenticate";
+      input.push({
+        id: 999,
+        text: uri,
+        kind: "output",
+        criticality: "critical",
+        rows: estimateEntryRows(uri, "output", capabilities.columns),
+      });
+      const rec = "Recommendation ID: rec-42";
+      input.push({
+        id: 1000,
+        text: rec,
+        kind: "output",
+        criticality: "critical",
+        rows: estimateEntryRows(rec, "output", capabilities.columns),
+      });
+      const cmd = "/mission accept --id rec-42";
+      input.push({
+        id: 1001,
+        text: cmd,
+        kind: "output",
+        criticality: "critical",
+        rows: estimateEntryRows(cmd, "output", capabilities.columns),
+      });
+      const { lastFrame } = render(
+        <DashboardShell
+          status="Ready"
+          title="Mission Control"
+          subtitle="Welcome back"
+          sessionStatus="active"
+          mission={{
+            title: "No active mission",
+            description: "Discover a challenge or resume your current engineering work.",
+            suggestions: DEFAULT_MISSION_SUGGESTIONS,
+          }}
+          stats={[]}
+          quickCommands={DEFAULT_QUICK_COMMANDS}
+          input={cmd}
+          busy={false}
+          placeholder="Type a command…"
+          capabilities={capabilities}
+          entries={input}
+        />,
+      );
+      const frame = lastFrame() ?? "";
+      const actualRows = frame.split("\n").length;
+      expect(
+        actualRows,
+        `expected ≤${capabilities.rows} rows at ${label}, got ${actualRows}`,
+      ).toBeLessThanOrEqual(capabilities.rows);
+      // Critical substrings (URI user code, rec id, accept command) are retained.
+      expect(frame).toContain("ABCD-1234");
+      expect(frame).toContain("rec-42");
+      expect(frame).toContain(cmd);
+    }
+  });
+
+  it("retains a critical entry older than many fillers", () => {
+    const input: RenderableTranscriptEntry[] = [];
+    // Older critical entry — must survive.
+    input.push({
+      id: 1,
+      text: "Open https://github.com/login/device and enter ABCD-1234",
+      kind: "output",
+      criticality: "critical",
+      rows: estimateEntryRows(
+        "Open https://github.com/login/device and enter ABCD-1234",
+        "output",
+        80,
+      ),
+    });
+    // Many noncritical fillers between the critical entry and the bottom.
+    for (let i = 0; i < 30; i += 1) {
+      input.push({
+        id: 100 + i,
+        text: `filler line ${i}`,
+        kind: "output",
+        criticality: "noncritical",
+        rows: estimateEntryRows(`filler line ${i}`, "output", 80),
+      });
+    }
+    input.push({
+      id: 999,
+      text: "/mission accept --id rec-42",
+      kind: "output",
+      criticality: "critical",
+      rows: estimateEntryRows("/mission accept --id rec-42", "output", 80),
+    });
+    const { lastFrame } = render(
+      <DashboardShell
+        status="Ready"
+        title="Mission Control"
+        subtitle="Welcome back"
+        sessionStatus="active"
+        mission={{
+          title: "No active mission",
+          description: "Discover a challenge or resume your current engineering work.",
+          suggestions: DEFAULT_MISSION_SUGGESTIONS,
+        }}
+        stats={[]}
+        quickCommands={DEFAULT_QUICK_COMMANDS}
+        input=""
+        busy={false}
+        placeholder="Type a command…"
+        capabilities={{ columns: 80, rows: 19, color: true }}
+        entries={input}
+      />,
+    );
+    const frame = lastFrame() ?? "";
+    expect(frame).toContain("ABCD-1234");
+    expect(frame).toContain("/mission accept --id rec-42");
+    // Older fillers must be dropped; the first one is far above the budget.
+    expect(frame).not.toContain("filler line 0");
+  });
+
+  it("never truncates a critical multiline entry inside the bounded frame", () => {
+    const full = "Error [DM_NETWORK_UNAVAILABLE]: GitHub is unreachable\n" +
+      "- Retry once you have network connectivity\n" +
+      "- Run /auth status to continue.";
+    const input: RenderableTranscriptEntry[] = [];
+    input.push({
+      id: 1,
+      text: full,
+      kind: "error",
+      criticality: "critical",
+      rows: estimateEntryRows(full, "error", 80),
+    });
+    for (let i = 0; i < 5; i += 1) {
+      input.push({
+        id: 100 + i,
+        text: `tail line ${i}`,
+        kind: "output",
+        criticality: "noncritical",
+        rows: estimateEntryRows(`tail line ${i}`, "output", 80),
+      });
+    }
+    const visible = windowTranscriptEntries(
+      input,
+      availableTranscriptRows({ columns: 80, rows: 24, color: true }),
+    );
+    const criticalSurvived = visible.find((entry) => entry.id === 1);
+    expect(criticalSurvived).toBeDefined();
+    expect(criticalSurvived?.text).toBe(full);
+  });
+});
+
+describe("estimateEntryRows", () => {
+  it("counts embedded newlines plus the entry's margin-top chrome", () => {
+    const text = "first line\nsecond line\nthird line";
+    // 3 logical lines + 1 margin-top row = 4 rendered rows.
+    expect(estimateEntryRows(text, "output", 80)).toBe(4);
+  });
+
+  it("wraps long lines to the available column width", () => {
+    const text = "a".repeat(120);
+    const width = 40;
+    const rows = estimateEntryRows(text, "output", width);
+    expect(rows).toBeGreaterThan(2);
+  });
+
+  it("accounts for error chrome (border + padding + margin-top) on top of the text rows", () => {
+    const single = "x";
+    // output/input include 1 margin-top row; single-line text = 1 row.
+    expect(estimateEntryRows(single, "output", 80)).toBe(2);
+    // error adds 3 chrome rows (border top + border bottom + spacing) plus
+    // the 1 margin-top, so a single-line error entry spans 5 rows.
+    expect(estimateEntryRows(single, "error", 80)).toBeGreaterThanOrEqual(5);
+    // system keeps its welcome-back label + body + margin-top.
+    expect(estimateEntryRows(single, "system", 80)).toBeGreaterThanOrEqual(4);
+  });
+});
+
+describe("isCriticalTranscriptText", () => {
+  it("flags verification URI and user code", () => {
+    expect(
+      isCriticalTranscriptText(
+        "Open https://github.com/login/device and enter ABCD-1234",
+        "",
+      ),
+    ).toBe(true);
+  });
+
+  it("flags recommendation accept commands and recovery lines", () => {
+    expect(isCriticalTranscriptText("/mission accept --id rec-42", "")).toBe(true);
+    expect(isCriticalTranscriptText("Run /auth login to continue.", "")).toBe(true);
+  });
+
+  it("flags entries that echo the current typed prompt input", () => {
+    expect(isCriticalTranscriptText("/mission accept --id rec-99", "/mission accept --id rec-99")).toBe(
+      true,
+    );
+  });
+
+  it("does not flag plain informational filler", () => {
+    expect(isCriticalTranscriptText("Older filler 3", "")).toBe(false);
+  });
+});

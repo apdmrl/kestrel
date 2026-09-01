@@ -5,6 +5,163 @@ import { NAVIGATION_SECTIONS } from "./session-navigation.js";
 import type { SessionAction } from "./session-navigation.js";
 
 /**
+ * Renderable transcript entry. The shell accepts structured entries
+ * (text + criticality + measured row count) so the row budget is enforced
+ * against the actual lines the entries will render, not against opaque
+ * React children. `rows` is a plain-text row count that already accounts
+ * for embedded newlines, narrow-width wrapping, and the entry's own
+ * vertical chrome (border, padding, label).
+ */
+export interface RenderableTranscriptEntry {
+  readonly id: number;
+  readonly text: string;
+  readonly kind: "input" | "output" | "error" | "system";
+  readonly criticality: "critical" | "noncritical";
+  readonly rows: number;
+}
+
+/**
+ * Wrap a single line of text to the available width, breaking on
+ * whitespace when possible. Mirrors the wrapping Ink performs inside a
+ * `<Text>` block so the row estimate matches what actually renders.
+ */
+function wrapLineToWidth(line: string, width: number): number {
+  if (width <= 0) return 1;
+  const cellWidth = [...line].length;
+  if (cellWidth <= width) return 1;
+  // Greedy wrap: count characters per chunk of `width`, breaking on the
+  // last whitespace boundary when one exists within the chunk.
+  let rows = 0;
+  let cursor = 0;
+  while (cursor < cellWidth) {
+    const remaining = cellWidth - cursor;
+    if (remaining <= width) {
+      rows += 1;
+      break;
+    }
+    let breakAt = cursor + width;
+    const slice = [...line].slice(cursor, breakAt).join("");
+    const lastSpace = slice.lastIndexOf(" ");
+    if (lastSpace > 0) breakAt = cursor + lastSpace + 1;
+    rows += 1;
+    cursor = breakAt;
+  }
+  return Math.max(1, rows);
+}
+
+/**
+ * Estimate the rows an entry consumes once rendered. Accounts for:
+ *  - embedded `\n` newlines (error rendering produces a header + bullets)
+ *  - narrow-width wrapping per logical line (cols - chrome overhead)
+ *  - the entry's own chrome: error = 3 chrome rows (border top + inner
+ *    padding + border bottom) plus 1 margin-top; system = 2 chrome rows
+ *    (label + spacing) plus 1 margin-top; input/output = 1 margin-top.
+ */
+export function estimateEntryRows(
+  text: string,
+  kind: RenderableTranscriptEntry["kind"],
+  columns: number,
+): number {
+  // Per-entry chrome in rows (border + padding + label + margin-top).
+  const chromeRows =
+    kind === "error" ? 3 + 1 : kind === "system" ? 2 + 1 : 1;
+  // Width inside the chrome. Error uses paddingX={1}; system uses a
+  // marginTop={1}; input/output render full width with marginTop={1}.
+  const innerWidth = Math.max(
+    1,
+    columns - (kind === "error" ? 4 : kind === "system" ? 0 : 0),
+  );
+  const lines = text.split("\n");
+  const lineRows = lines.reduce(
+    (sum, line) => sum + wrapLineToWidth(line, innerWidth),
+    0,
+  );
+  return Math.max(1, chromeRows + lineRows);
+}
+/**
+ * Build a `RenderableTranscriptEntry` from a plain entry (the legacy
+ * `TranscriptEntry` shape used by the Session transcript) plus an
+ * explicit criticality hint. The helper exists so tests and the Session
+ * share a single row-measurement path.
+ */
+export function toRenderableEntry(
+  entry: {
+    readonly id: number;
+    readonly kind: RenderableTranscriptEntry["kind"];
+    readonly text: string;
+  },
+  criticality: RenderableTranscriptEntry["criticality"],
+  columns: number,
+): RenderableTranscriptEntry {
+  return {
+    id: entry.id,
+    text: entry.text,
+    kind: entry.kind,
+    criticality,
+    rows: estimateEntryRows(entry.text, entry.kind, columns),
+  };
+}
+
+/**
+ * Classify an entry's criticality from its text. Entries that contain
+ * verification URI / user code, recommendation ID / accept command,
+ * typed-input echoes, or the explicit "Run /auth login to continue"
+ * recovery are critical. Everything else is noncritical so it can be
+ * dropped when the budget is tight.
+ */
+export function isCriticalTranscriptText(text: string, promptInput: string): boolean {
+  const trimmed = text;
+  if (promptInput.length > 0 && trimmed.includes(promptInput)) return true;
+  if (/https?:\/\/github\.com\/login\/device/u.test(trimmed)) return true;
+  if (/Recommendation ID:\s*\S+/u.test(trimmed)) return true;
+  if (/\/mission\s+accept\s+--id\s+\S+/u.test(trimmed)) return true;
+  if (/Run\s+\/auth\s+(login|status)\s+to\s+continue/u.test(trimmed)) return true;
+  return false;
+}
+/**
+ * Window transcript entries to honour the row budget. Every critical
+ * entry (verification URI / code, recommendation ID / accept command,
+ * typed-input echo, recovery line) is retained. The remaining budget is
+ * filled with the newest noncritical entries, and the oldest
+ * noncritical entries are dropped first.
+ *
+ * Order in the returned array matches the order in `entries` (oldest
+ * first, newest last). The shell renders the array in that order so the
+ * newest visible content sits at the bottom of the bounded frame.
+ */
+export function windowTranscriptEntries(
+  entries: readonly RenderableTranscriptEntry[],
+  rowBudget: number,
+): readonly RenderableTranscriptEntry[] {
+  if (rowBudget <= 0 || entries.length === 0) return [];
+  const critical: RenderableTranscriptEntry[] = [];
+  const noncritical: RenderableTranscriptEntry[] = [];
+  for (const entry of entries) {
+    if (entry.criticality === "critical") critical.push(entry);
+    else noncritical.push(entry);
+  }
+  const criticalRows = critical.reduce((sum, entry) => sum + entry.rows, 0);
+  if (criticalRows >= rowBudget) {
+    // Critical entries alone exceed the budget; still keep every critical
+    // entry so the user sees the recovery path. The frame may exceed
+    // `rows` (the caller warns via test); we never drop a critical line.
+    return critical;
+  }
+  let remaining = rowBudget - criticalRows;
+  const visibleNoncritical: RenderableTranscriptEntry[] = [];
+  for (let i = noncritical.length - 1; i >= 0 && remaining > 0; i -= 1) {
+    const candidate = noncritical[i];
+    if (candidate === undefined) continue;
+    if (candidate.rows <= remaining) {
+      visibleNoncritical.unshift(candidate);
+      remaining -= candidate.rows;
+    }
+  }
+  return [...critical, ...visibleNoncritical];
+}
+
+
+/**
  * Kestrel TUI — presentation shell.
  *
  * Pure rendering components. The shell is wired into the interactive session
@@ -674,7 +831,61 @@ export interface DashboardShellProps {
   readonly contextActions?: readonly SessionAction[];
   readonly selectedActionIndex?: number;
   readonly actionFocused?: boolean;
+  /**
+   * Renderable transcript entries with plain-text row metadata and
+   * criticality. When supplied, the shell windows these against the
+   * row budget using `windowTranscriptEntries` (keep every critical
+   * entry, fill remainder with newest noncritical). When absent, the
+   * shell falls back to the legacy `children` prop which is sliced by
+   * opaque React child count.
+   */
+  readonly entries?: readonly RenderableTranscriptEntry[];
   readonly children?: ReactNode;
+}
+
+function TranscriptEntryLine({
+  entry,
+  promptInput,
+}: {
+  readonly entry: RenderableTranscriptEntry;
+  readonly promptInput: string;
+}) {
+  if (entry.kind === "error") {
+    return (
+      <Box borderStyle="round" borderColor="red" paddingX={1} marginTop={1}>
+        <Box flexDirection="column">
+          <Text color="redBright" bold>
+            Action required
+          </Text>
+          <Text color="red">{entry.text.replace(/^[!×]\s*/u, "")}</Text>
+        </Box>
+      </Box>
+    );
+  }
+  if (entry.kind === "system") {
+    return (
+      <Box flexDirection="column" marginTop={1}>
+        <Text color="white" bold>
+          Welcome back
+        </Text>
+        <Text color="gray">{entry.text.replace(/^✓ Welcome back\n\s*/u, "")}</Text>
+      </Box>
+    );
+  }
+  if (entry.kind === "input") {
+    return (
+      <Box marginTop={1}>
+        <Text color="cyan">›</Text>
+        <Text> </Text>
+        <Text color="white">{entry.text}</Text>
+      </Box>
+    );
+  }
+  return (
+    <Box marginTop={1}>
+      <Text color="white">{entry.text}</Text>
+    </Box>
+  );
 }
 
 export function DashboardShell({
@@ -695,6 +906,7 @@ export function DashboardShell({
   contextActions,
   selectedActionIndex = 0,
   actionFocused = false,
+  entries,
   children,
 }: DashboardShellProps) {
   const wide = isWideTerminal(capabilities);
@@ -704,18 +916,27 @@ export function DashboardShell({
   const showFooter = tier === "full";
   const showQuickCommands = tier === "full" || tier === "standard";
   const sidebarCompact = tier === "compact" || tier === "minimal";
-  // Window the children (transcript / output entries) to honour the actual
-  // terminal row budget. Older noncritical lines are dropped first; the most
-  // recent entries (which include the critical URI, code, recommendation ID,
-  // action, and typed input strings) survive.
+  // Window the entries / children to honor the actual terminal row budget.
+  // Critical entries (verification URI, user code, recommendation ID, accept
+  // command, typed input) are always retained; older noncritical content is
+  // dropped first so the bounded frame fits `capabilities.rows`.
   const transcriptBudget = availableTranscriptRows(capabilities);
-  const allChildren = Children.toArray(children);
+  const structuredEntries = entries !== undefined
+    ? windowTranscriptEntries(entries, transcriptBudget)
+    : null;
+  const allChildren = structuredEntries !== null
+    ? structuredEntries.map((entry) => (
+        <TranscriptEntryLine key={entry.id} entry={entry} promptInput={input} />
+      ))
+    : Children.toArray(children);
   const visibleChildren =
-    transcriptBudget <= 0
-      ? []
-      : allChildren.length > transcriptBudget
-        ? allChildren.slice(-transcriptBudget)
-        : allChildren;
+    structuredEntries !== null
+      ? allChildren
+      : transcriptBudget <= 0
+        ? []
+        : allChildren.length > transcriptBudget
+          ? allChildren.slice(-transcriptBudget)
+          : allChildren;
 
   return (
     <Box flexDirection="column" width="100%">
