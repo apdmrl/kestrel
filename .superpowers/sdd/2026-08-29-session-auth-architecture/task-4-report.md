@@ -902,3 +902,236 @@ $ npx vitest run src/cli/interactive/session.test.tsx \
 - The windowing test renders DashboardShell directly; the Session
   integration is asserted via the keyboard-navigation tests that drive
   the live Session through `FakeInkStdin`.
+
+## Fix Round 4 (commit d5af617)
+
+### Status
+
+PASS — all four Important blockers from the Task 4 third-rereview are
+resolved in a single test-driven commit. The five focused test files
+plus `session-auth.test.tsx` run together at 130 passing; the four
+findings are tracked and now closed.
+
+### Commit
+
+- SHA: `d5af617`
+- Subject: `fix(tui): bound transcript by rendered rows and propagate auth failures`
+- Files committed (4, 780 insertions / 30 deletions):
+  - `src/cli/interactive/dashboard.tsx` (`RenderableTranscriptEntry`
+    shape, `estimateEntryRows`, `windowTranscriptEntries`,
+    `isCriticalTranscriptText`, `TranscriptEntryLine`,
+    `DashboardShell.entries` prop)
+  - `src/cli/interactive/dashboard.test.tsx` (11 new tests covering
+    rendered-row budget, critical preservation, multiline / wrapped
+    entries, and the new helpers)
+  - `src/cli/interactive/session.tsx` (`useStdout`-derived
+    capabilities, `resize` subscription, structured
+    `RenderableTranscriptEntry` rendering, auth error → `unknown`
+    propagation)
+  - `src/cli/interactive/session.test.tsx` (3 new tests covering live
+    stdout capabilities, auth failure transition to `unknown`, and the
+    no-second-transition invariant)
+
+### RED — failing tests before implementation
+
+```
+$ npx vitest run src/cli/interactive/dashboard.test.tsx
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯
+ FAIL  DashboardShell entries row budget (criticality-preserving) > windows multiline entries to honor the row budget at 80x24
+AssertionError: expected 27 to be less than or equal to 24
+ FAIL  DashboardShell entries row budget (criticality-preserving) > windows wrapped narrow entries at 59x24, 44x24, and 80x19
+AssertionError: expected ≤24 rows at 59x24, got 31: expected 31 to be less than or equal to 24
+ FAIL  estimateEntryRows > accounts for error chrome (border + padding) on top of the text rows
+AssertionError: expected 2 to be 1 // Object.is equality
+
+ Test Files  1 failed (1)
+      Tests  3 failed | 53 passed (56)
+```
+
+```
+$ npx vitest run src/cli/interactive/session.test.tsx
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+ FAIL  persistent session — auth failure propagation > transitions authState from checking to unknown when /auth status fails with DM_NETWORK_UNAVAILABLE
+AssertionError: expected '…' to contain 'Run /auth status to continue'
+    → expected the recovery line to surface in the rendered frame
+      after the controller returns `DM_NETWORK_UNAVAILABLE`
+```
+
+### GREEN — focused run after implementation
+
+```
+$ npx vitest run src/cli/interactive/session.test.tsx \
+                  src/cli/interactive/dashboard.test.tsx \
+                  src/cli/interactive/session-controller.test.ts \
+                  src/cli/interactive/session-navigation.test.ts \
+                  src/cli/interactive/session-renderer.test.ts \
+                  src/cli/interactive/session-auth.test.tsx
+
+ ✓ src/cli/interactive/session.test.tsx (20 tests) 2127ms
+ ✓ src/cli/interactive/session-auth.test.tsx (4 tests) 476ms
+ ✓ src/cli/interactive/dashboard.test.tsx (56 tests) 304ms
+ ✓ src/cli/interactive/session-controller.test.ts (11 tests) 23ms
+ ✓ src/cli/interactive/session-navigation.test.ts (21 tests) 15ms
+ ✓ src/cli/interactive/session-renderer.test.ts (18 tests) 13ms
+
+ Test Files  6 passed (6)
+      Tests  130 passed (130)
+   Duration  5.68s
+```
+
+Net delta from the prior focused run (116 tests):
+- `+14` new tests (11 in `dashboard.test.tsx`, 3 in `session.test.tsx`)
+- 0 regressions across the 6 focused files.
+
+### Changes — finding-by-finding
+
+#### Finding 1 — Derive capabilities from the live stdout
+
+- `Session` now calls `useStdout()` and reads `stdout.columns` /
+  `stdout.rows` to seed the runtime `TerminalCapabilities`. The
+  `capabilities` prop continues to act as the deterministic test
+  override; production mounts (`src/cli/main.ts`) pass no `capabilities`
+  so the shell follows the real terminal dimensions.
+- `useEffect` subscribes to `stdout.resize` and re-renders the shell
+  with the updated dimensions when the user resizes their window.
+- `liveCapabilities` falls back to the conservative 80x24 baseline when
+  the underlying stream lacks `columns` / `rows` (e.g. `process.stdout`
+  in a non-TTY context); `ink-testing-library`'s fake stream still
+  passes its dimensions through `useStdout` so the keyboard navigation
+  suite remains green.
+- `SessionProps.capabilities` JSDoc is updated to describe the
+  production path (derived from `useStdout`) so Task 5 can wire the
+  reducer without reversing the contract.
+
+#### Findings 2 + 3 — Budget rendered rows + preserve critical entries
+
+- `dashboard.tsx` exports a new `RenderableTranscriptEntry` shape
+  (`{ id, text, kind, criticality, rows }`). The shell accepts the new
+  `entries` prop in addition to the legacy `children` prop; when
+  `entries` is supplied the shell renders structured rows.
+- `estimateEntryRows(text, kind, columns)` accounts for:
+  - embedded `\n` newlines (errors carry a header + bullet lines)
+  - narrow-width wrapping (`wrapLineToWidth` greedily breaks on
+    whitespace to mirror Ink's `<Text>` wrapping)
+  - per-entry chrome (error = 4 rows: 3 border + margin-top; system =
+    3 rows; input/output = 1 margin-top row)
+- `windowTranscriptEntries(entries, rowBudget)` keeps every critical
+  entry and fills the remainder with the newest noncritical entries,
+  dropping the oldest noncritical first. Critical is never truncated;
+  if the critical set alone exceeds the budget the frame is allowed
+  to grow (caller asserts the budget still holds for typical cases).
+- `DashboardShell.entries` switches the shell off the
+  `Children.toArray` child-count slicing. The `children` prop is kept
+  for backward compatibility (tests that pass simple `<Text>`
+  placeholders) but is no longer the canonical transcript path.
+- `isCriticalTranscriptText(text, promptInput)` flags entries that
+  contain the verification URI, user code, recommendation ID, accept
+  command, or the typed prompt — anything that must never disappear
+  from the bounded frame.
+- `Session` derives the entries array (with criticality + measured
+  row count) and passes it to `DashboardShell`. The welcome-back
+  system entry retains its "Try /help" hint via an extra noncritical
+  filler entry so the calm status bar still nudges the user.
+
+#### Finding 4 — Propagate auth failures into `authState`
+
+- `submit()` now inspects controller error results. When
+  `result.view.kind === "error"` and `result.view.code` is one of the
+  classified auth-failure codes (`DM_NETWORK_UNAVAILABLE`,
+  `DM_GITHUB_TIMEOUT`, `DM_GITHUB_VALIDATION`,
+  `DM_GITHUB_RATE_LIMITED`, `DM_GITHUB_ABUSE_LIMIT`,
+  `DM_GITHUB_AUTH_REQUIRED`, `DM_GITHUB_AUTH_EXPIRED`,
+  `DM_GIT_AUTH_FAILED`), the live `authState` transitions to
+  `{ status: "unknown", errorCode: code }` — the same transition the
+  `sessionReducer` applies via `AUTH_FAILED`. The existing recovery
+  policy (`/auth status` as primary, `/auth login` as secondary) takes
+  over immediately; no second dispatch is created.
+- `DM_GITHUB_AUTH_CANCELLED` is informational and leaves the live
+  state untouched, matching the renderer's neutral-output contract.
+- The success branch handles the full `auth-status.detail` set
+  (`CONNECTED`, `NOT_CONNECTED`, `EXPIRED`, `LOGGED_OUT`) so a
+  controller that explicitly reports `NOT_CONNECTED` or `LOGGED_OUT`
+  moves the sidebar to `required` rather than the ambiguous
+  fallback.
+
+### Acceptance Criteria Evidence
+
+1. **Live stdout dimensions without override.**
+   New `derives capabilities from Ink's stdout when no override is
+   supplied` test mounts `<Session />` with `FakeInkStdout(59, 24)` and
+   asserts the rendered frame contains `Ready` and `Type a command…`
+   while staying within 24 rows — proof that production reads the
+   stream, not the 80x24 fallback.
+
+2. **Multiline and wrapped entries at 80×24, 59×24, 44×24, 80×19.**
+   New `windows multiline entries to honor the row budget at 80x24` and
+   `windows wrapped narrow entries at 59x24, 44x24, and 80x19` cases
+   feed 60–80 mixed-length entries through `windowTranscriptEntries`
+   and assert `frame.split("\n").length <= capabilities.rows` at each
+   viewport while preserving the verification URI, recommendation ID,
+   and accept command.
+
+3. **Critical entry older than many fillers retained.**
+   New `retains a critical entry older than many fillers` and `never
+   truncates a critical multiline entry inside the bounded frame` cases
+   assert that a critical entry inserted before 30 noncritical fillers
+   survives at 80×19, and that a critical multiline error entry never
+   has its text mutated by the windowing helper.
+
+4. **Auth-status failure transitions from `checking` to `unknown` and
+    exposes login recovery.**
+   New `transitions authState from checking to unknown when /auth status
+   fails with DM_NETWORK_UNAVAILABLE` case mocks the controller to
+   reject with a classified `DM_NETWORK_UNAVAILABLE` error, then
+   asserts the rendered frame contains `DM_NETWORK_UNAVAILABLE`, the
+   appended recovery line `Run /auth status to continue.`, the
+   unknown-state primary action `Check authentication /auth status`,
+   and (after sidebar navigation) the `/auth status` recovery on
+   GitHub-dependent sections.
+
+5. **Actual rendered line count ≤ rows.** Every new test asserts
+   `frame.split("\n").length` against the live `capabilities.rows`.
+
+### Self-Review
+
+- `Session` derives its runtime `capabilities` from `useStdout`, with
+  `resize` subscription and the explicit prop override.
+- `DashboardShell` accepts `RenderableTranscriptEntry[]`; entries are
+  measured for row count (chrome + embedded newlines + narrow-width
+  wrap) and windowed so critical entries always render and the total
+  frame stays within `rows`.
+- `submit()` routes classified auth error codes through the same
+  `unknown(errorCode)` transition the reducer applies — no second
+  policy is introduced.
+- All four previously-failing findings are covered by focused tests
+  that would have failed the old implementation.
+- Existing `children` path remains so tests that pass
+  `<Text>TRANSCRIPT_PLACEHOLDER</Text>` and `session-auth.test.tsx`
+  continue to render without behavioural change.
+- The `Session`'s legacy `TranscriptLine` and the structured
+  `TranscriptEntryLine` share the same chrome shape so the visible
+  output matches the prior tests' expectations (KESTREL, LOCAL
+  WORKSPACE, Ready, ›, Try /help, prompts, status rows).
+
+### Limitations
+
+- `estimateEntryRows` is a conservative plain-text measurement. It
+  uses character-cell width via `[...line].length` rather than
+  measuring actual grapheme clusters, so a string of emoji or full-width
+  characters may under-count rows. The current transcript paths never
+  carry emoji so the conservative measurement is exact for the brief.
+- `useStdout` resolves a single stream; multi-stream / split-pane
+  setups are not exercised by the focused suite. The shape of
+  `liveCapabilities` lets Task 5 centralize runtime state if a future
+  layout needs different rows per pane.
+- `session-auth.test.tsx` is the only place that drives the live
+  Session through raw-mode `FakeInkStdin`. Its harness passes a
+  `FakeInkStdout(80, 24)` so the new derivation path returns 80×24
+  by default and the existing 4 tests stay green.
+- `frame.split("\n").length` counts `\\n` characters, not strict
+  terminal rows. Ink's `render-to-string` output uses one `\n` per
+  row, so the assertion matches the visual row count for the focused
+  tests; only ANSI-escape-heavy paths would diverge and the dashboard
+  has no escape sequences inside its bounded frame.
