@@ -398,6 +398,19 @@ const COLORS = {
 } as const;
 
 export type Accent = "green" | "cyan" | "yellow" | "purple" | "red";
+/**
+ * Build the `color` prop for an Ink `<Text>` element when colorization is
+ * enabled. Under `exactOptionalPropertyTypes`, passing `color: undefined`
+ * to a prop typed as optional but not `undefined` is rejected; spreading
+ * an empty object omits the prop entirely while preserving the same
+ * visual output when color is enabled.
+ */
+function inkColorProp(
+  enabled: boolean,
+  color: string,
+): { readonly color: string } | Record<string, never> {
+  return enabled ? { color } : {};
+}
 
 export interface TerminalCapabilities {
   readonly columns: number;
@@ -576,10 +589,10 @@ export function NavItem({
         : COLORS.muted;
   return (
     <Box>
-      <Text color={colorize ? markerColor : undefined}>{markers}</Text>
-      <Text color={colorize ? COLORS[accent] : undefined}>{icon}</Text>
+      <Text {...inkColorProp(colorize, markerColor)}>{markers}</Text>
+      <Text {...inkColorProp(colorize, COLORS[accent])}>{icon}</Text>
       <Text>{"  "}</Text>
-      <Text color={colorize ? labelColor : undefined} bold={focused}>
+      <Text {...inkColorProp(colorize, labelColor)} bold={focused}>
         {label}
       </Text>
     </Box>
@@ -658,20 +671,22 @@ export function ContextActions({
           return (
             <Box key={action.id} flexDirection="column">
               <Box>
-                <Text color={colorize ? (isDisabled ? COLORS.red : COLORS.text) : undefined}>
+                <Text
+                  {...inkColorProp(colorize, isDisabled ? COLORS.red : COLORS.text)}
+                >
                   {markers}
                 </Text>
                 <Text>{" "}</Text>
-                <Text color={colorize ? COLORS.muted : undefined} bold={row.focused}>
+                <Text {...inkColorProp(colorize, COLORS.muted)} bold={row.focused}>
                   {action.label}
                 </Text>
               </Box>
               <Box marginLeft={4}>
-                <Text color={colorize ? commandColor : undefined}>{action.command}</Text>
+                <Text {...inkColorProp(colorize, commandColor)}>{action.command}</Text>
               </Box>
               {isDisabled ? (
                 <Box marginLeft={4}>
-                  <Text color={colorize ? COLORS.muted : undefined}>
+                  <Text {...inkColorProp(colorize, COLORS.muted)}>
                     {action.availability.reason}
                     {action.availability.recoveryCommand !== undefined
                         ? ` · ${action.availability.recoveryCommand}`
@@ -767,8 +782,8 @@ export function Sidebar({
       >
         {items.map(({ section, meta, state }) => (
           <Box key={section.id}>
-            <Text color={capabilities.color ? COLORS[meta.accent] : undefined}>{meta.icon}</Text>
-            <Text color={capabilities.color ? (state.selected ? COLORS.green : COLORS.muted) : undefined}>
+            <Text {...inkColorProp(capabilities.color, COLORS[meta.accent])}>{meta.icon}</Text>
+            <Text {...inkColorProp(capabilities.color, state.selected ? COLORS.green : COLORS.muted)}>
               {state.selected ? "●" : "○"}
             </Text>
           </Box>

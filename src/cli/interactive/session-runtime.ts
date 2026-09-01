@@ -178,12 +178,13 @@ export function runStartupAuth(input: RunStartupAuthInput): StartupAuthHandle {
     const handleAuthStatusView = (view: ViewModel): void => {
       if (view.kind === "auth-status") {
         if (view.connected && view.login !== null) {
+          const login = view.login;
           finalize(() =>
             dispatch({
               type: "AUTH_RESOLVED",
               attemptId,
               detail: "CONNECTED",
-              login: view.login,
+              login,
             }),
           );
           return;

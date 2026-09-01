@@ -50,28 +50,116 @@ const ENABLED: ActionAvailability = { status: "enabled" };
  */
 const SECTION_ACTIONS: Readonly<Record<SessionSectionId, readonly SessionAction[]>> = {
   home: [],
-  find: [{ id: "find.run", label: "Find a challenge", command: "/find" }],
+  find: [
+    {
+      id: "find.run",
+      label: "Find a challenge",
+      command: "/find",
+      availability: ENABLED,
+    },
+  ],
   mission: [
-    { id: "mission.current", label: "Current mission", command: "/mission current" },
-    { id: "mission.accept", label: "Accept recommendation", command: "/mission accept --id " },
-    { id: "mission.prepare", label: "Prepare mission", command: "/mission prepare" },
-    { id: "mission.resume", label: "Resume preparation", command: "/mission resume" },
-    { id: "mission.complete", label: "Complete mission", command: "/mission complete" },
-    { id: "mission.abandon", label: "Abandon mission", command: "/mission abandon --reason " },
+    {
+      id: "mission.current",
+      label: "Current mission",
+      command: "/mission current",
+      availability: ENABLED,
+    },
+    {
+      id: "mission.accept",
+      label: "Accept recommendation",
+      command: "/mission accept --id ",
+      availability: ENABLED,
+    },
+    {
+      id: "mission.prepare",
+      label: "Prepare mission",
+      command: "/mission prepare",
+      availability: ENABLED,
+    },
+    {
+      id: "mission.resume",
+      label: "Resume preparation",
+      command: "/mission resume",
+      availability: ENABLED,
+    },
+    {
+      id: "mission.complete",
+      label: "Complete mission",
+      command: "/mission complete",
+      availability: ENABLED,
+    },
+    {
+      id: "mission.abandon",
+      label: "Abandon mission",
+      command: "/mission abandon --reason ",
+      availability: ENABLED,
+    },
   ],
-  agent: [{ id: "agent.brief", label: "Create handoff", command: "/agent brief" }],
+  agent: [
+    {
+      id: "agent.brief",
+      label: "Create handoff",
+      command: "/agent brief",
+      availability: ENABLED,
+    },
+  ],
   verify: [
-    { id: "verify.submission", label: "Verify submission", command: "/verify submission --pr " },
-    { id: "verify.link", label: "Verify issue link", command: "/verify link --pr " },
-    { id: "verify.merge", label: "Verify merge", command: "/verify merge --pr " },
+    {
+      id: "verify.submission",
+      label: "Verify submission",
+      command: "/verify submission --pr ",
+      availability: ENABLED,
+    },
+    {
+      id: "verify.link",
+      label: "Verify issue link",
+      command: "/verify link --pr ",
+      availability: ENABLED,
+    },
+    {
+      id: "verify.merge",
+      label: "Verify merge",
+      command: "/verify merge --pr ",
+      availability: ENABLED,
+    },
   ],
-  progress: [{ id: "progress.show", label: "Show progress", command: "/progress" }],
-  journey: [{ id: "journey.show", label: "Show journey", command: "/journey" }],
+  progress: [
+    {
+      id: "progress.show",
+      label: "Show progress",
+      command: "/progress",
+      availability: ENABLED,
+    },
+  ],
+  journey: [
+    {
+      id: "journey.show",
+      label: "Show journey",
+      command: "/journey",
+      availability: ENABLED,
+    },
+  ],
   auth: [],
   preferences: [
-    { id: "preferences.get", label: "Show preferences", command: "/preferences get" },
-    { id: "preferences.language", label: "Set language", command: "/preferences set --language " },
-    { id: "preferences.mode", label: "Set mode", command: "/preferences set --mode " },
+    {
+      id: "preferences.get",
+      label: "Show preferences",
+      command: "/preferences get",
+      availability: ENABLED,
+    },
+    {
+      id: "preferences.language",
+      label: "Set language",
+      command: "/preferences set --language ",
+      availability: ENABLED,
+    },
+    {
+      id: "preferences.mode",
+      label: "Set mode",
+      command: "/preferences set --mode ",
+      availability: ENABLED,
+    },
   ],
 };
 
@@ -256,11 +344,6 @@ function withAcceptAction(
     },
   ];
 }
-function normalizeAvailability(base: readonly SessionAction[]): readonly SessionAction[] {
-  return base.map((action) =>
-    "availability" in action ? action : { ...action, availability: ENABLED },
-  );
-}
 
 /**
  * Resolve the contextual actions for a sidebar category against the current
@@ -277,7 +360,7 @@ export function actionsForSection(
   if (section === undefined) return [];
   if (section.id === "auth") return authActions(auth);
 
-  const baseActions = normalizeAvailability(SECTION_ACTIONS[section.id]);
+  const baseActions = SECTION_ACTIONS[section.id];
   const withAccept =
     section.id === "find" ? withAcceptAction(baseActions, latestRecommendation) : baseActions;
   return section.requires === "github" ? deriveGitHubActions(withAccept, auth) : withAccept;

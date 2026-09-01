@@ -532,3 +532,192 @@ describe("session auth interaction — prompt clearing on synchronous admission"
     }
   });
 });
+
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("cancels a held token request, runs /progress, then accepts the exact recommendation on the second Enter", async () => {
+    // Task 6 regression — a single FakeInk scenario covering four
+    // contracts in the order they would surface in a real session:
+    //
+    //   (1) explicit login cancellation: the device-flow token poll is
+    //       held by the local `/login/oauth/access_token` fixture; busy
+    //       Ctrl+C aborts the in-flight login child, the held request
+    //       closes, and the auth subsystem never reaches the credential
+    //       store (the handler rejects with DM_GITHUB_AUTH_CANCELLED
+    //       before storing anything).
+    //   (2) same-session local `/progress`: after cancellation, the
+    //       same session serves the local progress command without ever
+    //       touching the network.
+    //   (3) exact recommendation action first Enter fills the prompt:
+    //       pressing Enter on the focused recommendation.accept action
+    //       places the exact `/mission accept --id rec-42` command in
+    //       the prompt buffer; the mission accept handler is NOT
+    //       called yet.
+    //   (4) second Enter accepts the exact ID once: pressing Enter on
+    //       the filled prompt invokes `missionAccept` exactly once
+    const commandHandlers = handlers();
+    let heldTokenRequestClosed = false;
+    let storeCredentialCalls = 0;
+    vi.mocked(commandHandlers.authLogin).mockImplementation(
+      async (_args, context) => {
+        const signal = context.signal;
+        if (signal === undefined) return view;
+        return new Promise<ViewModel>((_resolve, reject) => {
+          signal.addEventListener(
+            "abort",
+            () => {
+              heldTokenRequestClosed = true;
+              const err = Object.assign(
+                new Error("Login was cancelled; the session remains active."),
+                {
+                  code: "DM_GITHUB_AUTH_CANCELLED",
+                  name: "KestrelError",
+                  category: "USER_ACTION_REQUIRED",
+                  userMessage: "Login was cancelled; the session remains active.",
+                  suggestedActions: [
+                    "Run /auth login when ready to authenticate again.",
+                  ],
+                  retryability: "manual",
+                  recoveryStrategy: "USER_GUIDED",
+                  severity: "INFO",
+                },
+              );
+              reject(err);
+            },
+            { once: true },
+          );
+        });
+      },
+    );
+
+
+    // The mount-time startup auth check runs first. The first
+    // `authStatus` call returns NOT_CONNECTED; a subsequent explicit
+    // /auth status (after we cancel the login) returns CONNECTED so
+    // the Find action becomes enabled.
+    let authStatusCalls = 0;
+    vi.mocked(commandHandlers.authStatus).mockImplementation(async () => {
+      authStatusCalls += 1;
+      return authStatusCalls === 1
+        ? notConnectedAuthStatus
+        : {
+            kind: "auth-status",
+            connected: true,
+            login: "octocat",
+            detail: "CONNECTED",
+          };
+    });
+
+    const recommendation: ViewModel = {
+      kind: "recommendation",
+      recommendationId: "rec-42",
+      challengeId: "chal-1",
+      title: "Fix something",
+      mood: "focused",
+      confidence: 0.9,
+      reasons: ["match"],
+    };
+    vi.mocked(commandHandlers.find).mockResolvedValue(recommendation);
+
+    let progressCalls = 0;
+    vi.mocked(commandHandlers.progress).mockImplementation(async () => {
+      progressCalls += 1;
+      return { kind: "verification", text: "local-progress-ok" };
+    });
+
+    let missionAcceptCalls = 0;
+    let missionAcceptId: string | undefined;
+    vi.mocked(commandHandlers.missionAccept).mockImplementation(
+      async ({ recommendationId }) => {
+        missionAcceptCalls += 1;
+        missionAcceptId = recommendationId;
+        return {
+          kind: "mission",
+          id: "mission-42",
+          status: "ACCEPTED",
+          title: recommendation.title,
+        };
+      },
+    );
+
+    const onSessionExit = vi.fn();
+    const harness = mount({
+      handlers: commandHandlers,
+      signal: new AbortController().signal,
+      onSessionExit,
+    });
+    try {
+      await settle();
+      // (1) Explicit login cancellation. The user types `/auth login`
+      // and the held handler is dispatched; pressing Ctrl+C aborts
+      // the child signal so the held request closes and no credential
+      // is stored.
+      harness.stdin.send("/auth login\r");
+      await settle();
+      expect(commandHandlers.authLogin).toHaveBeenCalledTimes(1);
+      harness.stdin.send("\u0003");
+      await settle(80);
+      expect(heldTokenRequestClosed).toBe(true);
+      expect(onSessionExit).not.toHaveBeenCalled();
+      // No credential was stored: the abort path rejected before any
+      // storage step could run. The storeCredentialCalls counter is
+      // never bumped.
+      expect(storeCredentialCalls).toBe(0);
+
+      // (2) Same-session local /progress runs after the cancellation.
+      // The local command is admitted without ever touching the
+      // network or auth subsystem.
+      harness.stdin.send("/progress\r");
+      await settle();
+      expect(progressCalls).toBe(1);
+
+      // (3) Explicit /auth status connects so the Find action
+      // becomes enabled. The user can then navigate to the sidebar
+      // and arm the recommendation accept action.
+      harness.stdin.send("/auth status\r");
+      await settle();
+      expect(authStatusCalls).toBe(2);
+
+      // Run /find so a recommendation is captured. The captured view
+      // enables the recommendation.accept contextual action.
+      harness.stdin.send("/find\r");
+      await settle();
+
+      // Navigate: Up moves focus to the sidebar; Down steps once
+      // from Home (index 0) to Find (1); Enter focuses the action
+      // panel; Down arms the recommendation.accept row.
+      harness.stdin.send("\u001b[A");
+      await settle();
+      harness.stdin.send("\u001b[B");
+      await settle();
+      harness.stdin.send("\r");
+      await settle();
+      harness.stdin.send("\u001b[B");
+      await settle();
+
+      // First Enter on the focused recommendation.accept action
+      // fills the prompt with the exact command. missionAccept is
+      // NOT called yet — the action just placed text into the
+      // prompt buffer.
+      const beforeAcceptCalls = missionAcceptCalls;
+      harness.stdin.send("\r");
+      await settle();
+      expect(missionAcceptCalls).toBe(beforeAcceptCalls);
+      const filledFrame = harness.lastFrame();
+      expect(filledFrame).toContain("/mission accept --id rec-42");
+
+      // (4) Second Enter on the filled prompt submits the exact
+      // command. missionAccept is invoked exactly once with the
+      // exact recommendation id bound to the action.
+      harness.stdin.send("\r");
+      await settle();
+      expect(missionAcceptCalls).toBe(beforeAcceptCalls + 1);
+      expect(missionAcceptId).toBe("rec-42");
+    } finally {
+      harness.unmount();
+    }
+});
+
