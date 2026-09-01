@@ -71,8 +71,8 @@ describe("session auth interaction", () => {
     // the rendered Ink frame is a presentation detail whose reconstruction is
     // not part of this fake's stream surface.
     const commandHandlers = handlers();
-    vi.mocked(commandHandlers.authLogin).mockImplementation(async (args) => {
-      args.onNotice?.({
+    vi.mocked(commandHandlers.authLogin).mockImplementation(async (_args, context) => {
+      context.onNotice?.({
         kind: "device-authorization",
         verificationUri: "https://github.com/login/device",
         userCode: "ABCD-1234",
@@ -81,7 +81,7 @@ describe("session auth interaction", () => {
     });
     const notices: string[] = [];
     const controller = createSessionController(commandHandlers, (text) => notices.push(text));
-    await controller({ kind: "auth-login" });
+    await controller({ kind: "auth-login" }, {});
     expect(notices).toHaveLength(1);
     expect(notices[0]).toContain("https://github.com/login/device");
     expect(notices[0]).toContain("ABCD-1234");

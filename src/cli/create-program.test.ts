@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createKestrelError } from "../application/errors/kestrel-error.js";
 import { createProgram } from "./create-program.js";
 import type { CommandHandlers } from "./command-handlers.js";
@@ -20,43 +20,46 @@ function handlers(overrides: Partial<CommandHandlers> = {}): {
   calls: Call[];
 } {
   const calls: Call[] = [];
-  const record = <A extends unknown[]>(name: string, args: A, view: ViewModel) => {
-    calls.push({ handler: name, args });
+  const record = <Args, Context>(name: string, args: Args, context: Context, view: ViewModel) => {
+    calls.push({ handler: name, args: [args, context] });
     return view;
   };
+  // Fakes may ignore the second context parameter but must conform to the new
+  // (args, context) CommandHandlers signature.
   const base: CommandHandlers = {
-    find: async (args) => record("find", [args], { kind: "verification", text: "find" }),
-    authLogin: async (args) => record("authLogin", [args], authStatusView("CONNECTED")),
-    authStatus: async () => record("authStatus", [], authStatusView("CONNECTED")),
-    authLogout: async (args) => record("authLogout", [args], authStatusView("LOGGED_OUT")),
-    missionAccept: async (args) =>
-      record("missionAccept", [args], { kind: "verification", text: "accept" }),
-    missionPrepare: async (args) =>
-      record("missionPrepare", [args], { kind: "verification", text: "prepare" }),
-    missionResume: async (args) =>
-      record("missionResume", [args], { kind: "verification", text: "resume" }),
-    missionCurrent: async (args) =>
-      record("missionCurrent", [args], { kind: "verification", text: "current" }),
-    missionComplete: async (args) =>
-      record("missionComplete", [args], { kind: "verification", text: "complete" }),
-    missionBreakLock: async (args) =>
-      record("missionBreakLock", [args], { kind: "verification", text: "break-lock" }),
-    missionAbandon: async (args) =>
-      record("missionAbandon", [args], { kind: "verification", text: "abandon" }),
-    agentBrief: async (args) =>
-      record("agentBrief", [args], { kind: "verification", text: "brief" }),
-    verifySubmission: async (args) =>
-      record("verifySubmission", [args], { kind: "verification", text: "submission" }),
-    verifyLink: async (args) =>
-      record("verifyLink", [args], { kind: "verification", text: "link" }),
-    verifyMerge: async (args) =>
-      record("verifyMerge", [args], { kind: "verification", text: "merge" }),
-    journey: async () => record("journey", [], { kind: "verification", text: "journey" }),
-    progress: async () => record("progress", [], { kind: "verification", text: "progress" }),
-    preferencesGet: async () =>
-      record("preferencesGet", [], { kind: "verification", text: "prefs-get" }),
-    preferencesSet: async (args) =>
-      record("preferencesSet", [args], { kind: "verification", text: "prefs-set" }),
+    find: async (args, ctx) =>
+      record("find", args, ctx, { kind: "verification", text: "find" }),
+    authLogin: async (args, ctx) => record("authLogin", args, ctx, authStatusView("CONNECTED")),
+    authStatus: async (args, ctx) => record("authStatus", args, ctx, authStatusView("CONNECTED")),
+    authLogout: async (args, ctx) => record("authLogout", args, ctx, authStatusView("LOGGED_OUT")),
+    missionAccept: async (args, ctx) =>
+      record("missionAccept", args, ctx, { kind: "verification", text: "accept" }),
+    missionPrepare: async (args, ctx) =>
+      record("missionPrepare", args, ctx, { kind: "verification", text: "prepare" }),
+    missionResume: async (args, ctx) =>
+      record("missionResume", args, ctx, { kind: "verification", text: "resume" }),
+    missionCurrent: async (args, ctx) =>
+      record("missionCurrent", args, ctx, { kind: "verification", text: "current" }),
+    missionComplete: async (args, ctx) =>
+      record("missionComplete", args, ctx, { kind: "verification", text: "complete" }),
+    missionBreakLock: async (args, ctx) =>
+      record("missionBreakLock", args, ctx, { kind: "verification", text: "break-lock" }),
+    missionAbandon: async (args, ctx) =>
+      record("missionAbandon", args, ctx, { kind: "verification", text: "abandon" }),
+    agentBrief: async (args, ctx) =>
+      record("agentBrief", args, ctx, { kind: "verification", text: "brief" }),
+    verifySubmission: async (args, ctx) =>
+      record("verifySubmission", args, ctx, { kind: "verification", text: "submission" }),
+    verifyLink: async (args, ctx) =>
+      record("verifyLink", args, ctx, { kind: "verification", text: "link" }),
+    verifyMerge: async (args, ctx) =>
+      record("verifyMerge", args, ctx, { kind: "verification", text: "merge" }),
+    journey: async (args, ctx) => record("journey", args, ctx, { kind: "verification", text: "journey" }),
+    progress: async (args, ctx) => record("progress", args, ctx, { kind: "verification", text: "progress" }),
+    preferencesGet: async (args, ctx) =>
+      record("preferencesGet", args, ctx, { kind: "verification", text: "prefs-get" }),
+    preferencesSet: async (args, ctx) =>
+      record("preferencesSet", args, ctx, { kind: "verification", text: "prefs-set" }),
     ...overrides,
   };
   return { handlers: base, calls };
@@ -91,14 +94,16 @@ describe("createProgram command routing", () => {
   it("routes find with mood and type", async () => {
     const { handlers: h, calls } = handlers();
     await parse(h, ["find", "--mood", "QUICK_WIN", "--type", "BUG_FIX"]);
-    expect(calls).toEqual([{ handler: "find", args: [{ mood: "QUICK_WIN", type: "BUG_FIX" }] }]);
+    expect(calls).toEqual([
+      { handler: "find", args: [{ mood: "QUICK_WIN", type: "BUG_FIX" }, {}] },
+    ]);
   });
 
   it("routes mission accept with a required recommendation id", async () => {
     const { handlers: h, calls } = handlers();
     await parse(h, ["mission", "accept", "--id", "challenge-42"]);
     expect(calls).toEqual([
-      { handler: "missionAccept", args: [{ recommendationId: "challenge-42" }] },
+      { handler: "missionAccept", args: [{ recommendationId: "challenge-42" }, {}] },
     ]);
   });
 
@@ -120,7 +125,7 @@ describe("createProgram command routing", () => {
     const { handlers: h, calls } = handlers();
     await parse(h, ["mission", "accept", "--id", "challenge-42"]);
     expect(calls).toEqual([
-      { handler: "missionAccept", args: [{ recommendationId: "challenge-42" }] },
+      { handler: "missionAccept", args: [{ recommendationId: "challenge-42" }, {}] },
     ]);
   });
 
@@ -150,13 +155,15 @@ describe("createProgram command routing", () => {
       "missionCurrent",
       "missionComplete",
     ]);
-    expect(calls[0]?.args).toEqual([{ missionId: "m1" }]);
+    expect(calls[0]?.args).toEqual([{ missionId: "m1" }, {}]);
   });
 
   it("routes mission break-lock with --id", async () => {
     const { handlers: h, calls } = handlers();
     await parse(h, ["mission", "break-lock", "--id", "m1"]);
-    expect(calls).toEqual([{ handler: "missionBreakLock", args: [{ missionId: "m1" }] }]);
+    expect(calls).toEqual([
+      { handler: "missionBreakLock", args: [{ missionId: "m1" }, {}] },
+    ]);
   });
 
   it("rejects mission break-lock without --id before the handler runs", async () => {
@@ -175,14 +182,14 @@ describe("createProgram command routing", () => {
     const { handlers: h, calls } = handlers();
     await parse(h, ["mission", "abandon", "--id", "m1", "--reason", "too hard"]);
     expect(calls).toEqual([
-      { handler: "missionAbandon", args: [{ missionId: "m1", reason: "too hard" }] },
+      { handler: "missionAbandon", args: [{ missionId: "m1", reason: "too hard" }, {}] },
     ]);
   });
 
   it("routes agent brief with --hypothesis", async () => {
     const { handlers: h, calls } = handlers();
     await parse(h, ["agent", "brief", "--hypothesis", "null check"]);
-    expect(calls).toEqual([{ handler: "agentBrief", args: [{ hypothesis: "null check" }] }]);
+    expect(calls).toEqual([{ handler: "agentBrief", args: [{ hypothesis: "null check" }, {}] }]);
   });
 
   it("routes verify submission, link, and merge with --pr", async () => {
@@ -191,7 +198,7 @@ describe("createProgram command routing", () => {
     await parse(h, ["verify", "link", "--pr", "42"]);
     await parse(h, ["verify", "merge", "--pr", "42"]);
     expect(calls.map((c) => c.handler)).toEqual(["verifySubmission", "verifyLink", "verifyMerge"]);
-    expect(calls[0]?.args).toEqual([{ prNumber: 42 }]);
+    expect(calls[0]?.args).toEqual([{ prNumber: 42 }, {}]);
   });
 
   it("routes journey, progress, and preferences get/set", async () => {
@@ -206,13 +213,13 @@ describe("createProgram command routing", () => {
       "preferencesGet",
       "preferencesSet",
     ]);
-    expect(calls[3]?.args).toEqual([{ language: "ts", mode: "EXPERT" }]);
+    expect(calls[3]?.args).toEqual([{ language: "ts", mode: "EXPERT" }, {}]);
   });
 
   it("routes the legacy top-level current command", async () => {
     const { handlers: h, calls } = handlers();
     await parse(h, ["current"]);
-    expect(calls).toEqual([{ handler: "missionCurrent", args: [{}] }]);
+    expect(calls).toEqual([{ handler: "missionCurrent", args: [{}, {}] }]);
   });
 
   it("emits JSON output with --json", async () => {
@@ -255,7 +262,7 @@ describe("createProgram auth commands", () => {
   it("routes auth status", async () => {
     const { handlers: h, calls } = handlers();
     await parse(h, ["auth", "status"]);
-    expect(calls).toEqual([{ handler: "authStatus", args: [] }]);
+    expect(calls).toEqual([{ handler: "authStatus", args: [{}, {}] }]);
   });
 
   it("prints the connected login on stdout for auth status", async () => {
@@ -283,13 +290,16 @@ describe("createProgram auth commands", () => {
   it("routes auth logout with the confirmation token", async () => {
     const { handlers: h, calls } = handlers();
     await parse(h, ["auth", "logout", "--confirm", "github.com"]);
-    expect(calls).toEqual([{ handler: "authLogout", args: [{ confirmation: "github.com" }] }]);
+    expect(calls).toEqual([
+      { handler: "authLogout", args: [{ confirmation: "github.com" }, {}] },
+    ]);
   });
+
 
   it("routes auth logout without a confirmation so the use case can refuse", async () => {
     const { handlers: h, calls } = handlers();
     await parse(h, ["auth", "logout"]);
-    expect(calls).toEqual([{ handler: "authLogout", args: [{ confirmation: undefined }] }]);
+    expect(calls).toEqual([{ handler: "authLogout", args: [{ confirmation: undefined }, {}] }]);
   });
 
   it("accepts --no-browser on the root program", () => {
@@ -314,8 +324,8 @@ describe("createProgram auth commands", () => {
     const { handlers: base } = handlers();
     const h: CommandHandlers = {
       ...base,
-      authLogin: async (args) => {
-        args.onNotice?.({
+      authLogin: async (_args, context) => {
+        context.onNotice?.({
           kind: "device-authorization",
           verificationUri: "https://github.com/login/device",
           userCode: "ABCD-1234",
@@ -340,8 +350,8 @@ describe("createProgram auth commands", () => {
     const { handlers: base } = handlers();
     const h: CommandHandlers = {
       ...base,
-      authLogin: async (args) => {
-        args.onNotice?.({
+      authLogin: async (_args, context) => {
+        context.onNotice?.({
           kind: "device-authorization",
           verificationUri: "https://github.com/login/device",
           userCode: "ABCD-1234",
@@ -391,14 +401,14 @@ describe("createProgram auth login guidance", () => {
   function loginWithLaunch(base: CommandHandlers, launched: boolean): CommandHandlers {
     return {
       ...base,
-      authLogin: async (args) => {
-        args.onNotice?.({
+      authLogin: async (_args, context) => {
+        context.onNotice?.({
           kind: "device-authorization",
           verificationUri: "https://github.com/login/device",
           userCode: "WDJB-MJHT",
         });
         if (launched) {
-          args.onNotice?.({
+          context.onNotice?.({
             kind: "verification",
             text: "Opened your browser to complete authentication.",
           });
@@ -427,5 +437,67 @@ describe("createProgram auth login guidance", () => {
     const { handlers: base } = handlers();
     const { err } = await parse(loginWithLaunch(base, true), ["auth", "login"]);
     expect(err.split("WDJB-MJHT").length - 1).toBe(1);
+  });
+});
+
+describe("createProgram command context forwarding", () => {
+  it("forwards the program signal into the auth status handler context", async () => {
+    const signal = new AbortController().signal;
+    const authStatus = vi.fn().mockResolvedValue(authStatusView("CONNECTED"));
+    const c = capture();
+    const program = createProgram({
+      handlers: handlers({ authStatus }).handlers,
+      stdout: c.stdout,
+      stderr: c.stderr,
+      signal,
+    });
+    await program.parseAsync(["node", "kestrel", "auth", "status"]);
+    expect(authStatus).toHaveBeenCalledWith({}, { signal });
+  });
+
+  it("forwards the program signal into the find handler context", async () => {
+    const signal = new AbortController().signal;
+    const find = vi.fn().mockResolvedValue({ kind: "verification" as const, text: "find" });
+    const c = capture();
+    const program = createProgram({
+      handlers: handlers({ find }).handlers,
+      stdout: c.stdout,
+      stderr: c.stderr,
+      signal,
+    });
+    await program.parseAsync(["node", "kestrel", "find", "--mood", "QUICK_WIN"]);
+    expect(find).toHaveBeenCalledWith({ mood: "QUICK_WIN" }, { signal });
+  });
+
+  it("forwards an empty context when no signal is supplied to the program", async () => {
+    const authStatus = vi.fn().mockResolvedValue(authStatusView("CONNECTED"));
+    const c = capture();
+    const program = createProgram({
+      handlers: handlers({ authStatus }).handlers,
+      stdout: c.stdout,
+      stderr: c.stderr,
+    });
+    await program.parseAsync(["node", "kestrel", "auth", "status"]);
+    expect(authStatus).toHaveBeenCalledWith({}, {});
+  });
+
+  it("forwards auth login's onNotice through the context", async () => {
+    const authLogin = vi.fn().mockImplementation(async (_args, context) => {
+      context.onNotice?.({
+        kind: "device-authorization",
+        verificationUri: "https://github.com/login/device",
+        userCode: "ABCD-1234",
+      });
+      return authStatusView("CONNECTED");
+    });
+    const c = capture();
+    const program = createProgram({
+      handlers: handlers({ authLogin }).handlers,
+      stdout: c.stdout,
+      stderr: c.stderr,
+    });
+    await program.parseAsync(["node", "kestrel", "auth", "login"]);
+    expect(authLogin).toHaveBeenCalledWith({}, expect.objectContaining({ onNotice: expect.any(Function) }));
+    expect(c.getErr()).toContain("ABCD-1234");
   });
 });

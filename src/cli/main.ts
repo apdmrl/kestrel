@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 import { render } from "ink";
 import { createElement } from "react";
 import { bootstrap, createConfig } from "../bootstrap/index.js";
@@ -39,10 +40,12 @@ export async function main(): Promise<void> {
   };
   process.on("SIGINT", onSignal);
   process.on("SIGTERM", onSignal);
+  // Bootstrap is signal-free in Task 2: every handler now reads its
+  // AbortSignal from per-invocation CommandContext. The process-lifetime
+  // signal is threaded only into the entry surfaces below.
   const handlers = await bootstrap(config, {
     interactive,
     openBrowser,
-    signal: controller.signal,
     recover: !isBreakLock,
   });
   try {
@@ -51,10 +54,6 @@ export async function main(): Promise<void> {
         createElement(Session, {
           handlers,
           signal: controller.signal,
-          onCancel: () => {
-            controller.abort();
-            app.unmount();
-          },
         }),
         { exitOnCtrlC: false },
       );
@@ -64,7 +63,7 @@ export async function main(): Promise<void> {
       if (controller.signal.aborted) closeOnAbort();
       await waitForExit;
     } else {
-      const program = createProgram({ handlers });
+      const program = createProgram({ handlers, signal: controller.signal });
       await program.parseAsync(process.argv);
     }
   } catch (error) {
