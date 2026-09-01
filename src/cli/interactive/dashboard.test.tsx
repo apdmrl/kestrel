@@ -223,6 +223,14 @@ describe("dashboard shell", () => {
     );
     expect(lastFrame()).toContain("*-");
   });
+  it("renders a focused-disabled nav item with `> x` markers", () => {
+    const { lastFrame } = render(
+      <Box>
+        <NavItem icon="⌕" label="Find" focused availability="disabled" />
+      </Box>,
+    );
+    expect(lastFrame()).toContain("> x");
+  });
 
   it("exposes focus/selection/availability markers even when color is disabled", () => {
     const noColor: TerminalCapabilities = { columns: 80, rows: 24, color: false };
@@ -234,8 +242,25 @@ describe("dashboard shell", () => {
     expect(lastFrame()).toContain(">*x");
     void noColor;
   });
-});
 
+  it("exposes `> x` for a focused-disabled row even when color is disabled", () => {
+    const { lastFrame } = render(
+      <Box>
+        <NavItem icon="⌕" label="Find" focused availability="disabled" colorize={false} />
+      </Box>,
+    );
+    expect(lastFrame()).toContain("> x");
+  });
+
+  it("exposes ` *-` for a selected-enabled row even when color is disabled", () => {
+    const { lastFrame } = render(
+      <Box>
+        <NavItem icon="⌕" label="Find" selected availability="enabled" colorize={false} />
+      </Box>,
+    );
+    expect(lastFrame()).toContain(" *-");
+  });
+});
 describe("ContextActions", () => {
   afterEach(() => cleanup());
 

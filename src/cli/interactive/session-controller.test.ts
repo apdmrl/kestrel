@@ -134,6 +134,31 @@ describe("session controller", () => {
     }
   });
 
+  it("does not pre-render text on output variants", async () => {
+    const commandHandlers = handlers();
+    const controller = createSessionController(commandHandlers);
+    const result = await controller({ kind: "journey" }, emptyContext);
+    if (result.kind !== "output") throw new Error("expected output");
+    expect(result.view).toBe(view);
+    // Output variants carry only the ViewModel; rendering is the consumer's job.
+    expect("text" in result).toBe(false);
+  });
+
+  it("does not pre-render text on error variants", async () => {
+    const commandHandlers = handlers();
+    vi.mocked(commandHandlers.progress).mockRejectedValueOnce(new Error("boom"));
+    const controller = createSessionController(commandHandlers);
+    const result = await controller({ kind: "progress" }, emptyContext);
+    if (result.kind !== "error") throw new Error("expected error");
+    expect(result.view).toEqual({
+      kind: "error",
+      code: "UNKNOWN",
+      userMessage: "boom",
+      suggestedActions: [],
+    });
+    expect("text" in result).toBe(false);
+  });
+
   it("carries the raw view model from successful and failed handlers", async () => {
     const commandHandlers = handlers();
     vi.mocked(commandHandlers.progress).mockRejectedValueOnce(new Error("boom"));
@@ -210,7 +235,6 @@ describe("session controller", () => {
     expect(await controller({ kind: "auth-login" }, emptyContext)).toMatchObject({
       kind: "output",
       view: view,
-      text: expect.any(String),
     });
   });
 

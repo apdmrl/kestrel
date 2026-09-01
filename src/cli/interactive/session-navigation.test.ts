@@ -49,6 +49,7 @@ describe("actionsForSection — auth", () => {
     readonly expectations: {
       readonly primaryId: string;
       readonly primaryCommand: string;
+      readonly primaryDisabled?: boolean;
       readonly recoveryIds?: readonly string[];
     };
   }> = [
@@ -92,7 +93,11 @@ describe("actionsForSection — auth", () => {
     {
       label: "logging-in",
       state: { status: "logging-in", phase: "starting" },
-      expectations: { primaryId: "auth.cancel", primaryCommand: "/auth cancel" },
+      expectations: {
+        primaryId: "auth.cancel-instruction",
+        primaryCommand: "",
+        primaryDisabled: true,
+      },
     },
   ];
 
@@ -101,7 +106,8 @@ describe("actionsForSection — auth", () => {
       const actions = actionsForSection("auth", state, null);
       const primary = actions.find((action) => action.id === expectations.primaryId);
       expect(primary?.command).toBe(expectations.primaryCommand);
-      expect(primary?.availability.status).toBe("enabled");
+      const expectedStatus = expectations.primaryDisabled === true ? "disabled" : "enabled";
+      expect(primary?.availability.status).toBe(expectedStatus);
       if (expectations.recoveryIds) {
         for (const id of expectations.recoveryIds) {
           const recovery = actions.find((action) => action.id === id);
@@ -110,7 +116,22 @@ describe("actionsForSection — auth", () => {
         }
       }
     });
-  }
+   }
+
+  it("surfaces logging-in cancellation as a disabled, non-routable instruction", () => {
+    const actions = actionsForSection(
+      "auth",
+      { status: "logging-in", phase: "starting" },
+      null,
+    );
+    const cancel = actions.find((action) => action.id === "auth.cancel-instruction");
+    expect(cancel, "expected logging-in cancel instruction").toBeDefined();
+    // The slash command must not be routable while the device flow is in flight.
+    expect(cancel?.command).toBe("");
+    expect(cancel?.availability.status).toBe("disabled");
+    // The session must never advertise `/auth cancel` as an enabled action.
+    expect(actions.find((action) => action.command === "/auth cancel")).toBeUndefined();
+  });
 });
 
 describe("actionsForSection — Find availability", () => {
@@ -146,6 +167,35 @@ describe("actionsForSection — Find availability", () => {
     expect(find?.availability?.recoveryCommand).toBe("/auth status");
     expect(status?.command).toBe("/auth status");
     expect(status?.availability).toEqual({ status: "enabled" });
+  });
+
+  it("disables Find during checking auth with /auth status recovery", () => {
+    const actions = actionsForSection("find", { status: "checking", attemptId: 1 }, null);
+    const find = actions.find((action) => action.id === "find.run");
+    const status = actions.find((action) => action.id === "auth.status");
+    expect(find?.availability).toMatchObject({ status: "disabled" });
+    expect(find?.availability?.recoveryCommand).toBe("/auth status");
+    expect(status?.command).toBe("/auth status");
+  });
+
+  it("disables Mission, Agent, and Verify during checking auth with /auth status recovery", () => {
+    for (const section of ["mission", "agent", "verify"] as const) {
+      const actions = actionsForSection(section, { status: "checking", attemptId: 1 }, null);
+      const recovery = actions.find(
+        (action) => action.id === "auth.status" || action.id === "auth.login",
+      );
+      expect(recovery, `expected recovery action for ${section}`).toBeDefined();
+      expect(recovery?.command).toBe("/auth status");
+      // Every GitHub-dependent base action is disabled with /auth status recovery.
+      const disabledActions = actions.filter(
+        (action) => action.availability.status === "disabled",
+      );
+      expect(disabledActions.length, `expected disabled actions for ${section}`).toBeGreaterThan(0);
+      for (const action of disabledActions) {
+        if (action.availability.status !== "disabled") continue;
+        expect(action.availability.recoveryCommand).toBe("/auth status");
+      }
+    }
   });
 });
 

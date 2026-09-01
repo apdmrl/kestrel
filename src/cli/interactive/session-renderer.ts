@@ -9,6 +9,12 @@ import { renderPlain } from "../presentation/plain-renderer.js";
  *
  * Plain (`kestrel auth login`) and JSON renderers are unchanged. Shell- and
  * JSON-oriented recovery strings never appear inside the interactive renderer.
+ *
+ * Error handling keeps every `suggestedActions` entry: only the shell-style
+ * `kestrel auth login` / `kestrel auth status` tokens are translated into
+ * their slash equivalents, surrounding guidance is preserved verbatim. The
+ * generated "Run /auth <verb> to continue." line is appended only when no
+ * identical line already exists in the rendered output.
  */
 
 export interface SessionRenderedView {
@@ -20,6 +26,22 @@ export interface SessionRenderedView {
 const AUTH_LOGIN = "/auth login";
 const AUTH_STATUS = "/auth status";
 
+// Match shell-style `kestrel auth <verb>` tokens inside the suggestedActions
+// guidance. Whitespace is permissive because use cases write the command
+// differently ("kestrel auth login", "`kestrel auth login`", "kestrel  auth
+//  login"). Capture the verb so the replacement keeps the surrounding text.
+const SHELL_AUTH_COMMAND = /kestrel\s+auth\s+(login|status)/giu;
+
+/**
+ * Translate the shell-style auth command tokens inside a suggested action
+ * string into their slash equivalents. The surrounding guidance is preserved
+ * verbatim so users still see "to authenticate, then retry" etc.
+ */
+function translateShellAuthCommand(suggestion: string): string {
+  return suggestion.replace(SHELL_AUTH_COMMAND, (_, verb: string) =>
+    verb.toLowerCase() === "status" ? AUTH_STATUS : AUTH_LOGIN,
+  );
+}
 function authStatusText(view: Extract<ViewModel, { kind: "auth-status" }>): SessionRenderedView {
   switch (view.detail) {
     case "NOT_CONNECTED":
@@ -65,19 +87,32 @@ function authErrorToRecovery(code: string): string | undefined {
       return undefined;
   }
 }
-
 function renderSessionError(view: Extract<ViewModel, { kind: "error" }>): SessionRenderedView {
   if (view.code === "DM_GITHUB_AUTH_CANCELLED") {
     return { kind: "output", text: view.userMessage };
   }
   const recovery = authErrorToRecovery(view.code);
-  const lines: string[] = [`Error [${view.code}]: ${view.userMessage}`];
+  const header = `Error [${view.code}]: ${view.userMessage}`;
+  const lines: string[] = [header];
+  // Track canonical lines (without a leading bullet) for each rendered
+  // suggestedAction so the generated recovery line below can be deduped
+  // against identical guidance regardless of bullet prefix.
+  const renderedCanonical = new Set<string>([header]);
+  // Translate shell-style auth tokens in every suggested action into the
+  // slash equivalent, then keep the surrounding guidance verbatim. No
+  // guidance is dropped just because it carries the shell command.
+  for (const action of view.suggestedActions) {
+    const translated = translateShellAuthCommand(action);
+    lines.push(`- ${translated}`);
+    renderedCanonical.add(translated);
+  }
+  // Append the recovery line only when the suggestedActions did not already
+  // cover it with an identical line. Two unique pieces of guidance are never
+  // collapsed; only literal duplicates are deduped.
   if (recovery !== undefined) {
-    lines.push(`Run ${recovery} to continue.`);
-  } else {
-    for (const action of view.suggestedActions) {
-      if (/kestrel\s+auth\s+login/u.test(action)) continue;
-      lines.push(`- ${action}`);
+    const recoveryLine = `Run ${recovery} to continue.`;
+    if (!renderedCanonical.has(recoveryLine)) {
+      lines.push(recoveryLine);
     }
   }
   return {
@@ -96,7 +131,6 @@ function renderDeviceAuthorization(
     recoveryCommand: AUTH_LOGIN,
   };
 }
-
 /**
  * Convert a view model into the textual shape the session transcript expects.
  * Errors render as `error` entries (red action-required cards) unless the

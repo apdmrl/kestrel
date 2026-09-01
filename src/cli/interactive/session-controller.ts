@@ -1,31 +1,32 @@
 import type { CommandContext, CommandHandlers } from "../command-handlers.js";
 import { errorViewModel } from "../presentation/view-models.js";
-import { renderPlain } from "../presentation/plain-renderer.js";
 import type { ViewModel } from "../presentation/view-models.js";
 import type { SessionCommand } from "./session-parser.js";
 
 export type SessionControllerResult =
-  | { readonly kind: "output"; readonly view: ViewModel; readonly text: string }
+  | { readonly kind: "output"; readonly view: ViewModel }
   | { readonly kind: "clear" }
   | { readonly kind: "exit" }
-  | { readonly kind: "error"; readonly view: ViewModel; readonly text: string };
+  | { readonly kind: "error"; readonly view: ViewModel };
 
 /**
  * Build the session command router.
  *
  * `notify` receives interim guidance that arrives while a command is still
  * running, such as device-flow instructions. The session appends it to the
- * transcript; writing it directly to stderr would corrupt the Ink frame.
+ * transcript through `renderSessionView`; writing it directly to stderr would
+ * corrupt the Ink frame.
  *
  * The returned callback accepts an explicit `CommandContext` for each parsed
  * command so the session runtime owns the per-command signal lifecycle and
  * can interrupt a single operation without aborting the whole session.
  *
- * Controller results carry both the raw `ViewModel` and a plain-rendered
- * `text` snapshot. The interactive session can route them through
- * `renderSessionView` (preferred for auth/error/device recovery) or fall
- * back to the pre-rendered text. The one-shot CLI keeps using `renderPlain`
- * directly. Interim notices also carry a `ViewModel`.
+ * Controller results carry only the raw `ViewModel` for output and error
+ * variants. The session renders those view models through `renderSessionView`
+ * so error/auth/device paths use interactive slash-command recovery instead
+ * of shell-style `kestrel auth login` text. The one-shot CLI keeps using
+ * `renderPlain` directly on the same view model. Interim notices also carry
+ * a `ViewModel`.
  */
 export function createSessionController(
   handlers: CommandHandlers,
@@ -37,7 +38,7 @@ export function createSessionController(
         kind: "verification",
         text: "/help  /clear  /exit\n/auth login  /auth status  /auth logout --confirm github.com\n/find  /mission current  /mission ...\n/progress  /journey  /preferences ...",
       };
-      return { kind: "output", view, text: renderPlain(view) };
+      return { kind: "output", view };
     }
     if (command.kind === "clear") return { kind: "clear" };
     if (command.kind === "exit") return { kind: "exit" };
@@ -164,10 +165,10 @@ export function createSessionController(
           );
           break;
       }
-      return { kind: "output", view, text: renderPlain(view) };
+      return { kind: "output", view };
     } catch (error) {
       const errorView = errorViewModel(error);
-      return { kind: "error", view: errorView, text: renderPlain(errorView) };
+      return { kind: "error", view: errorView };
     }
   };
 }

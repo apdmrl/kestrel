@@ -120,6 +120,93 @@ describe("renderSessionView — error", () => {
   });
 });
 
+describe("renderSessionView — unique guidance", () => {
+  it("translates kestrel auth login tokens and keeps surrounding guidance", () => {
+    const error = createKestrelError({
+      code: "DM_GITHUB_AUTH_REQUIRED",
+      category: "USER_ACTION_REQUIRED",
+      userMessage: "GitHub authentication is required to continue",
+      suggestedActions: ["Run 'kestrel auth login' to authenticate, then retry"],
+      retryability: "manual",
+      recoveryStrategy: "USER_GUIDED",
+      severity: "blocking",
+    });
+    const rendered = renderSessionView(errorViewModel(error));
+    expect(rendered.text).not.toContain("kestrel auth login");
+    expect(rendered.text).toContain("to authenticate, then retry");
+    expect(rendered.text).toContain("Run '/auth login' to authenticate, then retry");
+  });
+
+  it("preserves every suggestedAction and never drops surrounding guidance", () => {
+    const error = createKestrelError({
+      code: "DM_GITHUB_AUTH_REQUIRED",
+      category: "USER_ACTION_REQUIRED",
+      userMessage: "Auth missing",
+      suggestedActions: [
+        "Run 'kestrel auth login' to authenticate, then retry",
+        "Check the GitHub status page if the failure persists",
+        "Use a personal access token as a fallback",
+      ],
+      retryability: "manual",
+      recoveryStrategy: "USER_GUIDED",
+      severity: "blocking",
+    });
+    const rendered = renderSessionView(errorViewModel(error));
+    expect(rendered.text).toContain("to authenticate, then retry");
+    expect(rendered.text).toContain("Check the GitHub status page if the failure persists");
+    expect(rendered.text).toContain("Use a personal access token as a fallback");
+  });
+
+  it("translates kestrel auth status into /auth status", () => {
+    const error = createKestrelError({
+      code: "DM_NETWORK_UNAVAILABLE",
+      category: "TRANSIENT",
+      userMessage: "Network is unavailable",
+      suggestedActions: ["Run `kestrel auth status` to re-check"],
+      retryability: "transient",
+      recoveryStrategy: "AUTO_RETRY",
+      severity: "warning",
+    });
+    const rendered = renderSessionView(errorViewModel(error));
+    expect(rendered.text).toContain("Run `/auth status` to re-check");
+    expect(rendered.text).not.toContain("kestrel auth status");
+  });
+
+  it("deduplicates only an identical generated recovery line", () => {
+    const error = createKestrelError({
+      code: "DM_GITHUB_AUTH_REQUIRED",
+      category: "USER_ACTION_REQUIRED",
+      userMessage: "Auth missing",
+      suggestedActions: ["Run /auth login to continue."],
+      retryability: "manual",
+      recoveryStrategy: "USER_GUIDED",
+      severity: "blocking",
+    });
+    const rendered = renderSessionView(errorViewModel(error));
+    const occurrences = rendered.text.split("Run /auth login to continue.").length - 1;
+    expect(occurrences).toBe(1);
+  });
+
+  it("keeps unique guidance even when it is not a literal duplicate", () => {
+    const error = createKestrelError({
+      code: "DM_GITHUB_AUTH_REQUIRED",
+      category: "USER_ACTION_REQUIRED",
+      userMessage: "Auth missing",
+      suggestedActions: [
+        "Run /auth login, then re-run the command",
+        "Verify your network connection",
+      ],
+      retryability: "manual",
+      recoveryStrategy: "USER_GUIDED",
+      severity: "blocking",
+    });
+    const rendered = renderSessionView(errorViewModel(error));
+    expect(rendered.text).toContain("- Run /auth login, then re-run the command");
+    expect(rendered.text).toContain("Run /auth login to continue.");
+    expect(rendered.text).toContain("- Verify your network connection");
+  });
+});
+
 describe("renderSessionView — device-authorization", () => {
   it("includes the verification URI and user code once", () => {
     const view: ViewModel = {
@@ -130,7 +217,6 @@ describe("renderSessionView — device-authorization", () => {
     const rendered = renderSessionView(view);
     expect(rendered.text).toContain("https://github.com/login/device");
     expect(rendered.text).toContain("ABCD-1234");
-    // URI and code each appear exactly once.
     expect(rendered.text.split("https://github.com/login/device").length - 1).toBe(1);
     expect(rendered.text.split("ABCD-1234").length - 1).toBe(1);
   });

@@ -79,12 +79,15 @@ describe("session auth interaction", () => {
       });
       return view;
     });
-    const notices: string[] = [];
-    const controller = createSessionController(commandHandlers, (text) => notices.push(text));
+    const notices: ViewModel[] = [];
+    const controller = createSessionController(commandHandlers, (received) => notices.push(received));
     await controller({ kind: "auth-login" }, {});
     expect(notices).toHaveLength(1);
-    expect(notices[0]).toContain("https://github.com/login/device");
-    expect(notices[0]).toContain("ABCD-1234");
+    expect(notices[0]).toEqual({
+      kind: "device-authorization",
+      verificationUri: "https://github.com/login/device",
+      userCode: "ABCD-1234",
+    });
   });
 
   it("routes /auth status through the session to its handler", async () => {

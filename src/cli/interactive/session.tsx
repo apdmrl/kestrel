@@ -3,6 +3,7 @@ import { useRef, useState } from "react";
 import type { CommandHandlers } from "../command-handlers.js";
 import { createSessionController } from "./session-controller.js";
 import { parseSessionCommand, SessionParseError } from "./session-parser.js";
+import { renderSessionView } from "./session-renderer.js";
 import type { TranscriptEntry } from "./session-view-models.js";
 
 const MAX_TRANSCRIPT_ENTRIES = 200;
@@ -116,10 +117,14 @@ export function Session({ handlers, signal, onExit, onCancel }: SessionProps) {
     nextId.current += 1;
     setTranscript((entries) => appendEntry(entries, { id, kind, text }));
   };
-
   // Interim guidance (device-flow instructions) must land in the transcript.
-  // A raw stderr write would tear the Ink frame it renders inside.
-  const controller = createSessionController(handlers, (text) => addEntry("output", text));
+  // A raw stderr write would tear the Ink frame it renders inside. The
+  // controller delivers a `ViewModel`; route it through `renderSessionView` so
+  // auth/error/device paths use interactive slash-command recovery.
+  const controller = createSessionController(handlers, (received) => {
+    const rendered = renderSessionView(received);
+    addEntry(rendered.kind, rendered.text);
+  });
 
   const close = (): void => {
     if (closing.current) return;
@@ -157,10 +162,12 @@ export function Session({ handlers, signal, onExit, onCancel }: SessionProps) {
         setTranscript([]);
       } else if (result.kind === "exit") {
         close();
-      } else if (result.kind === "error") {
-        addEntry("error", result.text);
       } else {
-        addEntry("output", result.text);
+        // Render through `renderSessionView` so error/auth/device paths use
+        // slash-command recovery. Pre-rendered `text` is no longer shipped
+        // by the controller — the session owns presentation.
+        const rendered = renderSessionView(result.view);
+        addEntry(rendered.kind, rendered.text);
       }
     } catch (error) {
       addEntry("error", formatError(error));
@@ -168,7 +175,6 @@ export function Session({ handlers, signal, onExit, onCancel }: SessionProps) {
       setBusy(false);
     }
   };
-
   const drainQueue = async (commands: readonly string[]): Promise<void> => {
     commandQueue.current.push(...commands);
     if (drainingQueue.current) return;

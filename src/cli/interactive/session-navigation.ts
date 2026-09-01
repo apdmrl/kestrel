@@ -197,12 +197,20 @@ function authActions(auth: SessionAuthState): readonly SessionAction[] {
         },
       ];
     case "logging-in":
+      // Behaviour (cancel the in-flight login) is owned by Task 5: pressing
+      // Ctrl+C during the device-flow must abort the login child and restore
+      // the prior auth state. Until that runtime lands, surface the
+      // instruction as a disabled, non-routable action so the sidebar never
+      // emits an unrouteable `/auth cancel` slash command.
       return [
         {
-          id: "auth.cancel",
+          id: "auth.cancel-instruction",
           label: "Cancel login (Ctrl+C)",
-          command: "/auth cancel",
-          availability: ENABLED,
+          command: "",
+          availability: {
+            status: "disabled",
+            reason: "Press Ctrl+C to cancel the in-flight login. Slash command is not available.",
+          },
         },
       ];
   }
@@ -213,13 +221,13 @@ function deriveGitHubActions(
   auth: SessionAuthState,
 ): readonly SessionAction[] {
   if (auth.status === "connected") return base;
-  const recoveryCommand = auth.status === "unknown" ? "/auth status" : "/auth login";
+  // `checking` and `unknown` both surface `/auth status`: while the session
+  // is still verifying the credential the recovery is "check first"; only
+  // `required`, `expired`, and `logging-in` mean "log in now".
+  const recoveryCommand =
+    auth.status === "unknown" || auth.status === "checking" ? "/auth status" : "/auth login";
   const loginLabel =
-    auth.status === "expired"
-      ? "Re-authenticate GitHub"
-      : auth.status === "checking"
-        ? "Wait for authentication, then /auth status"
-        : "Log in to GitHub";
+    auth.status === "expired" ? "Re-authenticate GitHub" : "Log in to GitHub";
   return [
     ...base.map((action) => ({
       ...action,
@@ -233,7 +241,6 @@ function deriveGitHubActions(
     },
   ];
 }
-
 function withAcceptAction(
   base: readonly SessionAction[],
   recommendation: RecommendationViewModel | null,
