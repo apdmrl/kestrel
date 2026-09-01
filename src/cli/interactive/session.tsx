@@ -15,6 +15,7 @@ import {
 import { actionsForSection, NAVIGATION_SECTIONS } from "./session-navigation.js";
 import { parseSessionCommand, SessionParseError } from "./session-parser.js";
 import { renderSessionView } from "./session-renderer.js";
+import { createChildOperation, runStartupAuth } from "./session-runtime.js";
 import {
   initialSessionState,
   sessionReducer,
@@ -42,7 +43,6 @@ export interface SessionProps {
   readonly handlers: CommandHandlers;
   readonly signal: AbortSignal;
   readonly onExit?: () => void;
-  readonly onCancel?: () => void;
   /**
    * Test-injected terminal capabilities. When omitted (the runtime case
    * `src/cli/main.ts` exercises), the Session derives columns/rows from
@@ -171,7 +171,6 @@ export function Session({
   handlers,
   signal,
   onExit,
-  onCancel,
   capabilities: capabilitiesProp,
   initialInput = "",
   initialCategory,
@@ -235,6 +234,27 @@ export function Session({
   const reducerLatestRecommendation = reducerState.latestRecommendation;
   const [latestRecommendation, setLatestRecommendation] =
     useState<RecommendationViewModel | null>(latestRecommendationProp);
+  const activeOperation = useRef<{ controller: AbortController; dispose: () => void } | null>(null);
+  const operationRunning = useRef(false);
+  useEffect(() => {
+    if (signal.aborted) return;
+    let cancelled = false;
+    void runStartupAuth({
+      handlers,
+      parentSignal: signal,
+      attemptId: nextAttemptId.current,
+      dispatch: (event) => {
+        if (cancelled) return;
+        dispatch(event);
+      },
+    }).catch(() => {
+      // runStartupAuth never rejects; swallow defensive future changes.
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const latestRecommendationRef = useRef<RecommendationViewModel | null>(latestRecommendationProp);
   // The reducer reports `latestRecommendation` via `OPERATION_SUCCEEDED`;
   // mirror it into React state so the contextual action panel sees the
@@ -324,9 +344,18 @@ export function Session({
         cancellable: true,
       });
     }
+    // Install the per-command child operation so busy Ctrl+C aborts ONLY
+    // this handler, not the lifetime signal. The ref is cleared in
+    // `finally` only when its ID still matches — a stale child can't
+    // clobber a freshly installed one.
+    const child = createChildOperation(signal);
+    activeOperation.current = child;
+    operationRunning.current = true;
+    const capturedOperationId = operationId;
+    const capturedAttemptId = attemptId;
     setBusy(true);
     try {
-      const result = await controller(parsed, { signal });
+      const result = await controller(parsed, { signal: child.controller.signal });
       if (result.kind === "clear") {
         setTranscript([]);
       } else if (result.kind === "exit") {
@@ -344,10 +373,10 @@ export function Session({
         // succeeded) so the Find.run action remains enabled.
         if (isAuthStatus) {
           const errorCode = result.view.kind === "error" ? result.view.code : "UNKNOWN";
-          dispatch({ type: "AUTH_FAILED", attemptId, errorCode });
+          dispatch({ type: "AUTH_FAILED", attemptId: capturedAttemptId, errorCode });
         } else {
           const errorCode = result.view.kind === "error" ? result.view.code : "UNKNOWN";
-          dispatch({ type: "OPERATION_FAILED", operationId, errorCode });
+          dispatch({ type: "OPERATION_FAILED", operationId: capturedOperationId, errorCode });
         }
       } else {
         const rendered = renderSessionView(result.view);
@@ -358,30 +387,30 @@ export function Session({
             if (view.connected && view.login !== null) {
               dispatch({
                 type: "AUTH_RESOLVED",
-                attemptId,
+                attemptId: capturedAttemptId,
                 detail: "CONNECTED",
                 login: view.login,
               });
             } else if (view.detail === "EXPIRED") {
-              dispatch({ type: "AUTH_RESOLVED", attemptId, detail: "EXPIRED", login: null });
+              dispatch({ type: "AUTH_RESOLVED", attemptId: capturedAttemptId, detail: "EXPIRED", login: null });
             } else if (view.detail === "NOT_CONNECTED") {
               dispatch({
                 type: "AUTH_RESOLVED",
-                attemptId,
+                attemptId: capturedAttemptId,
                 detail: "NOT_CONNECTED",
                 login: null,
               });
             } else if (view.detail === "LOGGED_OUT") {
               dispatch({
                 type: "AUTH_RESOLVED",
-                attemptId,
+                attemptId: capturedAttemptId,
                 detail: "NOT_CONNECTED",
                 login: null,
               });
             }
           }
         } else {
-          dispatch({ type: "OPERATION_SUCCEEDED", operationId, view: result.view });
+          dispatch({ type: "OPERATION_SUCCEEDED", operationId: capturedOperationId, view: result.view });
         }
         if (result.view.kind === "recommendation") {
           captureRecommendation(result.view);
@@ -390,14 +419,24 @@ export function Session({
     } catch (error) {
       addEntry("error", formatError(error));
       if (isAuthStatus) {
-        dispatch({ type: "AUTH_FAILED", attemptId, errorCode: "UNKNOWN" });
+        dispatch({ type: "AUTH_FAILED", attemptId: capturedAttemptId, errorCode: "UNKNOWN" });
       } else {
-        dispatch({ type: "OPERATION_FAILED", operationId, errorCode: "UNKNOWN" });
+        dispatch({ type: "OPERATION_FAILED", operationId: capturedOperationId, errorCode: "UNKNOWN" });
       }
     } finally {
+      // Only clear the active ref if its ID still matches — a new
+      // operation may have already installed its own child.
+      if (activeOperation.current === child) {
+        activeOperation.current = null;
+        operationRunning.current = false;
+      }
+      child.dispose();
       setBusy(false);
     }
   };
+  // Cancel the in-flight foreground child operation. Busy Ctrl+C must
+  // abort only the current command so the session can keep accepting
+ // new ones; the lifetime signal stays untouched.
   const drainQueue = async (commands: readonly string[]): Promise<void> => {
     commandQueue.current.push(...commands);
     if (drainingQueue.current) return;
@@ -491,7 +530,12 @@ export function Session({
       }
       const transition = sessionInputTransition(input, typed, keyFlags, busy);
       if (transition.cancel) {
-        onCancel?.();
+        // Busy Ctrl+C aborts only the foreground child operation; the
+        // session remains active so the user can run another command.
+        // Idle Ctrl+C clears the prompt buffer.
+        if (operationRunning.current && activeOperation.current !== null) {
+          activeOperation.current.controller.abort();
+        }
         return;
       }
       if (transition.submit) {

@@ -1,18 +1,25 @@
 import { render as renderInk } from "ink";
 import { createElement } from "react";
-import { describe, expect, it, vi } from "vitest";
-import type { CommandHandlers } from "../command-handlers.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { CommandContext, CommandHandlers } from "../command-handlers.js";
 import type { ViewModel } from "../presentation/view-models.js";
 import { FakeInkStdin, FakeInkStdout } from "../../test-utils/ink-stdin.js";
 import { Session } from "./session.js";
 import { createSessionController } from "./session-controller.js";
 
 const view: ViewModel = { kind: "verification", text: "ok" };
-function handlers(): CommandHandlers {
+const notConnectedAuthStatus: ViewModel = {
+  kind: "auth-status",
+  connected: false,
+  login: null,
+  detail: "NOT_CONNECTED",
+};
+
+function handlers(overrides: Partial<CommandHandlers> = {}): CommandHandlers {
   return {
     find: vi.fn().mockResolvedValue(view),
     authLogin: vi.fn().mockResolvedValue(view),
-    authStatus: vi.fn().mockResolvedValue(view),
+    authStatus: vi.fn().mockResolvedValue(notConnectedAuthStatus),
     authLogout: vi.fn().mockResolvedValue(view),
     missionAccept: vi.fn().mockResolvedValue(view),
     missionPrepare: vi.fn().mockResolvedValue(view),
@@ -29,6 +36,7 @@ function handlers(): CommandHandlers {
     progress: vi.fn().mockResolvedValue(view),
     preferencesGet: vi.fn().mockResolvedValue(view),
     preferencesSet: vi.fn().mockResolvedValue(view),
+    ...overrides,
   };
 }
 
@@ -36,6 +44,7 @@ interface Harness {
   readonly stdin: FakeInkStdin;
   readonly stdout: FakeInkStdout;
   readonly unmount: () => void;
+  readonly lastFrame: () => string;
 }
 
 /**
@@ -46,24 +55,40 @@ interface Harness {
 function mount(props: {
   handlers: CommandHandlers;
   signal: AbortSignal;
-  onCancel?: () => void;
-  onExit?: () => void;
+  onSessionExit?: () => void;
 }): Harness {
   const stdin = new FakeInkStdin();
   const stdout = new FakeInkStdout();
-  const instance = renderInk(createElement(Session, props), {
-    // The fakes implement only the stream surface Ink touches.
-    stdin: stdin as unknown as NodeJS.ReadStream,
-    stdout: stdout as unknown as NodeJS.WriteStream,
-    exitOnCtrlC: false,
-    patchConsole: false,
-  });
-  return { stdin, stdout, unmount: () => instance.unmount() };
+  const instance = renderInk(
+    createElement(Session, {
+      handlers: props.handlers,
+      signal: props.signal,
+      onExit: props.onSessionExit,
+    }),
+    {
+      // The fakes implement only the stream surface Ink touches.
+      stdin: stdin as unknown as NodeJS.ReadStream,
+      stdout: stdout as unknown as NodeJS.WriteStream,
+      exitOnCtrlC: false,
+      patchConsole: false,
+      debug: true,
+    },
+  );
+  return {
+    stdin,
+    stdout,
+    unmount: () => instance.unmount(),
+    lastFrame: () => stdout.lastFrame(),
+  };
 }
 
 const settle = (ms = 60): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 describe("session auth interaction", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("renders device authorization guidance through the controller notify channel", async () => {
     // The session passes interim guidance (device-flow instructions) into the
     // controller's notify callback, which the session then appends to the
@@ -103,49 +128,142 @@ describe("session auth interaction", () => {
     }
   });
 
-  it("cancels an in-flight /auth login so the session can close", async () => {
+  it("aborts the in-flight login child signal on busy Ctrl+C and keeps the session active", async () => {
     const commandHandlers = handlers();
-    let release: (() => void) | undefined;
+    let capturedLoginSignal: AbortSignal | undefined;
+    let loginReject: ((reason: unknown) => void) | undefined;
     vi.mocked(commandHandlers.authLogin).mockImplementation(
-      async () =>
-        new Promise<ViewModel>((resolve) => {
-          release = () => resolve(view);
+      async (_args, context) =>
+        new Promise<ViewModel>((_resolve, reject) => {
+          capturedLoginSignal = context.signal;
+          // Real handlers observe the abort signal and reject with
+          // DM_GITHUB_AUTH_CANCELLED so the session can render a neutral
+          // "session remains active" message. Mirror that here.
+          context.signal?.addEventListener("abort", () => {
+            const err = Object.assign(new Error("Login was cancelled; the session remains active."), {
+              code: "DM_GITHUB_AUTH_CANCELLED",
+              name: "KestrelError",
+              category: "USER_ACTION_REQUIRED",
+              userMessage: "Login was cancelled; the session remains active.",
+              suggestedActions: ["Run /auth login when ready to authenticate again."],
+              retryability: "manual",
+              recoveryStrategy: "USER_GUIDED",
+              severity: "INFO",
+            });
+            reject(err);
+          });
+          loginReject = reject;
         }),
     );
-    const onCancel = vi.fn();
+    const onSessionExit = vi.fn();
     const harness = mount({
       handlers: commandHandlers,
       signal: new AbortController().signal,
-      onCancel,
+      onSessionExit,
     });
     try {
+      // Wait for the mount-time startup auth check to settle on NOT_CONNECTED.
       await settle();
       harness.stdin.send("/auth login\r");
       await settle();
       expect(commandHandlers.authLogin).toHaveBeenCalled();
-      // Ctrl+C while the device flow is still in flight.
+      expect(capturedLoginSignal?.aborted).toBe(false);
+      // Busy Ctrl+C aborts the foreground login child, not the session.
       harness.stdin.send("\u0003");
-      await settle(20);
-      expect(onCancel).toHaveBeenCalled();
+      await settle(60);
+      expect(capturedLoginSignal?.aborted).toBe(true);
+      expect(onSessionExit).not.toHaveBeenCalled();
+      // The cancellation is rendered neutrally: the user is told the
+      // session remains active so they can run another command. The
+      // renderer preserves the error.userMessage verbatim; the established
+      // renderer message uses the lowercase phrase.
+      expect(harness.lastFrame()).toContain("session remains active");
     } finally {
-      release?.();
+      // If the test fails before the abort listener fires, settle the
+      // pending promise so React/Vitest can shut down cleanly.
+      loginReject?.(new Error("test cleanup"));
       harness.unmount();
     }
   });
 
-  it("leaves an idle Ctrl+C from cancelling anything", async () => {
+  it("clears the prompt on idle Ctrl+C without touching any child signal", async () => {
     const commandHandlers = handlers();
-    const onCancel = vi.fn();
+    const onSessionExit = vi.fn();
     const harness = mount({
       handlers: commandHandlers,
       signal: new AbortController().signal,
-      onCancel,
+      onSessionExit,
     });
     try {
       await settle();
       harness.stdin.send("\u0003");
-      await settle(20);
-      expect(onCancel).not.toHaveBeenCalled();
+      await settle(40);
+      expect(onSessionExit).not.toHaveBeenCalled();
+      // Nothing was running, so no handler should be invoked by Ctrl+C.
+      expect(commandHandlers.authLogin).not.toHaveBeenCalled();
+      expect(commandHandlers.find).not.toHaveBeenCalled();
+    } finally {
+      harness.unmount();
+    }
+  });
+});
+
+describe("session auth interaction — startup auth deadline", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("lets a local command run after the startup auth check times out", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const commandHandlers = handlers({
+      authStatus: vi.fn(
+        () => new Promise<ViewModel>(() => undefined),
+      ),
+    });
+    const harness = mount({
+      handlers: commandHandlers,
+      signal: new AbortController().signal,
+    });
+    try {
+      // Advance past the 5-second startup deadline.
+      await vi.advanceTimersByTimeAsync(5_500);
+      // The startup auth check timed out, but the session can still accept
+      // a local command. `/progress` is a local view-model command that
+      // must run independently of the network.
+      harness.stdin.send("/progress\r");
+      await vi.advanceTimersByTimeAsync(100);
+      expect(commandHandlers.progress).toHaveBeenCalled();
+      // The startup auth check observed the deadline and aborted its child.
+      expect(harness.lastFrame()).toContain("Ready");
+    } finally {
+      harness.unmount();
+    }
+  });
+
+  it("never invokes the find handler when the Find action is disabled", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const commandHandlers = handlers({
+      authStatus: vi.fn(() => Promise.resolve(notConnectedAuthStatus)),
+    });
+    const harness = mount({
+      handlers: commandHandlers,
+      signal: new AbortController().signal,
+    });
+    try {
+      // Wait for the startup auth check to settle.
+      await settle();
+      // While the user is NOT connected to GitHub, the Find action must
+      // remain disabled. Pressing Enter on the contextual action panel
+      // (Find.run) must not call the find handler.
+      harness.stdin.send("\u001b[A"); // up — focus sidebar
+      await settle();
+      harness.stdin.send("\u001b[B"); // down — move to Find
+      await settle();
+      harness.stdin.send("\r"); // enter — focus actions
+      await settle();
+      harness.stdin.send("\r"); // enter — would submit if enabled
+      await settle(40);
+      expect(commandHandlers.find).not.toHaveBeenCalled();
     } finally {
       harness.unmount();
     }

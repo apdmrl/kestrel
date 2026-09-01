@@ -420,7 +420,15 @@ describe("persistent session — logout transitions to required", () => {
 
   it("dispatches AUTH_RESOLVED disconnected after a successful /auth logout", async () => {
     const commandHandlers = handlers();
-    // First connect so the logout has a starting state to demote.
+    // Both the mount-time startup auth check AND the explicit
+    // /auth status call must observe a CONNECTED result so the user can
+    // navigate to the Find section with the action panel enabled.
+    vi.mocked(commandHandlers.authStatus).mockResolvedValueOnce({
+      kind: "auth-status",
+      connected: true,
+      login: "octocat",
+      detail: "CONNECTED",
+    });
     vi.mocked(commandHandlers.authStatus).mockResolvedValueOnce({
       kind: "auth-status",
       connected: true,
