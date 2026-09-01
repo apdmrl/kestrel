@@ -91,8 +91,6 @@ export interface KestrelConfig {
 export interface BootstrapOptions {
   /** Whether device flow may present interactive instructions. Defaults to true. */
   readonly interactive?: boolean;
-  /** Cancellation signal that aborts cancellation-aware operations gracefully. */
-  readonly signal?: AbortSignal;
   /** Whether to run journal replay before exposing handlers. Defaults to true. */
   readonly recover?: boolean;
   /** Writes user-facing device-flow instructions (verification URI and user code). */
