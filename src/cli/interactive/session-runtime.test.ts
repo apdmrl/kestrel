@@ -83,20 +83,21 @@ describe("runStartupAuth", () => {
       detail: "CONNECTED",
     });
     const events: SessionEvent[] = [];
-    const run = runStartupAuth({
+    const handle = runStartupAuth({
       handlers: handlers({ authStatus }),
       parentSignal: new AbortController().signal,
       attemptId: 1,
       dispatch: (event) => events.push(event),
     });
     await vi.runAllTimersAsync();
-    await run;
+    await handle.run;
     expect(events).toContainEqual({
       type: "AUTH_RESOLVED",
       attemptId: 1,
       detail: "CONNECTED",
       login: "octocat",
     });
+    handle.dispose();
   });
 
   it("dispatches AUTH_RESOLVED NOT_CONNECTED so the reducer can transition to required", async () => {
@@ -108,20 +109,21 @@ describe("runStartupAuth", () => {
       detail: "NOT_CONNECTED",
     });
     const events: SessionEvent[] = [];
-    const run = runStartupAuth({
+    const handle = runStartupAuth({
       handlers: handlers({ authStatus }),
       parentSignal: new AbortController().signal,
       attemptId: 1,
       dispatch: (event) => events.push(event),
     });
     await vi.runAllTimersAsync();
-    await run;
+    await handle.run;
     expect(events).toContainEqual({
       type: "AUTH_RESOLVED",
       attemptId: 1,
       detail: "NOT_CONNECTED",
       login: null,
     });
+    handle.dispose();
   });
 
   it("dispatches AUTH_RESOLVED EXPIRED so the reducer can transition to expired", async () => {
@@ -133,20 +135,21 @@ describe("runStartupAuth", () => {
       detail: "EXPIRED",
     });
     const events: SessionEvent[] = [];
-    const run = runStartupAuth({
+    const handle = runStartupAuth({
       handlers: handlers({ authStatus }),
       parentSignal: new AbortController().signal,
       attemptId: 1,
       dispatch: (event) => events.push(event),
     });
     await vi.runAllTimersAsync();
-    await run;
+    await handle.run;
     expect(events).toContainEqual({
       type: "AUTH_RESOLVED",
       attemptId: 1,
       detail: "EXPIRED",
       login: null,
     });
+    handle.dispose();
   });
 
   it("renders first and marks auth unknown at the five-second deadline", async () => {
@@ -155,7 +158,7 @@ describe("runStartupAuth", () => {
       () => new Promise<ViewModel>(() => undefined),
     );
     const events: SessionEvent[] = [];
-    const run = runStartupAuth({
+    const handle = runStartupAuth({
       handlers: handlers({ authStatus }),
       parentSignal: new AbortController().signal,
       attemptId: 1,
@@ -167,7 +170,8 @@ describe("runStartupAuth", () => {
       attemptId: 1,
       errorCode: "STARTUP_AUTH_TIMEOUT",
     });
-    await run;
+    await handle.run;
+    handle.dispose();
   });
 
   it("settles when the deadline wins even if the handler ignores abort", async () => {
@@ -179,15 +183,16 @@ describe("runStartupAuth", () => {
       () => new Promise<ViewModel>(() => undefined),
     );
     const events: SessionEvent[] = [];
-    const run = runStartupAuth({
+    const handle = runStartupAuth({
       handlers: handlers({ authStatus }),
       parentSignal: new AbortController().signal,
       attemptId: 1,
       dispatch: (event) => events.push(event),
     });
     await vi.advanceTimersByTimeAsync(STARTUP_AUTH_TIMEOUT_MS);
-    await run;
+    await handle.run;
     expect(events.some((e) => e.type === "AUTH_FAILED")).toBe(true);
+    handle.dispose();
   });
 
   it("clears the deadline timer when the handler wins", async () => {
@@ -199,7 +204,7 @@ describe("runStartupAuth", () => {
       detail: "CONNECTED",
     });
     const events: SessionEvent[] = [];
-    const run = runStartupAuth({
+    const handle = runStartupAuth({
       handlers: handlers({ authStatus }),
       parentSignal: new AbortController().signal,
       attemptId: 1,
@@ -207,13 +212,14 @@ describe("runStartupAuth", () => {
     });
     await vi.advanceTimersByTimeAsync(50);
     await vi.runAllTimersAsync();
-    await run;
+    await handle.run;
     // No AUTH_FAILED was dispatched — the handler completed first.
     expect(events.some((e) => e.type === "AUTH_FAILED")).toBe(false);
     // Advancing past the deadline should NOT add an AUTH_FAILED now
     // because the timer was already cleared.
     await vi.advanceTimersByTimeAsync(10_000);
     expect(events.filter((e) => e.type === "AUTH_FAILED")).toHaveLength(0);
+    handle.dispose();
   });
 
   it("suppresses a late handler resolution after the deadline fires", async () => {
@@ -226,7 +232,7 @@ describe("runStartupAuth", () => {
         }),
     );
     const events: SessionEvent[] = [];
-    const run = runStartupAuth({
+    const handle = runStartupAuth({
       handlers: handlers({ authStatus }),
       parentSignal: new AbortController().signal,
       attemptId: 1,
@@ -245,12 +251,13 @@ describe("runStartupAuth", () => {
       login: "late",
       detail: "CONNECTED",
     });
-    await run;
+    await handle.run;
     expect(
       events.some(
         (e) => e.type === "AUTH_RESOLVED" && e.attemptId === 1,
       ),
     ).toBe(false);
+    handle.dispose();
   });
 
   it("dispatches AUTH_FAILED with the handler's error code when it rejects", async () => {
@@ -262,38 +269,40 @@ describe("runStartupAuth", () => {
       }),
     );
     const events: SessionEvent[] = [];
-    const run = runStartupAuth({
+    const handle = runStartupAuth({
       handlers: handlers({ authStatus }),
       parentSignal: new AbortController().signal,
       attemptId: 1,
       dispatch: (event) => events.push(event),
     });
     await vi.runAllTimersAsync();
-    await run;
+    await handle.run;
     expect(events).toContainEqual({
       type: "AUTH_FAILED",
       attemptId: 1,
       errorCode: "DM_GITHUB_TIMEOUT",
     });
+    handle.dispose();
   });
 
   it("dispatches AUTH_FAILED with UNKNOWN when the handler rejects without a code", async () => {
     vi.useFakeTimers();
     const authStatus = vi.fn().mockRejectedValue(new Error("boom"));
     const events: SessionEvent[] = [];
-    const run = runStartupAuth({
+    const handle = runStartupAuth({
       handlers: handlers({ authStatus }),
       parentSignal: new AbortController().signal,
       attemptId: 1,
       dispatch: (event) => events.push(event),
     });
     await vi.runAllTimersAsync();
-    await run;
+    await handle.run;
     expect(events).toContainEqual({
       type: "AUTH_FAILED",
       attemptId: 1,
       errorCode: "UNKNOWN",
     });
+    handle.dispose();
   });
 
   it("passes an abort signal to the authStatus handler", async () => {
@@ -305,18 +314,19 @@ describe("runStartupAuth", () => {
       detail: "CONNECTED",
     });
     const events: SessionEvent[] = [];
-    const run = runStartupAuth({
+    const handle = runStartupAuth({
       handlers: handlers({ authStatus }),
       parentSignal: new AbortController().signal,
       attemptId: 1,
       dispatch: (event) => events.push(event),
     });
     await vi.runAllTimersAsync();
-    await run;
+    await handle.run;
     const ctx = vi.mocked(authStatus).mock.calls[0]?.[1] as
       | CommandContext
       | undefined;
     expect(ctx?.signal).toBeDefined();
+    handle.dispose();
   });
 
   it("aborts the authStatus signal when the parent aborts and dispatches no failure event", async () => {
@@ -337,7 +347,7 @@ describe("runStartupAuth", () => {
       });
     });
     const events: SessionEvent[] = [];
-    const run = runStartupAuth({
+    const handle = runStartupAuth({
       handlers: handlers({ authStatus }),
       parentSignal: parent.signal,
       attemptId: 1,
@@ -345,10 +355,78 @@ describe("runStartupAuth", () => {
     });
     parent.abort(new Error("lifetime"));
     await vi.runAllTimersAsync();
-    await run;
+    await handle.run;
     expect(capturedSignal?.aborted).toBe(true);
     // Parent abort must not surface as an AUTH_FAILED — the session is
     // unmounting and we don't want a spurious auth transition on shutdown.
     expect(events.some((e) => e.type === "AUTH_FAILED")).toBe(false);
+    handle.dispose();
   });
+
+  it("clears the deadline timer and detaches the parent listener when disposed before the deadline", async () => {
+    vi.useFakeTimers();
+    const parent = new AbortController();
+    let capturedSignal: AbortSignal | undefined;
+    const authStatus = vi.fn(async (_args: unknown, ctx: CommandContext) => {
+      capturedSignal = ctx.signal;
+      return new Promise<ViewModel>(() => undefined);
+    });
+    const events: SessionEvent[] = [];
+    const handle = runStartupAuth({
+      handlers: handlers({ authStatus }),
+      parentSignal: parent.signal,
+      attemptId: 1,
+      dispatch: (event) => events.push(event),
+    });
+    // Unmount-before-deadline: dispose must abort the child, clear the
+    // deadline timer, detach the parent listener, and settle without
+    // dispatching any auth transition.
+    handle.dispose();
+    expect(capturedSignal?.aborted).toBe(true);
+    expect(events).toEqual([]);
+    // Advancing past the deadline must not dispatch a timeout — the
+    // timer was cleared.
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(events.some((e) => e.type === "AUTH_FAILED")).toBe(false);
+    // Promise must settle so callers awaiting the run handle resolve.
+    await handle.run;
+    // No late settlement is dispatched even after parent abort because
+    // the runtime-detached listener does not run finalize again (it
+    // was removed during dispose).
+    handle.dispose();
+  });
+
+  it("suppresses a late handler resolution that arrives after dispose", async () => {
+    vi.useFakeTimers();
+    let resolveHandler: ((view: ViewModel) => void) | undefined;
+    const authStatus = vi.fn(
+      () =>
+        new Promise<ViewModel>((resolve) => {
+          resolveHandler = resolve;
+        }),
+    );
+    const events: SessionEvent[] = [];
+    const handle = runStartupAuth({
+      handlers: handlers({ authStatus }),
+      parentSignal: new AbortController().signal,
+      attemptId: 1,
+      dispatch: (event) => events.push(event),
+    });
+    // Unmount-before-deadline: dispose must abort the child and
+    // suppress any handler settlement that arrives later.
+    handle.dispose();
+    await handle.run;
+    // A late success arriving after dispose must not dispatch any auth
+    // transition into a reducer that has already torn down.
+    resolveHandler?.({
+      kind: "auth-status",
+      connected: true,
+      login: "late",
+      detail: "CONNECTED",
+    });
+    await vi.runAllTimersAsync();
+    expect(events).toEqual([]);
+    handle.dispose();
+  });
+
 });

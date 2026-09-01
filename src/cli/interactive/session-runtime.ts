@@ -38,6 +38,18 @@ export function createChildOperation(parent: AbortSignal): {
   };
 }
 
+/**
+ * Handle returned by `runStartupAuth`. The Session keeps the `run`
+ * promise unhandled so first render never blocks; it calls `dispose()`
+ * from the mount effect cleanup so an unmount-before-deadline aborts
+ * the child, clears the timer, detaches the parent listener, and
+ * settles the promise without dispatching any auth transition.
+ */
+export interface StartupAuthHandle {
+  readonly run: Promise<void>;
+  readonly dispose: () => void;
+}
+
 interface RunStartupAuthInput {
   readonly handlers: CommandHandlers;
   readonly parentSignal: AbortSignal;
@@ -61,32 +73,43 @@ interface RunStartupAuthInput {
  * - parent aborts → the child signal aborts and NO `AUTH_FAILED` is
  *   dispatched (the session is unmounting; a spurious auth transition is
  *   a worse outcome than letting the reducer stay on `checking`).
+ * - caller disposes (Session unmount) → no event is dispatched, the
+ *   deadline timer is cleared, the parent listener is detached, and the
+ *   returned promise settles. Late handler settlement is suppressed.
  *
  * A late handler settlement after the deadline is suppressed so a
  * previously-pending response can never overwrite the timeout transition.
  * The returned promise settles when the deadline fires, even if the
  * handler's promise never resolves (a flaky handler that ignores abort).
  */
-export function runStartupAuth(input: RunStartupAuthInput): Promise<void> {
+export function runStartupAuth(input: RunStartupAuthInput): StartupAuthHandle {
   const { handlers, parentSignal, attemptId, dispatch } = input;
   const child = createChildOperation(parentSignal);
+  let settled = false;
+  let deadlineHandle: TimeoutHandle | undefined;
+  let resolveRun: () => void = () => undefined;
 
-  return new Promise<void>((resolve) => {
-    let settled = false;
-    let deadlineHandle: TimeoutHandle | undefined;
+  const onParentAbort = (): void => {
+    // Parent abort: never dispatch AUTH_FAILED — the session is
+    // tearing down and the reducer is about to be unmounted with it.
+    finalize(() => undefined);
+  };
 
-    const finalize = (action: () => void): void => {
-      if (settled) return;
-      settled = true;
-      if (deadlineHandle !== undefined) {
-        clearTimeout(deadlineHandle);
-        deadlineHandle = undefined;
-      }
-      parentSignal.removeEventListener("abort", onParentAbort);
-      child.dispose();
-      action();
-      resolve();
-    };
+  const finalize = (action: () => void): void => {
+    if (settled) return;
+    settled = true;
+    if (deadlineHandle !== undefined) {
+      clearTimeout(deadlineHandle);
+      deadlineHandle = undefined;
+    }
+    parentSignal.removeEventListener("abort", onParentAbort);
+    child.dispose();
+    action();
+    resolveRun();
+  };
+
+  const run = new Promise<void>((resolve) => {
+    resolveRun = resolve;
 
     const handleAuthStatusView = (view: ViewModel): void => {
       if (view.kind === "auth-status") {
@@ -159,12 +182,6 @@ export function runStartupAuth(input: RunStartupAuthInput): Promise<void> {
       );
     };
 
-    const onParentAbort = (): void => {
-      // Parent abort: never dispatch AUTH_FAILED — the session is
-      // tearing down and the reducer is about to be unmounted with it.
-      finalize(() => undefined);
-    };
-
     parentSignal.addEventListener("abort", onParentAbort, { once: true });
 
     handlers
@@ -180,6 +197,17 @@ export function runStartupAuth(input: RunStartupAuthInput): Promise<void> {
 
     deadlineHandle = setTimeout(handleDeadline, STARTUP_AUTH_TIMEOUT_MS);
   });
+
+  const dispose = (): void => {
+    if (settled) return;
+    // Abort the child so any handler-side abort listeners / cleanup can
+    // unwind synchronously; late handler settlement is suppressed because
+    // `settled` is set inside `finalize`.
+    child.controller.abort(new Error("STARTUP_AUTH_DISPOSED"));
+    finalize(() => undefined);
+  };
+
+  return { run, dispose };
 }
 
 /**

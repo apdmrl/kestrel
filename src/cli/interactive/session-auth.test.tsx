@@ -269,3 +269,111 @@ describe("session auth interaction — startup auth deadline", () => {
     }
   });
 });
+
+describe("session auth interaction — overlapping submission admission", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("admits only one in-flight submission at a time and clears busy state synchronously", async () => {
+    // The admission guard is the synchronous `operationRunning.current`
+    // ref, NOT React's deferred `busy` state. Two `/progress` submissions
+    // dispatched in the same React tick must not both invoke the
+    // handler: the second is rejected by the synchronous ref guard, and
+    // the session remains busy until the first handler resolves.
+    const commandHandlers = handlers();
+    const progressCalls: number[] = [];
+    let resolveFirst: ((view: ViewModel) => void) | undefined;
+    vi.mocked(commandHandlers.progress).mockImplementation(async () => {
+      const idx = progressCalls.length + 1;
+      progressCalls.push(idx);
+      if (idx === 1) {
+        return new Promise<ViewModel>((resolve) => {
+          resolveFirst = resolve;
+        });
+      }
+      return view;
+    });
+    const harness = mount({
+      handlers: commandHandlers,
+      signal: new AbortController().signal,
+    });
+    try {
+      // Wait for the mount-time startup auth check to settle on NOT_CONNECTED.
+      await settle();
+      // Dispatch two /progress commands in the same tick. The stdin
+      // harness buffers them; the second is dispatched before React
+      // re-renders, so a `busy` (React state) guard cannot reject it.
+      harness.stdin.send("/progress\r");
+      harness.stdin.send("/progress\r");
+      await settle();
+      // Only the first /progress handler was admitted. The second
+      // submission passed the reducer (the typed command landed in the
+      // transcript) but `submit()` returned early because
+      // `operationRunning.current === true`.
+      expect(commandHandlers.progress).toHaveBeenCalledTimes(1);
+      // The renderer is busy while the first handler is pending.
+      expect(harness.lastFrame()).toContain("Working");
+      // Resolve the first handler and let the second submission land.
+      resolveFirst?.(view);
+      await settle(120);
+      // Now the second /progress is admitted because the synchronous
+      // guard flipped back to false after the first handler resolved.
+      expect(commandHandlers.progress).toHaveBeenCalledTimes(2);
+      expect(harness.lastFrame()).toContain("Ready");
+    } finally {
+      resolveFirst?.(view);
+      harness.unmount();
+    }
+  });
+
+  it("keeps the renderer busy and the synchronous guard set while the foreground child is in flight", async () => {
+    // The admission guard is the synchronous `operationRunning.current`
+    // ref. A second `/progress` dispatched while the first is still
+    // pending is rejected by the synchronous ref, and the renderer
+    // must remain in the "Working" state until the first handler
+    // resolves. A late first-handler resolution must NOT clear busy
+    // while the synchronous guard still reads true — i.e. no other
+    // child has been installed to clobber the active one.
+    const commandHandlers = handlers();
+    let resolveFirst: ((view: ViewModel) => void) | undefined;
+    let progressCalls = 0;
+    vi.mocked(commandHandlers.progress).mockImplementation(async () => {
+      progressCalls += 1;
+      if (progressCalls === 1) {
+        return new Promise<ViewModel>((resolve) => {
+          resolveFirst = resolve;
+        });
+      }
+      return view;
+    });
+    const harness = mount({
+      handlers: commandHandlers,
+      signal: new AbortController().signal,
+    });
+    try {
+      await settle();
+      // First /progress is admitted and blocks the admission guard.
+      harness.stdin.send("/progress\r");
+      await settle();
+      expect(commandHandlers.progress).toHaveBeenCalledTimes(1);
+      // The synchronous admission guard rejects any subsequent
+      // submission until the first handler resolves.
+      harness.stdin.send("/progress\r");
+      await settle();
+      expect(commandHandlers.progress).toHaveBeenCalledTimes(1);
+      // The renderer is busy throughout.
+      expect(harness.lastFrame()).toContain("Working");
+      // Resolve the first handler. The second `/progress` (queued by
+      // the stdin harness) is now admitted because the synchronous
+      // guard flipped back to false in the first handler's finally.
+      resolveFirst?.(view);
+      await settle(120);
+      expect(commandHandlers.progress).toHaveBeenCalledTimes(2);
+      expect(harness.lastFrame()).toContain("Ready");
+    } finally {
+      resolveFirst?.(view);
+      harness.unmount();
+    }
+  });
+});

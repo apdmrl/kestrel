@@ -236,22 +236,23 @@ export function Session({
     useState<RecommendationViewModel | null>(latestRecommendationProp);
   const activeOperation = useRef<{ controller: AbortController; dispose: () => void } | null>(null);
   const operationRunning = useRef(false);
+  // Mount-time startup auth check is owned by an effect. The handle is
+  // disposed on unmount so the deadline timer is cleared, the parent
+  // abort listener is detached, and no late auth transition is dispatched
+  // into a reducer that has already torn down.
   useEffect(() => {
     if (signal.aborted) return;
-    let cancelled = false;
-    void runStartupAuth({
+    const startup = runStartupAuth({
       handlers,
       parentSignal: signal,
       attemptId: nextAttemptId.current,
-      dispatch: (event) => {
-        if (cancelled) return;
-        dispatch(event);
-      },
-    }).catch(() => {
+      dispatch,
+    });
+    void startup.run.catch(() => {
       // runStartupAuth never rejects; swallow defensive future changes.
     });
     return () => {
-      cancelled = true;
+      startup.dispose();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -299,11 +300,14 @@ export function Session({
     onExit?.();
     exit();
   };
-
   const submit = async (commandOverride?: string): Promise<void> => {
     const commandText = (commandOverride ?? input).trim();
-    if (commandText.length === 0 || busy || closing.current) return;
-    setInput("");
+    // `operationRunning.current` is the synchronous admission guard: two
+    // calls in the same React tick must not both pass the check and
+    // install competing children. The `busy` state mirrors the ref for
+    // the renderer but cannot be relied on for admission because React
+    // state updates are deferred.
+    if (commandText.length === 0 || operationRunning.current || closing.current) return;
     addEntry("input", commandText);
     const parsed = parseSessionCommand(commandText);
     if (parsed instanceof SessionParseError) {
@@ -424,14 +428,16 @@ export function Session({
         dispatch({ type: "OPERATION_FAILED", operationId: capturedOperationId, errorCode: "UNKNOWN" });
       }
     } finally {
-      // Only clear the active ref if its ID still matches — a new
-      // operation may have already installed its own child.
+      // Only clear the active ref AND the renderer-visible busy flag when
+      // this child is still the installed foreground operation. A stale
+      // completion must not clear a freshly-installed child's busy state,
+      // and it must not block Ctrl+C from aborting the newer child.
       if (activeOperation.current === child) {
         activeOperation.current = null;
         operationRunning.current = false;
+        setBusy(false);
       }
       child.dispose();
-      setBusy(false);
     }
   };
   // Cancel the in-flight foreground child operation. Busy Ctrl+C must
