@@ -76,7 +76,7 @@ import { parseChallengeId, parseMissionId } from "../domain/shared/identifiers.j
 import type { ChallengeType } from "../domain/challenge/challenge.js";
 import type { Mission } from "../domain/mission/mission.js";
 import type { MissionId } from "../domain/shared/identifiers.js";
-import type { CommandHandlers } from "../cli/command-handlers.js";
+import type { CommandContext, CommandHandlers } from "../cli/command-handlers.js";
 import type { DeviceAuthorizationViewModel, ViewModel } from "../cli/presentation/view-models.js";
 
 export interface KestrelConfig {
@@ -479,7 +479,7 @@ export async function bootstrap(
     return recommendationStore.load(parsed.value);
   };
 
-  const discover = async (mood: string, type?: string) => {
+  const discover = async (mood: string, type: string | undefined, context: CommandContext) => {
     const moodValue: Mood = isMood(mood) ? mood : "QUICK_WIN";
     const typeValue = type !== undefined ? validateChallengeType(type) : undefined;
     // Always fail closed: never begin device flow from a discovery operation.
@@ -489,7 +489,7 @@ export async function bootstrap(
     // a freshly created OAuth identity.
     const auth = await requireValidatedGitHubCredential(
       { credentialStore, gateway },
-      { account: "github", ...(options.signal === undefined ? {} : { signal: options.signal }) },
+      { account: "github", ...(context.signal === undefined ? {} : { signal: context.signal }) },
     );
     const source =
       options.challengeSourceFactory !== undefined
@@ -516,7 +516,7 @@ export async function bootstrap(
         mode: "PICK_ONE",
         mood: moodValue,
         intent: intent.value,
-        ...(options.signal !== undefined ? { signal: options.signal } : {}),
+        ...(context.signal !== undefined ? { signal: context.signal } : {}),
       },
     );
   };
@@ -535,30 +535,30 @@ export async function bootstrap(
   });
 
   return {
-    authLogin: async ({ onNotice }) => {
+    authLogin: async (_args, context) => {
       const auth = await authenticateGitHub(
         { credentialStore, gateway },
         {
           account: "github",
           interactive,
-          ...(options.signal !== undefined ? { signal: options.signal } : {}),
+          ...(context.signal === undefined ? {} : { signal: context.signal }),
           onAuthorization: async (authorization) => {
             // Present the URI and code before attempting any launch, so a slow
             // or failed browser never delays the user seeing what to do. Only
             // the verification URI and short user code are safe to display; the
             // device code and access token are never written out.
-            onNotice?.(deviceAuthorizationView(authorization));
+            context.onNotice?.(deviceAuthorizationView(authorization));
             if (!openBrowser) {
               return;
             }
             const opened = await browserLauncher.open(
               authorization.verificationUri,
-              options.signal,
+              context.signal,
             );
             // Reported as its own notice so the instructions above are never
             // repeated, and nothing is claimed when the launch failed.
             if (opened) {
-              onNotice?.({
+              context.onNotice?.({
                 kind: "verification",
                 text: "Opened your browser to complete authentication.",
               });
@@ -573,12 +573,12 @@ export async function bootstrap(
         detail: "CONNECTED",
       };
     },
-    authStatus: async () => {
+    authStatus: async (_args, context) => {
       const status = await getAuthStatus(
         { credentialStore, gateway },
         {
           account: "github",
-          ...(options.signal !== undefined ? { signal: options.signal } : {}),
+          ...(context.signal === undefined ? {} : { signal: context.signal }),
         },
       );
       return { kind: "auth-status", ...status };
@@ -587,8 +587,8 @@ export async function bootstrap(
       const result = await logoutGitHub({ credentialStore }, { confirmation });
       return { kind: "auth-status", ...result };
     },
-    find: async ({ mood, type }) => {
-      const result = await discover(mood, type);
+    find: async ({ mood, type }, context) => {
+      const result = await discover(mood, type, context);
       if (result.kind === "empty") {
         return { kind: "verification", text: "No challenge found" };
       }
@@ -606,7 +606,7 @@ export async function bootstrap(
         reasons: recommendation.reasons,
       };
     },
-    missionAccept: async ({ recommendationId }) => {
+    missionAccept: async ({ recommendationId }, context) => {
       const recommendation = await loadRecommendation(recommendationId);
       if (recommendation === undefined) {
         throw recommendationNotFound();
@@ -628,28 +628,28 @@ export async function bootstrap(
           recommendation,
           mode: preferences.explicit.defaultMode,
           workspaceRoot,
-          ...(options.signal !== undefined ? { signal: options.signal } : {}),
+          ...(context.signal === undefined ? {} : { signal: context.signal }),
         },
       );
       return missionView(mission);
     },
-    missionPrepare: async ({ missionId }) => {
+    missionPrepare: async ({ missionId }, context) => {
       const resolved = await resolveMission(missionId);
-      const prepared = await prepareMission(prepareDeps(options.signal), {
+      const prepared = await prepareMission(prepareDeps(context.signal), {
         missionId: resolved.mission.id,
         sidecarPath: resolved.sidecarPath,
       });
       return missionView(prepared);
     },
-    missionResume: async ({ missionId }) => {
+    missionResume: async ({ missionId }, context) => {
       const resolved = await resolveMission(missionId);
-      const prepared = await resumeMissionPreparation(prepareDeps(options.signal), {
+      const prepared = await resumeMissionPreparation(prepareDeps(context.signal), {
         missionId: resolved.mission.id,
         sidecarPath: resolved.sidecarPath,
       });
       return missionView(prepared);
     },
-    missionCurrent: async ({ missionId } = {}) => {
+    missionCurrent: async ({ missionId } = {}, _context) => {
       const result = await getCurrentMission(
         { missionStore, missionIndexStore: indexStore },
         missionId !== undefined ? { missionId: parseRequiredMissionId(missionId) } : {},
@@ -681,7 +681,7 @@ export async function bootstrap(
         text: "Stale mission lock cleared for " + id,
       };
     },
-    missionComplete: async ({ missionId }) => {
+    missionComplete: async ({ missionId }, context) => {
       const resolved = await resolveMission(missionId);
       const repositoryPath = resolved.mission.workspace?.repositoryPath ?? "";
       const completed = await completeMission(
@@ -691,7 +691,7 @@ export async function bootstrap(
           missionStore,
           journeyStore,
           indexStore,
-          git: gitFactory(repositoryPath, options.signal),
+          git: gitFactory(repositoryPath, context.signal),
           idGenerator,
           clock,
         },
@@ -700,12 +700,12 @@ export async function bootstrap(
           sidecarPath: resolved.sidecarPath,
           lockPath: resolved.lockPath,
           expectedStateVersion: resolved.version,
-          ...(options.signal !== undefined ? { signal: options.signal } : {}),
+          ...(context.signal === undefined ? {} : { signal: context.signal }),
         },
       );
       return missionView(completed);
     },
-    missionAbandon: async ({ missionId, reason }) => {
+    missionAbandon: async ({ missionId, reason }, context) => {
       if (reason.trim().length === 0) {
         throw invalidInput("An abandon reason is required (--reason)");
       }
@@ -718,12 +718,12 @@ export async function bootstrap(
           lockPath: resolved.lockPath,
           expectedStateVersion: resolved.version,
           reason,
-          ...(options.signal !== undefined ? { signal: options.signal } : {}),
+          ...(context.signal === undefined ? {} : { signal: context.signal }),
         },
       );
       return missionView(abandoned);
     },
-    agentBrief: async ({ missionId, hypothesis }) => {
+    agentBrief: async ({ missionId, hypothesis }, context) => {
       const resolved = await resolveMission(missionId);
       const handoff = await recordAgentHandoff(
         {
@@ -743,7 +743,7 @@ export async function bootstrap(
           lockPath: resolved.lockPath,
           expectedStateVersion: resolved.version,
           ...(hypothesis !== undefined ? { hypothesis } : {}),
-          ...(options.signal !== undefined ? { signal: options.signal } : {}),
+          ...(context.signal === undefined ? {} : { signal: context.signal }),
         },
       );
       return {
@@ -752,12 +752,12 @@ export async function bootstrap(
         renderedPromptHash: handoff.renderedPromptHash,
       };
     },
-    verifySubmission: async ({ missionId, prNumber }) => {
+    verifySubmission: async ({ missionId, prNumber }, context) => {
       validatePrNumber(prNumber);
       const resolved = await resolveMission(missionId);
       const { token } = await requireValidatedGitHubCredential(
         { credentialStore, gateway },
-        { account: "github", ...(options.signal === undefined ? {} : { signal: options.signal }) },
+        { account: "github", ...(context.signal === undefined ? {} : { signal: context.signal }) },
       );
       const repositoryPath = resolved.mission.workspace?.repositoryPath ?? "";
       const result = await verifySubmission(
@@ -768,7 +768,7 @@ export async function bootstrap(
           journeyStore,
           indexStore,
           gateway,
-          git: gitFactory(repositoryPath, options.signal),
+          git: gitFactory(repositoryPath, context.signal),
           idGenerator,
           clock,
         },
@@ -779,7 +779,7 @@ export async function bootstrap(
           expectedStateVersion: resolved.version,
           token,
           prNumber,
-          ...(options.signal !== undefined ? { signal: options.signal } : {}),
+          ...(context.signal === undefined ? {} : { signal: context.signal }),
         },
       );
       if (result.kind === "submitted") {
@@ -791,12 +791,12 @@ export async function bootstrap(
           "Not submitted: " + (result.reasons.length > 0 ? result.reasons.join("; ") : "no match"),
       };
     },
-    verifyLink: async ({ missionId, prNumber }) => {
+    verifyLink: async ({ missionId, prNumber }, context) => {
       validatePrNumber(prNumber);
       const resolved = await resolveMission(missionId);
       const { token } = await requireValidatedGitHubCredential(
         { credentialStore, gateway },
-        { account: "github", ...(options.signal === undefined ? {} : { signal: options.signal }) },
+        { account: "github", ...(context.signal === undefined ? {} : { signal: context.signal }) },
       );
       const result = await verifyIssueLink(
         { lock, journal, missionStore, journeyStore, indexStore, gateway, idGenerator, clock },
@@ -807,7 +807,7 @@ export async function bootstrap(
           expectedStateVersion: resolved.version,
           token,
           prNumber,
-          ...(options.signal !== undefined ? { signal: options.signal } : {}),
+          ...(context.signal === undefined ? {} : { signal: context.signal }),
         },
       );
       if (result.kind === "linked") {
@@ -815,12 +815,12 @@ export async function bootstrap(
       }
       return { kind: "verification", text: "No issue link detected" };
     },
-    verifyMerge: async ({ missionId, prNumber }) => {
+    verifyMerge: async ({ missionId, prNumber }, context) => {
       validatePrNumber(prNumber);
       const resolved = await resolveMission(missionId);
       const { token } = await requireValidatedGitHubCredential(
         { credentialStore, gateway },
-        { account: "github", ...(options.signal === undefined ? {} : { signal: options.signal }) },
+        { account: "github", ...(context.signal === undefined ? {} : { signal: context.signal }) },
       );
       const result = await verifyMerge(
         { lock, journal, missionStore, journeyStore, indexStore, gateway, idGenerator, clock },
@@ -831,7 +831,7 @@ export async function bootstrap(
           expectedStateVersion: resolved.version,
           token,
           prNumber,
-          ...(options.signal !== undefined ? { signal: options.signal } : {}),
+          ...(context.signal === undefined ? {} : { signal: context.signal }),
         },
       );
       if (result.kind === "merged") {

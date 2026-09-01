@@ -152,7 +152,7 @@ export function Session({ handlers, signal, onExit, onCancel }: SessionProps) {
     }
     setBusy(true);
     try {
-      const result = await controller(parsed);
+      const result = await controller(parsed, { signal });
       if (result.kind === "clear") {
         setTranscript([]);
       } else if (result.kind === "exit") {

@@ -45,7 +45,7 @@ describe("bootstrap", () => {
 
   it("returns an empty journey without credentials", async () => {
     const handlers = await bootstrap(createConfig({ KESTREL_HOME: dir }));
-    const view = await handlers.journey();
+    const view = await handlers.journey({}, {});
     expect(view.kind).toBe("journey");
     if (view.kind === "journey") {
       expect(view.entries).toEqual([]);
@@ -54,13 +54,13 @@ describe("bootstrap", () => {
 
   it("resolves no active mission without credentials", async () => {
     const handlers = await bootstrap(createConfig({ KESTREL_HOME: dir }));
-    const view = await handlers.missionCurrent();
+    const view = await handlers.missionCurrent({}, {});
     expect(view.kind).toBe("verification");
   });
 
   it("returns zero progress counts on a fresh home", async () => {
     const handlers = await bootstrap(createConfig({ KESTREL_HOME: dir }));
-    const view = await handlers.progress();
+    const view = await handlers.progress({}, {});
     expect(view.kind).toBe("progress");
     if (view.kind === "progress") {
       expect(view.counts.accepted).toBe(0);
@@ -70,7 +70,7 @@ describe("bootstrap", () => {
 
   it("returns default preferences on a fresh home", async () => {
     const handlers = await bootstrap(createConfig({ KESTREL_HOME: dir }));
-    const view = await handlers.preferencesGet();
+    const view = await handlers.preferencesGet({}, {});
     expect(view.kind).toBe("preferences");
     if (view.kind === "preferences") {
       expect(view.defaultMode).toBe("GUIDED");
@@ -92,7 +92,7 @@ describe("bootstrap", () => {
       process.env.GIT_CONFIG_GLOBAL = join(dir, "empty-gitconfig");
       process.env.GIT_TERMINAL_PROMPT = "0";
       const handlers = await bootstrap(createConfig({ KESTREL_HOME: dir }));
-      await expect(handlers.find({ mood: "QUICK_WIN" })).rejects.toMatchObject({
+      await expect(handlers.find({ mood: "QUICK_WIN" }, {})).rejects.toMatchObject({
         code: "DM_GITHUB_AUTH_REQUIRED",
       });
     } finally {
@@ -111,8 +111,10 @@ class FakeCredentialStore implements CredentialStore {
   credential: Credential | undefined;
   readonly deleted: string[] = [];
   readonly stored: Credential[] = [];
+  readonly getSignals: AbortSignal[] = [];
 
-  async get(): Promise<Credential | undefined> {
+  async get(_service: string, _account: string, signal?: AbortSignal): Promise<Credential | undefined> {
+    if (signal !== undefined) this.getSignals.push(signal);
     return this.credential;
   }
 
@@ -132,6 +134,7 @@ class FakeCredentialStore implements CredentialStore {
 class FakeGateway implements GitHubGateway {
   deviceFlowCalls = 0;
   viewerFn: (token: string) => GitHubViewer = () => ({ login: "octocat", id: 1 });
+  readonly viewerSignals: AbortSignal[] = [];
 
   async beginDeviceFlow(): Promise<DeviceFlowAuthorization> {
     this.deviceFlowCalls += 1;
@@ -148,7 +151,8 @@ class FakeGateway implements GitHubGateway {
     return { token: "fresh-token", account: "octocat" };
   }
 
-  async getViewer(token: string): Promise<GitHubViewer> {
+  async getViewer(token: string, signal?: AbortSignal): Promise<GitHubViewer> {
+    if (signal !== undefined) this.viewerSignals.push(signal);
     return this.viewerFn(token);
   }
 
@@ -198,7 +202,7 @@ describe("bootstrap github authentication", () => {
       gateway,
       challengeSourceFactory: factory,
     });
-    await expect(handlers.find({ mood: "QUICK_WIN" })).rejects.toMatchObject({
+    await expect(handlers.find({ mood: "QUICK_WIN" }, {})).rejects.toMatchObject({
       code: "DM_GITHUB_AUTH_REQUIRED",
     });
     // The source factory must NOT be invoked when auth is missing: building
@@ -229,7 +233,7 @@ describe("bootstrap github authentication", () => {
           challengeSourceFactory: () => emptyChallengeSource,
         },
       );
-      await expect(handlers.find({ mood: "QUICK_WIN" })).rejects.toMatchObject({
+      await expect(handlers.find({ mood: "QUICK_WIN" }, {})).rejects.toMatchObject({
         code: "DM_GITHUB_AUTH_REQUIRED",
       });
     } finally {
@@ -251,7 +255,7 @@ describe("bootstrap github authentication", () => {
       gateway,
       challengeSourceFactory: () => emptyChallengeSource,
     });
-    await expect(handlers.find({ mood: "QUICK_WIN" })).rejects.toMatchObject({
+    await expect(handlers.find({ mood: "QUICK_WIN" }, {})).rejects.toMatchObject({
       code: "DM_GITHUB_AUTH_REQUIRED",
     });
     expect(gateway.deviceFlowCalls).toBe(0);
@@ -271,9 +275,28 @@ describe("bootstrap github authentication", () => {
       gateway,
       challengeSourceFactory: () => emptyChallengeSource,
     });
-    await handlers.find({ mood: "QUICK_WIN" });
+    await handlers.find({ mood: "QUICK_WIN" }, {});
     expect(seen).toEqual(["cached-token"]);
     expect(gateway.deviceFlowCalls).toBe(0);
+  });
+
+  it("forwards the per-invocation context signal through find to the credential port", async () => {
+    const store = new FakeCredentialStore();
+    store.credential = { service: "github", account: "octocat", token: "cached-token" };
+    const gateway = new FakeGateway();
+    const handlers = await bootstrap(createConfig({ KESTREL_HOME: dir }), {
+      credentialStore: store,
+      gateway,
+      challengeSourceFactory: () => emptyChallengeSource,
+    });
+    const controller = new AbortController();
+    const commandSignal = controller.signal;
+    await handlers.find({ mood: "QUICK_WIN" }, { signal: commandSignal });
+    // The signal travels with the per-invocation context, not from any
+    // bootstrap-time option. The credential lookup and the viewer validation
+    // both observe the same signal instance.
+    expect(store.getSignals).toEqual([commandSignal]);
+    expect(gateway.viewerSignals).toEqual([commandSignal]);
   });
 });
 
@@ -298,7 +321,7 @@ describe("bootstrap auth commands", () => {
       credentialStore: new FakeCredentialStore(),
       gateway: new FakeGateway(),
     });
-    const view = await handlers.authStatus();
+    const view = await handlers.authStatus({}, {});
     expect(view).toEqual({
       kind: "auth-status",
       connected: false,
@@ -314,7 +337,7 @@ describe("bootstrap auth commands", () => {
       credentialStore: store,
       gateway: new FakeGateway(),
     });
-    const view = await handlers.authStatus();
+    const view = await handlers.authStatus({}, {});
     expect(view).toEqual({
       kind: "auth-status",
       connected: true,
@@ -331,7 +354,7 @@ describe("bootstrap auth commands", () => {
       gateway,
       writeAuth: () => undefined,
     });
-    const view = await handlers.authLogin({});
+    const view = await handlers.authLogin({}, {});
     expect(view).toEqual({
       kind: "auth-status",
       connected: true,
@@ -350,7 +373,7 @@ describe("bootstrap auth commands", () => {
       openBrowser: true,
       writeAuth: () => undefined,
     });
-    await handlers.authLogin({});
+    await handlers.authLogin({}, {});
     expect(launcher.opened).toEqual(["https://github.com/login/device"]);
   });
 
@@ -363,7 +386,7 @@ describe("bootstrap auth commands", () => {
       openBrowser: true,
       writeAuth: () => undefined,
     });
-    await handlers.authLogin({});
+    await handlers.authLogin({}, {});
     const all = launcher.opened.join(" ");
     expect(all).not.toContain("device-code-secret");
     expect(all).not.toContain("fresh-token");
@@ -378,7 +401,7 @@ describe("bootstrap auth commands", () => {
       openBrowser: false,
       writeAuth: () => undefined,
     });
-    await handlers.authLogin({});
+    await handlers.authLogin({}, {});
     expect(launcher.opened).toEqual([]);
   });
 
@@ -396,11 +419,14 @@ describe("bootstrap auth commands", () => {
       openBrowser: true,
       writeAuth: () => undefined,
     });
-    await handlers.authLogin({
-      onNotice: (view) => {
-        events.push("notice:" + view.kind);
+    await handlers.authLogin(
+      {},
+      {
+        onNotice: (view) => {
+          events.push("notice:" + view.kind);
+        },
       },
-    });
+    );
     expect(events).toEqual([
       "notice:device-authorization",
       "launch:https://github.com/login/device",
@@ -418,11 +444,14 @@ describe("bootstrap auth commands", () => {
       writeAuth: () => undefined,
     });
     const kinds: string[] = [];
-    await handlers.authLogin({
-      onNotice: (view) => {
-        kinds.push(view.kind);
+    await handlers.authLogin(
+      {},
+      {
+        onNotice: (view) => {
+          kinds.push(view.kind);
+        },
       },
-    });
+    );
     expect(kinds.filter((kind) => kind === "device-authorization")).toHaveLength(1);
   });
 
@@ -437,11 +466,14 @@ describe("bootstrap auth commands", () => {
       openBrowser: true,
       writeAuth: () => undefined,
     });
-    const view = await handlers.authLogin({
-      onNotice: (notice) => {
-        kinds.push(notice.kind);
+    const view = await handlers.authLogin(
+      {},
+      {
+        onNotice: (notice) => {
+          kinds.push(notice.kind);
+        },
       },
-    });
+    );
     expect(kinds).toEqual(["device-authorization"]);
     expect(view.kind).toBe("auth-status");
   });
@@ -453,7 +485,7 @@ describe("bootstrap auth commands", () => {
       credentialStore: new FakeCredentialStore(),
       gateway,
     });
-    await expect(handlers.authLogin({})).rejects.toMatchObject({
+    await expect(handlers.authLogin({}, {})).rejects.toMatchObject({
       code: "DM_GITHUB_AUTH_REQUIRED",
     });
     expect(gateway.deviceFlowCalls).toBe(0);
@@ -466,7 +498,7 @@ describe("bootstrap auth commands", () => {
       credentialStore: store,
       gateway: new FakeGateway(),
     });
-    await expect(handlers.authLogout({})).rejects.toMatchObject({ category: "INVALID_INPUT" });
+    await expect(handlers.authLogout({}, {})).rejects.toMatchObject({ category: "INVALID_INPUT" });
     expect(store.deleted).toEqual([]);
   });
 
@@ -477,7 +509,7 @@ describe("bootstrap auth commands", () => {
       credentialStore: store,
       gateway: new FakeGateway(),
     });
-    const view = await handlers.authLogout({ confirmation: "github.com" });
+    const view = await handlers.authLogout({ confirmation: "github.com" }, {});
     expect(view).toEqual({
       kind: "auth-status",
       connected: false,
@@ -562,14 +594,14 @@ describe("bootstrap recommendation binding", () => {
       },
     );
 
-    const find = await handlers.find({ mood: "QUICK_WIN" });
+    const find = await handlers.find({ mood: "QUICK_WIN" }, {});
     expect(find.kind).toBe("recommendation");
     if (find.kind === "recommendation") {
       expect(find.title).toBe("Fix crash on startup");
       expect(find.recommendationId).toBe("challenge-42");
     }
 
-    const accepted = await handlers.missionAccept({ recommendationId: "challenge-42" });
+    const accepted = await handlers.missionAccept({ recommendationId: "challenge-42" }, {});
     expect(accepted.kind).toBe("mission");
     if (accepted.kind === "mission") {
       expect(accepted.title).toBe("Fix crash on startup");
@@ -613,26 +645,28 @@ describe("bootstrap recommendation binding", () => {
 
     // No recommendation persisted yet.
     await expect(
-      handlers.missionAccept({ recommendationId: "challenge-42" }),
+      handlers.missionAccept({ recommendationId: "challenge-42" }, {}),
     ).rejects.toMatchObject({ code: "DM_RECOMMENDATION_NOT_FOUND" });
 
-    const first = await handlers.find({ mood: "QUICK_WIN" });
+    const first = await handlers.find({ mood: "QUICK_WIN" }, {});
     expect(first.kind).toBe("recommendation");
 
     // Unknown identifier.
     await expect(
-      handlers.missionAccept({ recommendationId: "challenge-unknown" }),
+      handlers.missionAccept({ recommendationId: "challenge-unknown" }, {}),
     ).rejects.toMatchObject({ code: "DM_RECOMMENDATION_NOT_FOUND" });
 
     // Malformed identifier (empty).
-    await expect(handlers.missionAccept({ recommendationId: "  " })).rejects.toMatchObject({
+    await expect(
+      handlers.missionAccept({ recommendationId: "  " }, {}),
+    ).rejects.toMatchObject({
       code: "DM_ILLEGAL_TRANSITION",
     });
 
     // A later find writes an immutable separate snapshot: it never supersedes
     // the first recommendation, so the earlier id stays valid.
-    await handlers.find({ mood: "QUICK_WIN" });
-    const accepted = await handlers.missionAccept({ recommendationId: "challenge-42" });
+    await handlers.find({ mood: "QUICK_WIN" }, {});
+    const accepted = await handlers.missionAccept({ recommendationId: "challenge-42" }, {});
     expect(accepted.kind).toBe("mission");
     if (accepted.kind === "mission") {
       expect(accepted.title).toBe("Fix crash on startup");
