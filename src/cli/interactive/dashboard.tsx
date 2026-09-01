@@ -1,5 +1,6 @@
-import { Box, Text } from "ink";
+import { Children } from "react";
 import type { ReactNode } from "react";
+import { Box, Text } from "ink";
 import { NAVIGATION_SECTIONS } from "./session-navigation.js";
 import type { SessionAction } from "./session-navigation.js";
 
@@ -85,6 +86,25 @@ export function compactnessTier(caps: TerminalCapabilities): CompactnessTier {
   if (caps.rows < 26) return "standard";
   return "full";
 }
+export function availableTranscriptRows(caps: TerminalCapabilities): number {
+  // Reserve rows for chrome (header, sidebar, mission card, quick commands
+  // panel, footer, contextual action panel) plus the prompt line. Older
+  // noncritical transcript lines are dropped first; the critical URI, code,
+  // recommendation ID, action, and typed input strings survive because they
+  // live in the most recently appended entries.
+  const tier = compactnessTier(caps);
+  const wide = isWideTerminal(caps);
+  const chrome =
+    2 + // header (status row + bottom border)
+    (wide ? 1 : 5) + // sidebar (compact stacks above content)
+    (tier === "full" ? 8 : tier === "standard" ? 6 : tier === "compact" ? 2 : 0) +
+    (tier === "full" ? 2 : 0) + // footer
+    2 + // context actions panel header + border
+    1; // prompt line
+  return Math.max(0, caps.rows - chrome);
+}
+
+
 const SECTION_ICONS: Readonly<Record<string, { readonly icon: string; readonly accent: Accent }>> = {
   home: { icon: "⌂", accent: "cyan" },
   find: { icon: "⌕", accent: "purple" },
@@ -684,6 +704,18 @@ export function DashboardShell({
   const showFooter = tier === "full";
   const showQuickCommands = tier === "full" || tier === "standard";
   const sidebarCompact = tier === "compact" || tier === "minimal";
+  // Window the children (transcript / output entries) to honour the actual
+  // terminal row budget. Older noncritical lines are dropped first; the most
+  // recent entries (which include the critical URI, code, recommendation ID,
+  // action, and typed input strings) survive.
+  const transcriptBudget = availableTranscriptRows(capabilities);
+  const allChildren = Children.toArray(children);
+  const visibleChildren =
+    transcriptBudget <= 0
+      ? []
+      : allChildren.length > transcriptBudget
+        ? allChildren.slice(-transcriptBudget)
+        : allChildren;
 
   return (
     <Box flexDirection="column" width="100%">
@@ -719,7 +751,7 @@ export function DashboardShell({
               />
             </Box>
           ) : null}
-          {children}
+          {visibleChildren}
           <PromptLine input={input} busy={busy} placeholder={placeholder} />
         </Box>
       </Box>

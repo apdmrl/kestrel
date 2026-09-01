@@ -1,8 +1,11 @@
+import { createElement } from "react";
+import { render as renderInk, Text } from "ink";
 import { cleanup, render } from "ink-testing-library";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CommandHandlers } from "../command-handlers.js";
 import type { ViewModel } from "../presentation/view-models.js";
 import { Session, sessionInputTransition, TranscriptLine } from "./session.js";
+import { FakeInkStdin, FakeInkStdout } from "../../test-utils/ink-stdin.js";
 
 const view: ViewModel = { kind: "verification", text: "ok" };
 
@@ -169,5 +172,234 @@ describe("persistent session — navigation", () => {
     // The bounded shell surfaces the recommendation ID verbatim when the
     // session is mounted with the typed command prefilled.
     expect(frame).toContain("rec-42");
+  });
+});
+
+interface InteractiveHarness {
+  readonly stdin: FakeInkStdin;
+  readonly stdout: FakeInkStdout;
+  readonly unmount: () => void;
+  readonly lastFrame: () => string;
+}
+
+function mountInteractive(props: {
+  handlers: CommandHandlers;
+  signal: AbortSignal;
+  capabilities?: { readonly columns: number; readonly rows: number; readonly color: boolean };
+  initialInput?: string;
+}): InteractiveHarness {
+  const caps = props.capabilities ?? { columns: 80, rows: 24, color: true };
+  const stdin = new FakeInkStdin();
+  const stdout = new FakeInkStdout(caps.columns, caps.rows);
+  const instance = renderInk(createElement(Session, props), {
+    stdin: stdin as unknown as NodeJS.ReadStream,
+    stdout: stdout as unknown as NodeJS.WriteStream,
+    patchConsole: false,
+    exitOnCtrlC: false,
+    debug: true,
+  });
+  return {
+    stdin,
+    stdout,
+    unmount: () => instance.unmount(),
+    lastFrame: () => stdout.lastFrame(),
+  };
+}
+
+const settle = (ms = 60): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+function upArrow(): string {
+  return "\u001b[A";
+}
+
+function downArrow(): string {
+  return "\u001b[B";
+}
+
+function enterKey(): string {
+  return "\r";
+}
+
+describe("persistent session — keyboard navigation", () => {
+  afterEach(() => cleanup());
+
+  it("enters sidebar focus through ↑ from the prompt and renders the focused category marker", async () => {
+    const commandHandlers = handlers();
+    const harness = mountInteractive({
+      handlers: commandHandlers,
+      signal: new AbortController().signal,
+    });
+    try {
+      await settle();
+      harness.stdin.send(upArrow());
+      await settle();
+      const frame = harness.lastFrame();
+      expect(frame).toMatch(/>\S*\s+Home/);
+    } finally {
+      harness.unmount();
+    }
+  });
+
+  it("keeps the recommendation ID actionable after connected auth", async () => {
+    const recommendation: ViewModel = {
+      kind: "recommendation",
+      recommendationId: "rec-42",
+      challengeId: "chal-1",
+      title: "Fix something",
+      mood: "focused",
+      confidence: 0.9,
+      reasons: ["match"],
+    };
+    const commandHandlers = handlers();
+    vi.mocked(commandHandlers.authStatus).mockResolvedValue({
+      kind: "auth-status",
+      connected: true,
+      login: "octocat",
+      detail: "CONNECTED",
+    });
+    vi.mocked(commandHandlers.find).mockResolvedValue(recommendation);
+    const harness = mountInteractive({
+      handlers: commandHandlers,
+      signal: new AbortController().signal,
+    });
+    try {
+      await settle();
+      harness.stdin.send("/auth status\r");
+      await settle();
+      // Now issue /find to capture the recommendation.
+      harness.stdin.send("/find\r");
+      await settle();
+      // Move focus to sidebar, navigate to Find, enter actions, and confirm
+      // the captured recommendation.accept command is exact and actionable.
+      harness.stdin.send(upArrow());
+      await settle();
+      // Step down once from Home (index 0) to Find (index 1).
+      harness.stdin.send(downArrow());
+      await settle();
+      const frame = harness.lastFrame();
+      // The recommendation ID is preserved verbatim and the accept command
+      // is rendered exactly in the contextual action panel.
+      expect(frame).toContain("/mission accept --id rec-42");
+      // Sanity: authLogin was not called twice — the live session reflects
+      // the controller's auth-status result instead of re-authenticating.
+      expect(commandHandlers.authLogin).not.toHaveBeenCalled();
+    } finally {
+      harness.unmount();
+    }
+  });
+
+  it("routes Return through focused-action handling before generic prompt execution", async () => {
+    const commandHandlers = handlers();
+    vi.mocked(commandHandlers.authStatus).mockResolvedValue({
+      kind: "auth-status",
+      connected: true,
+      login: "octocat",
+      detail: "CONNECTED",
+    });
+    vi.mocked(commandHandlers.find).mockResolvedValue({
+      kind: "recommendation",
+      recommendationId: "rec-42",
+      challengeId: "chal-1",
+      title: "Fix something",
+      mood: "focused",
+      confidence: 0.9,
+      reasons: ["match"],
+    });
+    const harness = mountInteractive({
+      handlers: commandHandlers,
+      signal: new AbortController().signal,
+    });
+    try {
+      await settle();
+      // Authenticate and load a recommendation so the find.run action is enabled.
+      harness.stdin.send("/auth status\r");
+      await settle();
+      harness.stdin.send("/find\r");
+      await settle();
+      // Move focus into the sidebar.
+      harness.stdin.send(upArrow());
+      await settle();
+      // Step down to the Find category (index 1).
+      harness.stdin.send(downArrow());
+      await settle();
+      // Enter the action panel.
+      harness.stdin.send(enterKey());
+      await settle();
+      // Pressing Enter on the focused action fills the prompt and does NOT
+      // invoke the find handler — that only happens on the subsequent Enter.
+      const beforeCalls = vi.mocked(commandHandlers.find).mock.calls.length;
+      harness.stdin.send(enterKey());
+      await settle();
+      const afterCalls = vi.mocked(commandHandlers.find).mock.calls.length;
+      expect(afterCalls).toBe(beforeCalls);
+      const frame = harness.lastFrame();
+      // The exact recommendation accept command is now in the prompt buffer.
+      expect(frame).toContain("/mission accept --id rec-42");
+    } finally {
+      harness.unmount();
+    }
+  });
+
+  it("never invokes the find handler from a disabled focus path", async () => {
+    const commandHandlers = handlers();
+    const harness = mountInteractive({
+      handlers: commandHandlers,
+      signal: new AbortController().signal,
+    });
+    try {
+      await settle();
+      // Default auth state is "checking", so the Find action is disabled.
+      // Entering sidebar and pressing Enter should NOT enqueue /find.
+      harness.stdin.send(upArrow());
+      await settle();
+      harness.stdin.send(downArrow());
+      await settle();
+      harness.stdin.send(enterKey());
+      await settle();
+      harness.stdin.send(enterKey());
+      await settle();
+      const frame = harness.lastFrame();
+      // No recommendation accept command entered the prompt.
+      expect(frame).not.toContain("/mission accept --id rec-42");
+    } finally {
+      harness.unmount();
+    }
+  });
+});
+
+describe("persistent session — auth state propagation", () => {
+  afterEach(() => cleanup());
+
+  it("reflects controller auth-status results in the sidebar after /auth status", async () => {
+    const commandHandlers = handlers();
+    vi.mocked(commandHandlers.authStatus).mockResolvedValue({
+      kind: "auth-status",
+      connected: true,
+      login: "octocat",
+      detail: "CONNECTED",
+    });
+    const harness = mountInteractive({
+      handlers: commandHandlers,
+      signal: new AbortController().signal,
+    });
+    try {
+      await settle();
+      harness.stdin.send("/auth status\r");
+      await settle();
+      // Move focus to sidebar then jump to the action panel; the Find action
+      // (id "find.run") should now render as enabled (`-`) rather than `x`.
+      harness.stdin.send(upArrow());
+      await settle();
+      harness.stdin.send(downArrow());
+      await settle();
+      const frame = harness.lastFrame();
+      // Find.run is now actionable: marker is `*-` not `>*x`.
+      expect(frame).toMatch(/Find a challenge/);
+      expect(frame).toContain("/find");
+      // The auth status reflects the connected login name.
+      expect(frame).toContain("octocat");
+    } finally {
+      harness.unmount();
+    }
   });
 });

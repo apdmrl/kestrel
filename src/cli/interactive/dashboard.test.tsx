@@ -607,4 +607,124 @@ describe("DashboardShell row budget", () => {
     expect(frame).toContain("Recommendation ID: rec-42");
     expect(frame.split("\n").length).toBeLessThanOrEqual(narrowCombo.rows);
   });
+
+  it("windows oversized transcript to stay within the row budget at 80x24", () => {
+    const lines: JSX.Element[] = [];
+    for (let i = 0; i < 60; i += 1) {
+      lines.push(<Text key={i}>historic line {i}</Text>);
+    }
+    lines.push(
+      <Text key="uri">Open https://github.com/login/device and enter ABCD-1234</Text>,
+    );
+    lines.push(<Text key="rec">Recommendation ID: rec-42</Text>);
+    lines.push(<Text key="cmd">/mission accept --id rec-42</Text>);
+    const { lastFrame } = render(
+      <DashboardShell
+        status="Ready"
+        title="Mission Control"
+        subtitle="Welcome back"
+        sessionStatus="active"
+        mission={{
+          title: "No active mission",
+          description: "Discover a challenge or resume your current engineering work.",
+          suggestions: DEFAULT_MISSION_SUGGESTIONS,
+        }}
+        stats={[]}
+        quickCommands={DEFAULT_QUICK_COMMANDS}
+        input="/mission accept --id rec-42"
+        busy={false}
+        placeholder="Type a command…"
+        capabilities={wide}
+      >
+        {lines}
+      </DashboardShell>,
+    );
+    const frame = lastFrame() ?? "";
+    expect(frame.split("\n").length).toBeLessThanOrEqual(wide.rows);
+    expect(frame).toContain("https://github.com/login/device");
+    expect(frame).toContain("ABCD-1234");
+    expect(frame).toContain("rec-42");
+    expect(frame).toContain("/mission accept --id rec-42");
+  });
+
+  it("windows oversized transcript at 59x24, 44x24, and 80x19", () => {
+    const cases: ReadonlyArray<{ readonly label: string; readonly capabilities: TerminalCapabilities }> = [
+      { label: "59x24", capabilities: { columns: 59, rows: 24, color: true } },
+      { label: "44x24", capabilities: { columns: 44, rows: 24, color: true } },
+      { label: "80x19", capabilities: { columns: 80, rows: 19, color: true } },
+    ];
+    for (const { label, capabilities } of cases) {
+      const lines: JSX.Element[] = [];
+      for (let i = 0; i < 80; i += 1) {
+        lines.push(<Text key={i}>older line {i}</Text>);
+      }
+      lines.push(
+        <Text key="uri">Open https://github.com/login/device and enter ABCD-1234</Text>,
+      );
+      lines.push(<Text key="rec">Recommendation ID: rec-42</Text>);
+      lines.push(<Text key="cmd">/mission accept --id rec-42</Text>);
+      const { lastFrame } = render(
+        <DashboardShell
+          status="Ready"
+          title="Mission Control"
+          subtitle="Welcome back"
+          sessionStatus="active"
+          mission={{
+            title: "No active mission",
+            description: "Discover a challenge or resume your current engineering work.",
+            suggestions: DEFAULT_MISSION_SUGGESTIONS,
+          }}
+          stats={[]}
+          quickCommands={DEFAULT_QUICK_COMMANDS}
+          input="/mission accept --id rec-42"
+          busy={false}
+          placeholder="Type a command…"
+          capabilities={capabilities}
+        >
+          {lines}
+        </DashboardShell>,
+      );
+      const frame = lastFrame() ?? "";
+      const actualRows = frame.split("\n").length;
+      expect(actualRows, `expected ≤${capabilities.rows} rows at ${label}, got ${actualRows}`).toBeLessThanOrEqual(
+        capabilities.rows,
+      );
+      expect(frame).toContain("https://github.com/login/device");
+      expect(frame).toContain("ABCD-1234");
+      expect(frame).toContain("rec-42");
+      expect(frame).toContain("/mission accept --id rec-42");
+    }
+  });
+
+  it("drops older noncritical transcript lines before recent critical content at 80x19", () => {
+    const lines: JSX.Element[] = [];
+    for (let i = 0; i < 50; i += 1) {
+      lines.push(<Text key={i}>older filler {i}</Text>);
+    }
+    lines.push(<Text key="uri">https://github.com/login/device</Text>);
+    const { lastFrame } = render(
+      <DashboardShell
+        status="Ready"
+        title="Mission Control"
+        subtitle="Welcome back"
+        sessionStatus="active"
+        mission={{
+          title: "No active mission",
+          description: "Discover a challenge or resume your current engineering work.",
+          suggestions: DEFAULT_MISSION_SUGGESTIONS,
+        }}
+        stats={[]}
+        quickCommands={DEFAULT_QUICK_COMMANDS}
+        input=""
+        busy={false}
+        placeholder="Type a command…"
+        capabilities={{ columns: 80, rows: 19, color: true }}
+      >
+        {lines}
+      </DashboardShell>,
+    );
+    const frame = lastFrame() ?? "";
+    expect(frame).toContain("https://github.com/login/device");
+    expect(frame).not.toContain("older filler 0");
+  });
  });

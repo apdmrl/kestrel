@@ -250,6 +250,20 @@ export function Session({
       } else {
         const rendered = renderSessionView(result.view);
         addEntry(rendered.kind, rendered.text);
+        // Mirror the controller's authoritative auth status into the live
+        // auth state so the contextual action panel reflects the same view
+        // the renderer just displayed. The controller's `auth-status`
+        // result is the single source of truth; we don't introduce a
+        // second policy.
+        if (result.view.kind === "auth-status") {
+          if (result.view.connected && result.view.login !== null) {
+            setAuthState({ status: "connected", login: result.view.login });
+          } else if (result.view.detail === "EXPIRED") {
+            setAuthState({ status: "expired" });
+          } else {
+            setAuthState({ status: "required" });
+          }
+        }
         if (result.view.kind === "recommendation") {
           captureRecommendation(result.view);
         }
@@ -290,8 +304,9 @@ export function Session({
     (character, key) => {
       const typed = typeof character === "string" ? character : "";
       const keyFlags = key ?? {};
-      // Navigation keys (↑/↓) cycle the category when focus is prompt or
-      // sidebar, and cycle the action when focus is actions.
+      // Navigation keys (↑/↓) move focus into the sidebar from the prompt,
+      // cycle categories while the sidebar has focus, and cycle actions while
+      // the action panel has focus. No second key convention is introduced.
       if (keyFlags.upArrow) {
         if (focus === "actions") {
           setSelectedActionIndex((i) =>
@@ -301,21 +316,54 @@ export function Session({
           );
           return;
         }
+        if (focus === "prompt") {
+          setFocus("sidebar");
+          setActionFocused(true);
+          return;
+        }
         setSelectedCategoryIndex((i) => (i - 1 + NAVIGATION_SECTIONS.length) % NAVIGATION_SECTIONS.length);
         setSelectedActionIndex(0);
         return;
       }
-      const lineBreak = typed.search(/[\r\n]/u);
-      if (lineBreak >= 0) {
-        const lines = typed.split(/\r\n|\r|\n/u);
-        const first = input + (lines.shift() ?? "");
-        const remainder = lines.pop() ?? "";
-        const commands = [first, ...lines];
-        if (remainder.length > 0) setInput(remainder);
-        queueMicrotask(() => {
-          void drainQueue(commands);
-        });
+      if (keyFlags.downArrow) {
+        if (focus === "actions") {
+          setSelectedActionIndex((i) =>
+            contextActions.length === 0
+              ? 0
+              : (i + 1) % contextActions.length,
+          );
+          return;
+        }
+        if (focus === "prompt") {
+          setFocus("sidebar");
+          setActionFocused(true);
+          return;
+        }
+        setSelectedCategoryIndex((i) => (i + 1) % NAVIGATION_SECTIONS.length);
+        setSelectedActionIndex(0);
         return;
+      }
+      // Route Ink Return (`\r`, `\n`, key.return) through focus/action
+      // handling BEFORE generic prompt execution. When focus is sidebar or
+      // actions the user expects Enter to fill an action, not submit the
+      // (empty) prompt buffer.
+      const isReturnKey =
+        typed === "\r" ||
+        typed === "\n" ||
+        keyFlags.return === true;
+      if (!isReturnKey) {
+        const lineBreak = typed.search(/[\r\n]/u);
+        if (lineBreak >= 0) {
+          const lines = typed.split(/\r\n|\r|\n/u);
+          const first = input + (lines.shift() ?? "");
+          const remainder = lines.pop() ?? "";
+          const commands = [first, ...lines];
+          if (remainder.length > 0) setInput(remainder);
+          queueMicrotask(() => {
+            void drainQueue(commands);
+          });
+          return;
+        }
       }
       const transition = sessionInputTransition(input, typed, keyFlags, busy);
       if (transition.cancel) {
@@ -331,7 +379,7 @@ export function Session({
             setFocus("prompt");
             setActionFocused(false);
           }
-          // For disabled actions: leave the prompt untouched. The reason /
+          // Disabled actions: leave the prompt untouched. The reason /
           // recovery text is rendered through the ContextActions panel; the
           // user reads it from the sidebar without ever calling a handler.
           return;

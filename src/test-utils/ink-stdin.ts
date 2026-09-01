@@ -56,10 +56,15 @@ export class FakeInkStdin extends EventEmitter {
 
 /** Collects rendered Ink frames so assertions can read the latest one. */
 export class FakeInkStdout extends EventEmitter {
-  readonly columns = 100;
-  readonly rows = 40;
   readonly frames: string[] = [];
+  columns: number;
+  rows: number;
 
+  constructor(columns = 100, rows = 40) {
+    super();
+    this.columns = columns;
+    this.rows = rows;
+  }
   write(data: string): boolean {
     this.frames.push(data);
     return true;
