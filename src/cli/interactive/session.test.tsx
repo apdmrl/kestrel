@@ -93,3 +93,81 @@ describe("persistent session", () => {
     expect(commandHandlers.progress).not.toHaveBeenCalled();
   });
 });
+
+describe("persistent session — navigation", () => {
+  afterEach(() => cleanup());
+
+  it("mounts DashboardShell so the sidebar categories are visible", () => {
+    const { lastFrame } = render(
+      <Session handlers={handlers()} signal={new AbortController().signal} />,
+    );
+    const frame = lastFrame() ?? "";
+    expect(frame).toContain("NAVIGATE");
+    expect(frame).toContain("Home");
+    expect(frame).toContain("Find");
+    expect(frame).toContain("Mission");
+    expect(frame).toContain("Auth");
+  });
+
+  it("exposes the contextual action panel for the active category", () => {
+    const { lastFrame } = render(
+      <Session handlers={handlers()} signal={new AbortController().signal} />,
+    );
+    const frame = lastFrame() ?? "";
+    // Home category has no actions.
+    expect(frame).toContain("ACTIONS");
+  });
+
+  it("exposes the focus hint and contextual action path at 80x24", () => {
+    const { lastFrame } = render(
+      <Session
+        handlers={handlers()}
+        signal={new AbortController().signal}
+        capabilities={{ columns: 80, rows: 24, color: true }}
+      />,
+    );
+    const frame = lastFrame() ?? "";
+    expect(frame).toContain("Ready");
+    expect(frame).toContain("↑↓");
+    expect(frame).toContain("enter");
+  });
+
+  it("stays within the row budget at 80x24 with transcript content", () => {
+    const { lastFrame } = render(
+      <Session handlers={handlers()} signal={new AbortController().signal} />,
+    );
+    const frame = lastFrame() ?? "";
+    expect(frame.split("\n").length).toBeLessThanOrEqual(24);
+    expect(frame).toContain("Ready");
+    expect(frame).toContain("KESTREL");
+  });
+
+  it("preserves the typed command and auth status inside the bounded shell", () => {
+    const { lastFrame } = render(
+      <Session
+        handlers={handlers()}
+        signal={new AbortController().signal}
+        capabilities={{ columns: 80, rows: 24, color: true }}
+        initialInput="/mission accept --id rec-42"
+      />,
+    );
+    const frame = lastFrame() ?? "";
+    expect(frame).toContain("Ready");
+    expect(frame).toContain("/mission accept --id rec-42");
+  });
+
+  it("keeps the recommendation ID inside the typed command intact", () => {
+    const { lastFrame } = render(
+      <Session
+        handlers={handlers()}
+        signal={new AbortController().signal}
+        capabilities={{ columns: 80, rows: 24, color: true }}
+        initialInput="/mission accept --id rec-42"
+      />,
+    );
+    const frame = lastFrame() ?? "";
+    // The bounded shell surfaces the recommendation ID verbatim when the
+    // session is mounted with the typed command prefilled.
+    expect(frame).toContain("rec-42");
+  });
+});

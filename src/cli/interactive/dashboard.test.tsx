@@ -332,10 +332,12 @@ describe("DashboardShell responsive split", () => {
     const frame = lastFrame() ?? "";
     expect(frame).toContain("KESTREL");
     expect(frame).toContain("Ready");
-    expect(frame).toContain("Mission Control");
-    expect(frame).toContain("QUICK COMMANDS");
-    expect(frame).toContain("Type a command…");
+    // Wide 80x24 uses the standard compactness tier: the mission card border
+    // is retained (current mission title), but the full chrome (footer /
+    // quick commands card) is dropped so the row budget fits.
+    expect(frame).toContain("No active mission");
     expect(frame).toContain("TRANSCRIPT_PLACEHOLDER");
+    expect(frame.split("\n").length).toBeLessThanOrEqual(wide.rows);
   });
 
   it("keeps the shell renderable at 59x24 (below 60)", () => {
@@ -413,3 +415,196 @@ describe("DashboardShell responsive split", () => {
     expect(frame).toContain("Type a command…");
   });
 });
+
+describe("DashboardShell row budget", () => {
+  afterEach(() => cleanup());
+
+  const frames: ReadonlyArray<{
+    readonly label: string;
+    readonly capabilities: TerminalCapabilities;
+  }> = [
+    { label: "80x24", capabilities: { columns: 80, rows: 24, color: true } },
+    { label: "59x24", capabilities: { columns: 59, rows: 24, color: true } },
+    { label: "80x19", capabilities: { columns: 80, rows: 19, color: true } },
+    { label: "44x24", capabilities: { columns: 44, rows: 24, color: true } },
+  ];
+
+  for (const { label, capabilities } of frames) {
+    it(`stays within the row budget at ${label}`, () => {
+      const { lastFrame } = render(
+        <DashboardShell
+          status="Ready"
+          title="Mission Control"
+          subtitle="Welcome back"
+          sessionStatus="active"
+          mission={{
+            title: "No active mission",
+            description: "Discover a challenge or resume your current engineering work.",
+            suggestions: DEFAULT_MISSION_SUGGESTIONS,
+          }}
+          stats={[]}
+          quickCommands={DEFAULT_QUICK_COMMANDS}
+          input=""
+          busy={false}
+          placeholder="Type a command…"
+          capabilities={capabilities}
+        >
+          <Text>TRANSCRIPT_PLACEHOLDER</Text>
+        </DashboardShell>,
+      );
+      const frame = lastFrame() ?? "";
+      const actualRows = frame.split("\n").length;
+      expect(actualRows, `expected ≤${capabilities.rows} rows at ${label}, got ${actualRows}`).toBeLessThanOrEqual(
+        capabilities.rows,
+      );
+    });
+  }
+
+  it("preserves auth/operation status, active section markers, prompt, and key hint at 80x24", () => {
+    const { lastFrame } = render(
+      <DashboardShell
+        status="Ready"
+        title="Mission Control"
+        subtitle="Welcome back"
+        sessionStatus="active"
+        mission={{
+          title: "No active mission",
+          description: "Discover a challenge or resume your current engineering work.",
+          suggestions: DEFAULT_MISSION_SUGGESTIONS,
+        }}
+        stats={[]}
+        quickCommands={DEFAULT_QUICK_COMMANDS}
+        input="/auth login"
+        busy={false}
+        placeholder="Type a command…"
+        capabilities={wide}
+        contextActions={[
+          {
+            id: "auth.login",
+            label: "Log in to GitHub",
+            command: "/auth login",
+            availability: { status: "enabled" },
+          },
+        ]}
+        selectedActionIndex={0}
+        actionFocused={true}
+      />,
+    );
+    const frame = lastFrame() ?? "";
+    expect(frame).toContain("Ready");
+    expect(frame).toContain("active");
+    expect(frame).toContain("/auth login");
+    expect(frame).not.toContain("Type a command…");
+    expect(frame).toContain("↑↓");
+  });
+
+
+  it("keeps the typed command visible at 59x24", () => {
+    const { lastFrame } = render(
+      <DashboardShell
+        status="Ready"
+        title="Mission Control"
+        subtitle="Welcome back"
+        sessionStatus="active"
+        mission={{
+          title: "No active mission",
+          description: "Discover a challenge or resume your current engineering work.",
+          suggestions: DEFAULT_MISSION_SUGGESTIONS,
+        }}
+        stats={[]}
+        quickCommands={DEFAULT_QUICK_COMMANDS}
+        input="/mission accept --id rec-42"
+        busy={false}
+        placeholder="Type a command…"
+        capabilities={narrowWidth}
+      />,
+    );
+    const frame = lastFrame() ?? "";
+    expect(frame).toContain("Ready");
+    expect(frame).toContain("/mission accept --id rec-42");
+    expect(frame).not.toContain("Type a command…");
+  });
+
+  it("keeps the typed command visible at 44x24", () => {
+    const { lastFrame } = render(
+      <DashboardShell
+        status="Ready"
+        title="Mission Control"
+        subtitle="Welcome back"
+        sessionStatus="active"
+        mission={{
+          title: "No active mission",
+          description: "Discover a challenge or resume your current engineering work.",
+          suggestions: DEFAULT_MISSION_SUGGESTIONS,
+        }}
+        stats={[]}
+        quickCommands={DEFAULT_QUICK_COMMANDS}
+        input="/mission accept --id rec-42"
+        busy={false}
+        placeholder="Type a command…"
+        capabilities={narrowCombo}
+      />,
+    );
+    const frame = lastFrame() ?? "";
+    expect(frame).toContain("Ready");
+    expect(frame).toContain("/mission accept --id rec-42");
+    expect(frame).not.toContain("Type a command…");
+  });
+
+  it("keeps the typed command visible at 80x19", () => {
+    const { lastFrame } = render(
+      <DashboardShell
+        status="Ready"
+        title="Mission Control"
+        subtitle="Welcome back"
+        sessionStatus="active"
+        mission={{
+          title: "No active mission",
+          description: "Discover a challenge or resume your current engineering work.",
+          suggestions: DEFAULT_MISSION_SUGGESTIONS,
+        }}
+        stats={[]}
+        quickCommands={DEFAULT_QUICK_COMMANDS}
+        input="/mission accept --id rec-42"
+        busy={false}
+        placeholder="Type a command…"
+        capabilities={narrowHeight}
+      />,
+    );
+    const frame = lastFrame() ?? "";
+    expect(frame).toContain("Ready");
+    expect(frame).toContain("/mission accept --id rec-42");
+    expect(frame).not.toContain("Type a command…");
+  });
+
+  it("renders the verification URI and user code in compact view", () => {
+    const { lastFrame } = render(
+      <DashboardShell
+        status="Awaiting browser"
+        title="Mission Control"
+        subtitle="Welcome back"
+        sessionStatus="active"
+        mission={{
+          title: "No active mission",
+          description: "Discover a challenge or resume your current engineering work.",
+          suggestions: DEFAULT_MISSION_SUGGESTIONS,
+        }}
+        stats={[]}
+        quickCommands={DEFAULT_QUICK_COMMANDS}
+        input=""
+        busy={true}
+        placeholder="Type a command…"
+        capabilities={narrowCombo}
+      >
+        <Text>Open https://github.com/login/device and enter ABCD-1234</Text>
+        <Text>Recommendation ID: rec-42</Text>
+      </DashboardShell>,
+    );
+    const frame = lastFrame() ?? "";
+    expect(frame).toContain("Awaiting browser");
+    expect(frame).toContain("https://github.com/login/device");
+    expect(frame).toContain("ABCD-1234");
+    expect(frame).toContain("Recommendation ID: rec-42");
+    expect(frame.split("\n").length).toBeLessThanOrEqual(narrowCombo.rows);
+  });
+ });

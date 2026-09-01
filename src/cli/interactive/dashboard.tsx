@@ -10,25 +10,35 @@ import type { SessionAction } from "./session-navigation.js";
  * by `Session` (see ./session.tsx); this file owns no input, navigation, or
  * command-routing logic.
  *
- * Sections, in render order:
+ * Sections, in render order (compact tiers may omit chrome — see
+ * `compactnessTier`):
  *  - Header           KESTREL / LOCAL WORKSPACE status
  *  - Sidebar          category navigation with focus / selection / enable markers
  *  - ContextActions   contextual actions for the active category
- *  - Dashboard        mission card, quick commands, command reference
- *  - Footer           shortcuts
+ *  - MissionCard      optional mission chrome (full / standard tiers only)
+ *  - QuickCommands    optional quick commands chrome (full / standard tiers only)
+ *  - Children         session transcript / result content
  *  - PromptLine       active input prompt
+ *
+ * The shell honours the actual `rows` budget of the supplied
+ * `TerminalCapabilities`. The wide layout (sidebar next to main) is reserved
+ * for `wide`-class terminals; everything else stacks vertically. The compact
+ * tiers drop mission-card / quick-commands chrome so the auth/operation
+ * status, sidebar markers, action panel, prompt, key hint, and full
+ * representative strings (verification URI, user code, recommendation ID,
+ * typed command) fit within `capabilities.rows`.
  */
 
 const COLORS = {
-  text: "#e7ecef",
-  muted: "#6f7a80",
-  border: "#30363b",
-  borderSoft: "#252b2f",
-  green: "#8fbe9e",
-  cyan: "#79afb7",
-  yellow: "#c0a873",
-  purple: "#aa98c4",
-  red: "#c97878",
+  border: "gray",
+  borderSoft: "gray",
+  muted: "gray",
+  text: "white",
+  red: "red",
+  green: "green",
+  cyan: "cyan",
+  yellow: "yellow",
+  purple: "magenta",
 } as const;
 
 export type Accent = "green" | "cyan" | "yellow" | "purple" | "red";
@@ -49,6 +59,32 @@ export function isWideTerminal(caps: TerminalCapabilities): boolean {
   return caps.columns >= 60 && caps.rows >= 20;
 }
 
+/**
+ * Compactness tier derived from the row budget and column budget. The tier
+ * determines which chrome components (rounded borders, footer, mission
+ * card, quick commands) the shell renders so the bounded output fits
+ * within `capabilities.rows` lines.
+ *
+ * - `full`       ≥ 22 rows, ≥ 60 cols — full chrome including mission card
+ * - `standard`   ≥ 20 rows             — full chrome without footer
+ * - `compact`    ≥ 18 rows             — flat mission card, no quick-commands card
+ * - `minimal`    <  18 rows or < 50 cols — flat prompt line, no card chrome
+ */
+export type CompactnessTier = "full" | "standard" | "compact" | "minimal";
+
+export function compactnessTier(caps: TerminalCapabilities): CompactnessTier {
+  if (caps.rows < 18 || caps.columns < 50) return "minimal";
+  const wide = isWideTerminal(caps);
+  // Stacked layouts (columns < 60) burn a lot more rows than wide layouts
+  // because the sidebar stacks above the main content. Treat them as
+  // `compact` so the row budget fits.
+  if (!wide) return "compact";
+  // The full chrome (mission card, quick commands panel, footer) needs a
+  // comfortable row budget — at 80×24 we drop the footer and quick-commands
+  // card chrome so the typed command and key hint stay visible.
+  if (caps.rows < 26) return "standard";
+  return "full";
+}
 const SECTION_ICONS: Readonly<Record<string, { readonly icon: string; readonly accent: Accent }>> = {
   home: { icon: "⌂", accent: "cyan" },
   find: { icon: "⌕", accent: "purple" },
@@ -153,6 +189,7 @@ export interface ContextActionsProps {
   readonly selectedIndex?: number;
   readonly focused?: boolean;
   readonly colorize?: boolean;
+  readonly compact?: boolean;
 }
 
 export function ContextActions({
@@ -160,25 +197,26 @@ export function ContextActions({
   selectedIndex = -1,
   focused = false,
   colorize = true,
+  compact = false,
 }: ContextActionsProps) {
   if (actions.length === 0) {
     return (
-      <Box flexDirection="column" marginTop={1}>
+      <Box flexDirection="column" marginTop={compact ? 0 : 1}>
         <SectionLabel label="Actions" />
         <Text color={COLORS.muted}>No actions available.</Text>
       </Box>
     );
   }
   return (
-    <Box flexDirection="column" marginTop={1}>
+    <Box flexDirection="column" marginTop={compact ? 0 : 1}>
       <SectionLabel label="Actions" />
       <Box
-        borderStyle="round"
+        borderStyle={compact ? undefined : "round"}
         borderColor={COLORS.borderSoft}
         flexDirection="column"
         paddingX={1}
         paddingY={0}
-        marginTop={1}
+        marginTop={compact ? 0 : 1}
       >
         {actions.map((action, index) => {
           const row: NavigationRowState = {
@@ -259,15 +297,17 @@ export function SmallStat({ title, value, detail, icon, accent }: SmallStatProps
 export interface SidebarProps {
   readonly selectedIndex?: number;
   readonly focusedIndex?: number;
-  readonly capabilities?: TerminalCapabilities;
+  readonly capabilities: TerminalCapabilities;
   readonly availability?: ReadonlyArray<"enabled" | "disabled">;
+  readonly compact?: boolean;
 }
 
 export function Sidebar({
   selectedIndex = 0,
   focusedIndex = -1,
-  capabilities = DEFAULT_TERMINAL_CAPABILITIES,
+  capabilities,
   availability,
+  compact = false,
 }: SidebarProps) {
   const wide = isWideTerminal(capabilities);
   const items = NAVIGATION_SECTIONS.map((section, index) => {
@@ -279,6 +319,36 @@ export function Sidebar({
     };
     return { section, meta, state };
   });
+  if (compact) {
+    // Compact tier: a single horizontal row of marker+icon indicators so
+    // the user can still scan the active category without losing a column.
+    return (
+      <Box
+        width="100%"
+        flexShrink={0}
+        borderStyle="single"
+        borderTop={false}
+        borderBottom={false}
+        borderLeft={false}
+        borderRight={false}
+        borderColor={COLORS.borderSoft}
+        flexDirection="row"
+        flexWrap="wrap"
+        gap={1}
+        paddingX={1}
+        paddingTop={0}
+      >
+        {items.map(({ section, meta, state }) => (
+          <Box key={section.id}>
+            <Text color={capabilities.color ? COLORS[meta.accent] : undefined}>{meta.icon}</Text>
+            <Text color={capabilities.color ? (state.selected ? COLORS.green : COLORS.muted) : undefined}>
+              {state.selected ? "●" : "○"}
+            </Text>
+          </Box>
+        ))}
+      </Box>
+    );
+  }
   return (
     <Box
       width={wide ? 24 : "100%"}
@@ -324,9 +394,13 @@ export function Sidebar({
 export interface HeaderProps {
   readonly status: string;
   readonly statusAccent?: Accent;
+  readonly compact?: boolean;
 }
 
-export function Header({ status, statusAccent = "green" }: HeaderProps) {
+export function Header({ status, statusAccent = "green", compact = false }: HeaderProps) {
+  // The `compact` flag hides only the `session` label next to the status
+  // indicator; the KESTREL / LOCAL WORKSPACE title is retained at every
+  // tier because the original session's calm status bar always surfaced it.
   return (
     <Box
       borderStyle="single"
@@ -345,24 +419,24 @@ export function Header({ status, statusAccent = "green" }: HeaderProps) {
       </Box>
 
       <Box>
-        <Text color={COLORS.muted}>session </Text>
+        {!compact ? <Text color={COLORS.muted}>session </Text> : null}
         <Text color={COLORS[statusAccent]}>● {status}</Text>
       </Box>
     </Box>
   );
 }
-
 export interface MissionCardProps {
   readonly title: string;
   readonly description: string;
   readonly suggestions: readonly { readonly command: string; readonly accent: Accent }[];
+  readonly compact?: boolean;
 }
 
-export function MissionCard({ title, description, suggestions }: MissionCardProps) {
+export function MissionCard({ title, description, suggestions, compact = false }: MissionCardProps) {
   return (
     <Box
-      borderStyle="round"
-      borderColor={COLORS.border}
+      borderStyle={compact ? "single" : "round"}
+      borderColor={compact ? COLORS.borderSoft : COLORS.border}
       flexDirection="column"
       paddingX={1}
       paddingY={0}
@@ -375,14 +449,16 @@ export function MissionCard({ title, description, suggestions }: MissionCardProp
           </Text>
         </Box>
 
-        <Text color={COLORS.yellow}>◆</Text>
+        {!compact ? <Text color={COLORS.yellow}>◆</Text> : null}
       </Box>
 
-      <Box marginTop={1}>
-        <Text color={COLORS.muted}>{description}</Text>
-      </Box>
+      {compact ? null : (
+        <Box marginTop={1}>
+          <Text color={COLORS.muted}>{description}</Text>
+        </Box>
+      )}
 
-      {suggestions.length > 0 ? (
+      {suggestions.length > 0 && !compact ? (
         <Box marginTop={1} gap={2}>
           {suggestions.map((suggestion) => (
             <Text key={suggestion.command} color={COLORS[suggestion.accent]}>
@@ -397,9 +473,17 @@ export function MissionCard({ title, description, suggestions }: MissionCardProp
 
 export interface QuickCommandsProps {
   readonly commands: readonly CommandRowProps[];
+  readonly compact?: boolean;
 }
 
-export function QuickCommands({ commands }: QuickCommandsProps) {
+export function QuickCommands({ commands, compact = false }: QuickCommandsProps) {
+  if (compact) {
+    // Compact tier omits the Quick Commands panel chrome entirely; the active
+    // section's contextual actions already give the user the commands they
+    // can run. Keeping this in the public API lets the dashboard decide when
+    // to drop it without changing prop contracts.
+    return null;
+  }
   return (
     <Box flexDirection="column">
       <SectionLabel label="Quick commands" />
@@ -440,6 +524,7 @@ export interface DashboardProps {
   readonly mission: MissionCardProps;
   readonly stats: readonly DashboardStat[];
   readonly quickCommands: readonly CommandRowProps[];
+  readonly compact?: boolean;
 }
 
 export function Dashboard({
@@ -449,33 +534,37 @@ export function Dashboard({
   mission,
   stats,
   quickCommands,
+  compact = false,
 }: DashboardProps) {
   return (
     <Box flexDirection="column" flexGrow={1} paddingX={1}>
-      <Box justifyContent="space-between">
-        <Box flexDirection="column">
-          <Text color={COLORS.muted}>{subtitle}</Text>
-          <Text color={COLORS.text} bold>
-            {title}
-          </Text>
-        </Box>
+      {compact ? null : (
+        <Box justifyContent="space-between">
+          <Box flexDirection="column">
+            <Text color={COLORS.muted}>{subtitle}</Text>
+            <Text color={COLORS.text} bold>
+              {title}
+            </Text>
+          </Box>
 
-        <Box alignItems="flex-end">
-          <Text color={COLORS.muted}>
-            session <Text color={COLORS.green}>{sessionStatus}</Text>
-          </Text>
+          <Box alignItems="flex-end">
+            <Text color={COLORS.muted}>
+              session <Text color={COLORS.green}>{sessionStatus}</Text>
+            </Text>
+          </Box>
         </Box>
-      </Box>
+      )}
 
-      <Box marginTop={1}>
+      <Box marginTop={compact ? 0 : 1}>
         <MissionCard
           title={mission.title}
           description={mission.description}
           suggestions={mission.suggestions}
+          compact={compact}
         />
       </Box>
 
-      {stats.length > 0 ? (
+      {stats.length > 0 && !compact ? (
         <Box marginTop={1} gap={1}>
           {stats.map((stat) => (
             <SmallStat
@@ -490,8 +579,8 @@ export function Dashboard({
         </Box>
       ) : null}
 
-      <Box marginTop={1}>
-        <QuickCommands commands={quickCommands} />
+      <Box marginTop={compact ? 0 : 1}>
+        <QuickCommands commands={quickCommands} compact={compact} />
       </Box>
     </Box>
   );
@@ -561,7 +650,7 @@ export interface DashboardShellProps {
   readonly input: string;
   readonly busy: boolean;
   readonly placeholder: string;
-  readonly capabilities?: TerminalCapabilities;
+  readonly capabilities: TerminalCapabilities;
   readonly contextActions?: readonly SessionAction[];
   readonly selectedActionIndex?: number;
   readonly actionFocused?: boolean;
@@ -582,49 +671,60 @@ export function DashboardShell({
   input,
   busy,
   placeholder,
-  capabilities = DEFAULT_TERMINAL_CAPABILITIES,
+  capabilities,
   contextActions,
   selectedActionIndex = 0,
   actionFocused = false,
   children,
 }: DashboardShellProps) {
   const wide = isWideTerminal(capabilities);
+  const tier = compactnessTier(capabilities);
+  const compact = tier !== "full";
+  const omitDashboardChrome = tier === "minimal";
+  const showFooter = tier === "full";
+  const showQuickCommands = tier === "full" || tier === "standard";
+  const sidebarCompact = tier === "compact" || tier === "minimal";
+
   return (
-    <Box flexDirection="column" width="100%" borderStyle="round" borderColor={COLORS.border}>
-      <Header status={status} statusAccent={statusAccent} />
+    <Box flexDirection="column" width="100%">
+      <Header status={status} statusAccent={statusAccent} compact={compact} />
 
       <Box flexDirection={wide ? "row" : "column"}>
         <Sidebar
           selectedIndex={selectedNavigationIndex}
           focusedIndex={focusedNavigationIndex}
           capabilities={capabilities}
+          compact={sidebarCompact}
         />
         <Box flexDirection="column" flexGrow={1}>
-          <Dashboard
-            title={title}
-            subtitle={subtitle}
-            sessionStatus={sessionStatus}
-            mission={mission}
-            stats={stats}
-            quickCommands={quickCommands}
-          />
+          {omitDashboardChrome ? null : (
+            <Dashboard
+              title={title}
+              subtitle={subtitle}
+              sessionStatus={sessionStatus}
+              mission={mission}
+              stats={stats}
+              quickCommands={showQuickCommands ? quickCommands : []}
+              compact={compact}
+            />
+          )}
           {contextActions !== undefined ? (
-            <Box marginTop={1} paddingX={1}>
+            <Box marginTop={compact ? 0 : 1} paddingX={1}>
               <ContextActions
                 actions={contextActions}
                 selectedIndex={selectedActionIndex}
                 focused={actionFocused}
                 colorize={capabilities.color}
+                compact={compact}
               />
             </Box>
           ) : null}
           {children}
-          <Box flexGrow={1} />
           <PromptLine input={input} busy={busy} placeholder={placeholder} />
         </Box>
       </Box>
 
-      <Footer />
+      {showFooter ? <Footer /> : null}
     </Box>
   );
 }
