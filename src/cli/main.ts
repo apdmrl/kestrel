@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 import { render } from "ink";
 import { createElement } from "react";
 import { bootstrap, createConfig } from "../bootstrap/index.js";
