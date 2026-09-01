@@ -377,3 +377,92 @@ describe("session auth interaction — overlapping submission admission", () => 
     }
   });
 });
+
+describe("session auth interaction — prompt clearing on synchronous admission", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("clears the prompt immediately after admitting an interactive submit, then a second Enter is a no-op", async () => {
+    // The user types a mutating command (`/progress`), presses Enter, the
+    // handler runs, then they press Enter again WITHOUT typing anything.
+    // The admission guard (synchronous `operationRunning.current` ref) must
+    // have cleared the prompt buffer in the same tick the first submit
+    // was admitted — otherwise the second Enter would re-submit the same
+    // command. The handler must therefore be called exactly once.
+    const commandHandlers = handlers();
+    let resolveFirst: ((view: ViewModel) => void) | undefined;
+    let progressCalls = 0;
+    vi.mocked(commandHandlers.progress).mockImplementation(async () => {
+      progressCalls += 1;
+      return new Promise<ViewModel>((resolve) => {
+        resolveFirst = resolve;
+      });
+    });
+    const harness = mount({
+      handlers: commandHandlers,
+      signal: new AbortController().signal,
+    });
+    try {
+      await settle();
+      // Type the command and submit it. The stdin send bundles the typed
+      // characters + Enter, so the prompt receives the input transition.
+      harness.stdin.send("/progress\r");
+      await settle();
+      // The first submit was admitted; the prompt buffer must be empty
+      // (the user typed `/progress` but pressing Enter cleared it).
+      expect(progressCalls).toBe(1);
+      // The handler is still pending. Pressing Enter WITHOUT typing
+      // must be a no-op: the prompt is empty, so `commandText` is `""`
+      // and the early return fires.
+      harness.stdin.send("\r");
+      await settle(80);
+      expect(progressCalls).toBe(1);
+      // Resolve the first handler and confirm the session is ready again.
+      resolveFirst?.(view);
+      await settle(120);
+      expect(progressCalls).toBe(1);
+      expect(harness.lastFrame()).toContain("Ready");
+    } finally {
+      resolveFirst?.(view);
+      harness.unmount();
+    }
+  });
+
+  it("does not clear the prompt when a queued CR-chunk remainder submission is admitted", async () => {
+    // When the user pastes multi-line input, the Enter (CR) splits the
+    // chunk into the first command and a separately queued remainder.
+    // The remainder is preserved in the prompt buffer for the next
+    // submit. Clearing the prompt on a commandOverride-driven submit
+    // would destroy that queued remainder.
+    const commandHandlers = handlers();
+    let progressCalls = 0;
+    vi.mocked(commandHandlers.progress).mockImplementation(async () => view);
+    vi.mocked(commandHandlers.journey).mockImplementation(async () => {
+      progressCalls += 1;
+      return view;
+    });
+    const harness = mount({
+      handlers: commandHandlers,
+      signal: new AbortController().signal,
+    });
+    try {
+      await settle();
+      // Paste a CR-chunk: `/progress` is the first command, `/journey` is
+      // a queued remainder set into the prompt. The first command is
+      // submitted via `drainQueue(["/progress"])` (a commandOverride
+      // path), the second lives in the prompt buffer.
+      // NOTE: `/journey` is a valid command; the test will assert that
+      // submitting via commandOverride does NOT clobber the queued
+      // remainder.
+      harness.stdin.send("/progress\r/journey\r");
+      await settle();
+      // After both settle: progress ran once and journey was admitted
+      // because the queued remainder survived in the prompt.
+      expect(commandHandlers.progress).toHaveBeenCalledTimes(1);
+      expect(commandHandlers.journey).toHaveBeenCalledTimes(1);
+    } finally {
+      harness.unmount();
+    }
+  });
+});

@@ -15,7 +15,15 @@ import {
 import { actionsForSection, NAVIGATION_SECTIONS } from "./session-navigation.js";
 import { parseSessionCommand, SessionParseError } from "./session-parser.js";
 import { renderSessionView } from "./session-renderer.js";
-import { createChildOperation, runStartupAuth } from "./session-runtime.js";
+import {
+  createChildOperation,
+  createAdmissionSlot,
+  releaseAdmission,
+  runStartupAuth,
+  tryAdmit,
+  type AdmissionSlot,
+  type AdmissionToken,
+} from "./session-runtime.js";
 import {
   initialSessionState,
   sessionReducer,
@@ -235,7 +243,13 @@ export function Session({
   const [latestRecommendation, setLatestRecommendation] =
     useState<RecommendationViewModel | null>(latestRecommendationProp);
   const activeOperation = useRef<{ controller: AbortController; dispose: () => void } | null>(null);
-  const operationRunning = useRef(false);
+  // `admissionSlot` is the synchronous admission state. The slot is a
+  // pure data object so it can be reasoned about (and tested) without
+  // the React renderer. The same shape is exported from
+  // `session-runtime.ts` as `AdmissionSlot`; the ref keeps the latest
+  // slot snapshot and is read inside `submit()` BEFORE any await.
+  const admissionSlot = useRef<AdmissionSlot>(createAdmissionSlot());
+  const admissionToken = useRef<AdmissionToken | null>(null);
   // Mount-time startup auth check is owned by an effect. The handle is
   // disposed on unmount so the deadline timer is cleared, the parent
   // abort listener is detached, and no late auth transition is dispatched
@@ -301,31 +315,53 @@ export function Session({
     exit();
   };
   const submit = async (commandOverride?: string): Promise<void> => {
+    const hasCommandOverride = commandOverride !== undefined;
     const commandText = (commandOverride ?? input).trim();
-    // `operationRunning.current` is the synchronous admission guard: two
-    // calls in the same React tick must not both pass the check and
-    // install competing children. The `busy` state mirrors the ref for
-    // the renderer but cannot be relied on for admission because React
-    // state updates are deferred.
-    if (commandText.length === 0 || operationRunning.current || closing.current) return;
-    addEntry("input", commandText);
+    // Empty / mid-shutdown commands are rejected before any state
+    // mutation. Parse / clear / exit are handled below; only those
+    // commands that actually install a foreground child get admitted
+    // into the synchronous slot.
+    if (commandText.length === 0 || closing.current) return;
     const parsed = parseSessionCommand(commandText);
     if (parsed instanceof SessionParseError) {
+      addEntry("input", commandText);
       addEntry("error", `! ${parsed.message}`);
       return;
     }
     if (parsed.kind === "clear") {
+      addEntry("input", commandText);
       setTranscript([]);
+      if (!hasCommandOverride) setInput("");
       return;
     }
     if (parsed.kind === "exit") {
+      addEntry("input", commandText);
+      if (!hasCommandOverride) setInput("");
       close();
       return;
     }
     if (signal.aborted) {
+      addEntry("input", commandText);
       addEntry("error", "! Operation cancelled");
       return;
     }
+    // `admissionSlot.current` is the synchronous admission guard: two
+    // calls in the same React tick must not both pass the check and
+    // install competing children. The slot is a pure data object so the
+    // same guard can be exercised by tests without the React renderer.
+    // The `busy` state mirrors the slot for the renderer but cannot be
+    // relied on for admission because React state updates are deferred.
+    const admission = tryAdmit(admissionSlot.current);
+    if (admission === null) return;
+    admissionSlot.current = admission.slot;
+    admissionToken.current = admission.token;
+    // Restore prompt clearing for ordinary interactive submit: the user
+    // typed a command and pressed Enter, the synchronous guard passed,
+    // and no `commandOverride` was supplied (which would be a separately
+    // queued CR chunk whose remainder must be preserved in the prompt).
+    // A rejected overlapping submission returns above without touching
+    // the prompt buffer.
+    if (!hasCommandOverride) setInput("");
     // Allocate the reducer IDs for this command BEFORE awaiting the
     // controller. The reducer ignores events whose IDs don't match the
     // running operation/attempt, so a later in-flight event can't
@@ -354,7 +390,6 @@ export function Session({
     // clobber a freshly installed one.
     const child = createChildOperation(signal);
     activeOperation.current = child;
-    operationRunning.current = true;
     const capturedOperationId = operationId;
     const capturedAttemptId = attemptId;
     setBusy(true);
@@ -428,13 +463,18 @@ export function Session({
         dispatch({ type: "OPERATION_FAILED", operationId: capturedOperationId, errorCode: "UNKNOWN" });
       }
     } finally {
-      // Only clear the active ref AND the renderer-visible busy flag when
-      // this child is still the installed foreground operation. A stale
-      // completion must not clear a freshly-installed child's busy state,
-      // and it must not block Ctrl+C from aborting the newer child.
-      if (activeOperation.current === child) {
+      // Release the admission slot only when the token still matches the
+      // currently-installed active operation. A stale completion (whose
+      // child has been replaced by a newer submission) is a no-op — it
+      // must not clear a freshly-installed child's busy state, and it
+      // must not block Ctrl+C from aborting the newer child. The same
+      // identity-check pattern guards the `activeOperation.current`
+      // ref so the two refs stay in sync.
+      const release = releaseAdmission(admissionSlot.current, admission.token);
+      admissionSlot.current = release.slot;
+      if (release.released && activeOperation.current === child) {
         activeOperation.current = null;
-        operationRunning.current = false;
+        admissionToken.current = null;
         setBusy(false);
       }
       child.dispose();
@@ -456,6 +496,9 @@ export function Session({
       drainingQueue.current = false;
     }
   };
+
+
+
 
   const activeSection = NAVIGATION_SECTIONS[selectedCategoryIndex] ?? NAVIGATION_SECTIONS[0];
   const activeSectionId = activeSection?.id ?? "home";
@@ -539,7 +582,7 @@ export function Session({
         // Busy Ctrl+C aborts only the foreground child operation; the
         // session remains active so the user can run another command.
         // Idle Ctrl+C clears the prompt buffer.
-        if (operationRunning.current && activeOperation.current !== null) {
+        if (admissionSlot.current.running && activeOperation.current !== null) {
           activeOperation.current.controller.abort();
         }
         return;

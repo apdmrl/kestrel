@@ -39,6 +39,70 @@ export function createChildOperation(parent: AbortSignal): {
 }
 
 /**
+ * Opaque identity returned by `tryAdmit` so a later `release` can be
+ * rejected when the in-flight operation has already been replaced by a
+ * newer submission. The slot refuses to admit a second submission while
+ * the first is still running, even when both calls land in the same
+ * React tick — React's deferred `busy` state would have allowed both to
+ * pass the guard. The synchronous ref + identity token is what makes
+ * the runtime admission bullet-proof.
+ */
+export interface AdmissionToken {
+  readonly id: number;
+}
+
+export interface AdmissionSlot {
+  readonly running: boolean;
+  readonly activeId: number | null;
+  readonly nextId: number;
+}
+
+export function createAdmissionSlot(): AdmissionSlot {
+  return { running: false, activeId: null, nextId: 1 };
+}
+
+/**
+ * Try to admit a new submission into the slot. Returns the updated slot
+ * and the issued token, or `null` when the slot is already busy. The
+ * caller stores the returned token and the updated slot (both pieces are
+ * required to later release the slot).
+ */
+export function tryAdmit(
+  slot: AdmissionSlot,
+): { slot: AdmissionSlot; token: AdmissionToken } | null {
+  if (slot.running) return null;
+  const token: AdmissionToken = { id: slot.nextId };
+  return {
+    slot: {
+      running: true,
+      activeId: token.id,
+      nextId: token.id + 1,
+    },
+    token,
+  };
+}
+
+/**
+ * Release the slot for the token issued by `tryAdmit`. Returns the
+ * updated slot. When the token does not match the currently-installed
+ * active operation (because a newer submission replaced it) the release
+ * is a no-op — a stale completion must not clear the newer operation's
+ * busy state.
+ */
+export function releaseAdmission(
+  slot: AdmissionSlot,
+  token: AdmissionToken,
+): { slot: AdmissionSlot; released: boolean } {
+  if (slot.activeId !== token.id) {
+    return { slot, released: false };
+  }
+  return {
+    slot: { running: false, activeId: null, nextId: slot.nextId },
+    released: true,
+  };
+}
+
+/**
  * Handle returned by `runStartupAuth`. The Session keeps the `run`
  * promise unhandled so first render never blocks; it calls `dispose()`
  * from the mount effect cleanup so an unmount-before-deadline aborts
