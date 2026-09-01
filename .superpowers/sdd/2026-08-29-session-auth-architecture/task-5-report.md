@@ -253,3 +253,151 @@ export function runStartupAuth(input: {
    (e.g. session reset) would re-trigger it because the `useEffect` deps
    are empty. The brief did not require a reset path; this matches the
    existing single-mount contract.
+## R1 Follow-up: Startup Auth Unmount + Foreground Admission Gate
+
+The SessionRuntimeReview re-review surfaced two Important lifecycle
+defects. Both are resolved in commit `dfd9802` without re-running the
+project-wide suite.
+
+### Finding A — startup auth is not disposable by Session unmount
+
+**Before.** `runStartupAuth` returned a bare `Promise<void>`. The Session
+mount effect only set a `cancelled` flag in cleanup; the deadline
+timer kept ticking, the parent abort listener stayed installed, and a
+late handler settlement could still dispatch `AUTH_FAILED` into a
+reducer that had already torn down.
+
+**After.** `runStartupAuth` now returns a `StartupAuthHandle` with a
+`run` promise and a synchronous `dispose()`. The Session mount effect
+calls `dispose()` from its cleanup, which aborts the child signal,
+clears the deadline timer, removes the parent listener, and settles
+the run promise without dispatching any auth transition. Late handler
+settlement after dispose is suppressed by the `settled` flag.
+
+### Finding B — busy-state admission was driven by deferred React state
+
+**Before.** `submit()` used the React `busy` state as the admission
+guard, and the `finally` block called `setBusy(false)` unconditionally.
+Two `submit()` calls dispatched in the same tick could both pass the
+guard (React state was stale), and the first's `finally` could clear a
+newer child's busy state.
+
+**After.** `submit()` uses the synchronous `operationRunning.current`
+ref as the admission guard, and the `finally` block clears both
+`operationRunning.current` and `setBusy(false)` only when the child
+identity still matches `activeOperation.current`. A stale older
+completion cannot clobber a freshly installed child's busy state and
+cannot block Ctrl+C from aborting the newer child.
+
+### RED — first run with the new tests on the OLD runtime
+
+The new dispose-based runtime tests cannot even bind against the OLD
+`runStartupAuth` because the OLD API returns `Promise<void>`, not the
+`{ run, dispose }` handle:
+
+```
+$ git stash push -- src/cli/interactive/session-runtime.ts
+$ npx vitest run src/cli/interactive/session-runtime.test.ts
+
+ FAIL  src/cli/interactive/session-runtime.test.ts > runStartupAuth > suppresses a late handler resolution that arrives after dispose
+TypeError: handle.dispose is not a function
+ ❯ src/cli/interactive/session-runtime.test.ts:417:12
+    417|     handle.dispose();
+
+ Test Files  1 failed (1)
+      Tests  13 failed | 4 passed (17)
+```
+
+13 of the 17 runtime tests fail (the 4 passing ones are the
+unaffected `STARTUP_AUTH_TIMEOUT_MS` and `createChildOperation`
+describes that don't touch the new handle). The OLD API has no way to
+satisfy the unmount-before-deadline contract.
+
+### RED — first run with the new admission tests on the OLD `submit` guard
+
+Reverting just the `submit()` admission guard from
+`operationRunning.current` back to `busy` (the rest of the new code
+intact):
+
+```
+$ git stash push -- src/cli/interactive/session.tsx
+$ cp /tmp/session.tsx.old src/cli/interactive/session.tsx
+$ npx vitest run src/cli/interactive/session-auth.test.tsx -t "overlapping"
+
+ FAIL  src/cli/interactive/session-auth.test.tsx > session auth interaction — overlapping submission admission > keeps the renderer busy and the synchronous guard set while the foreground child is in flight
+AssertionError: expected "spy" to be called 1 times, but got 0 times
+ ❯ src/cli/interactive/session-auth.test.tsx:359:40
+
+ FAIL  src/cli/interactive/session-auth.test.tsx > session auth interaction — overlapping submission admission > admits only one in-flight submission at a time and clears busy state synchronously
+
+ Test Files  1 failed (1)
+      Tests  2 failed | 6 skipped (8)
+```
+
+Both new overlapping-submission tests fail on the OLD guard because
+the React `busy` state is too late to reject a second submission
+dispatched in the same tick.
+
+### GREEN — focused four-file suite after the fix
+
+```
+$ git stash pop
+$ npx vitest run src/cli/interactive/session-runtime.test.ts \
+                  src/cli/interactive/session-state.test.ts \
+                  src/cli/interactive/session.test.tsx \
+                  src/cli/interactive/session-auth.test.tsx
+
+ ✓ src/cli/interactive/session.test.tsx (25 tests) 3251ms
+ ✓ src/cli/interactive/session-auth.test.tsx (8 tests) 1479ms
+ ✓ src/cli/interactive/session-runtime.test.ts (17 tests) 43ms
+ ✓ src/cli/interactive/session-state.test.ts (52 tests) 22ms
+
+ Test Files  4 passed (4)
+      Tests  102 passed (102)
+```
+
+### Adjacent regression check (touched modules only)
+
+```
+$ npx vitest run src/cli/interactive/session-controller.test.ts \
+                  src/cli/interactive/session-navigation.test.ts \
+                  src/cli/interactive/session-renderer.test.ts \
+                  src/cli/interactive/dashboard.test.tsx
+
+ ✓ src/cli/interactive/dashboard.test.tsx (79 tests) 439ms
+ ✓ src/cli/interactive/session-controller.test.ts (11 tests) 31ms
+ ✓ src/cli/interactive/session-navigation.test.ts (21 tests) 17ms
+ ✓ src/cli/interactive/session-renderer.test.ts (18 tests) 14ms
+
+ Test Files  4 passed (4)
+      Tests  129 passed (129)
+```
+
+### Counts
+
+| Suite                       | Before R1 | After R1 | Delta |
+| --------------------------- | --------- | -------- | ----- |
+| session-runtime.test.ts     | 15        | 17       | +2    |
+| session-state.test.ts       | 52        | 52       | 0     |
+| session.test.tsx            | 25        | 25       | 0     |
+| session-auth.test.tsx       | 6         | 8        | +2    |
+| **Focused suite total**     | **98**    | **102**  | **+4** |
+
+Two new runtime tests cover the dispose API (timer cleared + parent
+listener detached + late event suppressed). Two new session-auth tests
+cover the synchronous admission guard (one handler admitted at a time,
+busy state survives a second submission attempt).
+
+### Commit
+
+- SHA: `dfd9802`
+- Subject: `fix(tui): cancel startup auth on unmount and gate busy state on identity`
+- Files committed (4, 278 insertions / 58 deletions):
+  - `src/cli/interactive/session-runtime.ts` (modified, +50 / -22 — `runStartupAuth` now returns `{ run, dispose }`)
+  - `src/cli/interactive/session-runtime.test.ts` (modified, +91 / -31 — converted to handle API, added unmount-before-deadline and late-settlement tests)
+  - `src/cli/interactive/session.tsx` (modified, +20 / -14 — mount effect disposes startup handle, `submit()` uses synchronous `operationRunning.current` guard, `finally` gates `setBusy(false)` on identity)
+  - `src/cli/interactive/session-auth.test.tsx` (modified, +108 / 0 — added "overlapping submission admission" describe with two tests)
+
+No formatter / lint / typecheck / build / full suite run per the
+directive. The brief's exact Step 8 command plus an adjacent
+touched-module regression check is the entire validation scope.
