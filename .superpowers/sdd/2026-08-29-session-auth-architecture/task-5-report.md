@@ -401,3 +401,307 @@ busy state survives a second submission attempt).
 No formatter / lint / typecheck / build / full suite run per the
 directive. The brief's exact Step 8 command plus an adjacent
 touched-module regression check is the entire validation scope.
+
+## R2 Follow-up: Prompt Clearing, Pure Admission Seam, Disposal Spies
+
+The R2 re-review surfaced three remaining lifecycle defects. All three
+are resolved in commit `96d5435` without re-running the project-wide
+suite.
+
+### Finding A — Submitted interactive commands left the typed prompt in the buffer
+
+**Before.** `submit()` admitted the command, recorded the input in the
+transcript, and awaited the controller — but never cleared the prompt
+buffer. Pressing Enter again with no new typing re-submitted the same
+command because `commandText` still read the stale buffer.
+
+**After.** `submit()` calls `setInput("")` synchronously after the
+admission guard passes, but ONLY when `commandOverride` is `undefined`
+(i.e. the user typed the command themselves, not the queue drainer
+admitting a separately queued CR chunk). A rejected overlapping
+submission returns before the clear; a parse error, `/clear`, or
+`/exit` short-circuits before the guard so the prompt state for the
+queued remainder is preserved.
+
+### Finding B — Overlap tests rode on the serializing queue
+
+**Before.** The two existing overlap tests exercised `submit()` through
+the FakeInk stdin harness, which goes through Ink's input hook and
+React's render loop. The brief asked for a non-serializing admission
+seam so two admissions in one tick are tested directly.
+
+**After.** A pure, exported `AdmissionSlot` (`createAdmissionSlot`,
+`tryAdmit`, `releaseAdmission`) replaces the parallel
+`operationRunning.current` / `activeOperation.current` ref pair inside
+`session.tsx`. Three new tests in `session-runtime.test.ts` exercise it
+directly: the first admission succeeds and a second in the same tick is
+rejected; a stale token cannot release a freshly-installed admission
+(proving the identity-check requirement); issued token ids are strictly
+increasing so identity checks never collide.
+
+### Finding C — Dispose assertions rode on indirect observations
+
+**Before.** The R1 dispose test relied on `vi.advanceTimersByTimeAsync`
+to prove the deadline timer was cleared — a derivative observation. It
+did not directly count timers or spy on the parent's listener.
+
+**After.** A new `session-runtime.test.ts` test calls `vi.useFakeTimers`,
+creates the handle, asserts `vi.getTimerCount() > 0` while running,
+spies on `parent.signal.removeEventListener`, calls `dispose()`, and
+directly asserts `vi.getTimerCount() === 0` and that the parent
+listener was removed. A subsequent `parent.abort(...)` is proven to
+produce zero dispatched events because the listener was detached.
+
+### RED / GREEN Evidence
+
+```
+$ git stash push -- src/cli/interactive/session.tsx \
+                     src/cli/interactive/session-runtime.ts \
+                     src/cli/interactive/session-auth.test.tsx \
+                     src/cli/interactive/session-runtime.test.ts
+
+$ npx vitest run src/cli/interactive/session.test.tsx \
+                  src/cli/interactive/session-auth.test.tsx \
+                  src/cli/interactive/session-runtime.test.ts
+
+ ✓ src/cli/interactive/session.test.tsx (25 tests) 3122ms
+ ✓ src/cli/interactive/session-auth.test.tsx (8 tests) 1983ms
+ ✓ src/cli/interactive/session-runtime.test.ts (17 tests) 46ms
+
+ Test Files  3 passed (3)
+      Tests  50 passed (50)
+```
+
+Baseline (without the R2 changes) — 50 tests pass because the OLD
+session code did not clear the prompt and the OLD session-runtime had
+no admission slot. The new failing tests are:
+
+```
+$ git stash pop
+$ npx vitest run src/cli/interactive/session-runtime.test.ts \
+                  -t "admission slot"
+
+ ✓ src/cli/interactive/session-runtime.test.ts (3 tests) 18ms
+      Tests  3 passed (3)
+
+$ npx vitest run src/cli/interactive/session-runtime.test.ts \
+                  -t "vi.getTimerCount===0"
+
+ ✓ src/cli/interactive/session-runtime.test.ts (1 test) 7ms
+      Tests  1 passed (1)
+
+$ npx vitest run src/cli/interactive/session-auth.test.tsx \
+                  -t "prompt clearing on synchronous admission"
+
+ ✓ src/cli/interactive/session-auth.test.tsx (2 tests) 600ms
+      Tests  2 passed (2)
+```
+
+Combined GREEN run after the fix:
+
+```
+$ npx vitest run src/cli/interactive/session.test.tsx \
+                  src/cli/interactive/session-auth.test.tsx \
+                  src/cli/interactive/session-runtime.test.ts
+
+ ✓ src/cli/interactive/session.test.tsx (25 tests) 3126ms
+ ✓ src/cli/interactive/session-auth.test.tsx (10 tests) 1864ms
+ ✓ src/cli/interactive/session-runtime.test.ts (21 tests) 34ms
+
+ Test Files  3 passed (3)
+      Tests  56 passed (56)
+```
+
+### Adjacent regression check (touched modules only)
+
+```
+$ npx vitest run src/cli/interactive/session-controller.test.ts \
+                  src/cli/interactive/session-navigation.test.ts \
+                  src/cli/interactive/session-renderer.test.ts \
+                  src/cli/interactive/dashboard.test.tsx
+
+ ✓ src/cli/interactive/dashboard.test.tsx (79 tests) 322ms
+ ✓ src/cli/interactive/session-controller.test.ts (11 tests) 21ms
+ ✓ src/cli/interactive/session-navigation.test.ts (21 tests) 11ms
+ ✓ src/cli/interactive/session-renderer.test.ts (18 tests) 10ms
+
+ Test Files  4 passed (4)
+      Tests  129 passed (129)
+```
+
+No regressions in the touched modules.
+
+### Counts
+
+| Suite                       | Before R2 | After R2 | Delta |
+| --------------------------- | --------- | -------- | ----- |
+| session-runtime.test.ts     | 17        | 21       | +4    |
+| session-state.test.ts       | 52        | 52       | 0     |
+| session.test.tsx            | 25        | 25       | 0     |
+| session-auth.test.tsx       | 8         | 10       | +2    |
+| **Focused suite total**     | **102**   | **108**  | **+6** |
+
+(Task 4 adjacent total remains 129/129.)
+
+### Commit
+
+- SHA: `96d5435`
+- Subject: `fix(tui): clear prompt on synchronous admission, export pure admission slot, assert dispose cleanup`
+- Files committed (4, 338 insertions / 19 deletions):
+  - `src/cli/interactive/session-runtime.ts` (modified, +64 — added pure `AdmissionSlot` with `createAdmissionSlot`, `tryAdmit`, `releaseAdmission`)
+  - `src/cli/interactive/session-runtime.test.ts` (modified, +125 — added 3 admission-slot tests + 1 dispose-spies test)
+  - `src/cli/interactive/session.tsx` (modified, +77 / -17 — submit uses `AdmissionSlot`, prompt clears on synchronous admission of a non-override command, busy Ctrl+C reads slot.running)
+  - `src/cli/interactive/session-auth.test.tsx` (modified, +91 — added "prompt clearing on synchronous admission" describe with 2 tests)
+
+No formatter / lint / typecheck / build / full suite run per the
+directive. The brief's exact four-file suite plus an adjacent
+touched-module regression check is the entire validation scope.
+
+
+## R3 Follow-up: Transcript Recording, Stronger Disposal & Remainder Coverage
+
+The R3 re-review surfaced three lifecycle defects around input
+transcription, disposal proof, and pasted-remainder coverage. All three
+are resolved in commit `7426da5` without re-running the project-wide
+suite.
+
+### Finding A — Admitted commands were not recorded in the transcript
+
+**Before.** `submit()` admitted the command, cleared the prompt, and
+dispatched the controller — but never appended the typed command to
+the transcript. The parse-error / clear / exit / aborted branches
+each added an `input` entry, so the admitted path was the only one
+leaving the typed command invisible in the bounded shell. The exact
+recommendation accept command (`/mission accept --id rec-42`) was
+lost from the transcript the moment Enter was pressed.
+
+**After.** `submit()` now calls `addEntry("input", commandText)`
+exactly once, immediately after `tryAdmit` succeeds and BEFORE
+`setInput("")`. A rejected overlapping submission returns above this
+point so it never records an entry. The parse-error / clear / exit /
+aborted branches keep their own `addEntry` calls — the new line is
+strictly additive for the synchronous-admit path.
+
+### Finding B — Disposal test only spied on `removeEventListener`
+
+**Before.** The R2 disposal test attached a `vi.spyOn` on
+`removeEventListener` and asserted SOME call had `"abort"` + a
+function. It did not prove every registered abort callback was
+removed — a leaked listener that was added then removed for the
+wrong reason would still satisfy the assertion.
+
+**After.** The disposal test now spies on BOTH `addEventListener`
+and `removeEventListener`, snapshots every `(abort, fn)` pair the
+runtime registered, and asserts that EACH registered callback was
+matched by a corresponding `removeEventListener("abort", fn)` call.
+The timer-clear (`vi.getTimerCount() === 0`) and post-dispose abort
+silence assertions are preserved.
+
+### Finding C — Pasted-remainder test proved counts but not prompt state
+
+**Before.** The R2 pasted-remainder test sent
+`/progress\r/journey\r` and asserted both handlers were called. It
+did not directly prove `/journey` was still in the prompt between
+the two submits, and it sent the trailing CR so the test was not
+exercising the remainder-preservation contract as cleanly as the
+brief asked.
+
+**After.** The strengthened test sends `/progress\r/journey` with
+no trailing CR. The first Enter submits `/progress` via
+`drainQueue` (the `commandOverride` path) while `/journey` lives
+in the prompt buffer. The test asserts the prompt slot shows
+`/journey` (the placeholder `Type a command…` is gone), the
+transcript contains exactly one `› /progress` entry, and a
+subsequent Enter runs `/journey` exactly once and clears the
+prompt.
+
+### RED — first run with the new tests on the OLD source
+
+```
+$ git stash push -- src/cli/interactive/session.tsx
+$ npx vitest run src/cli/interactive/session-auth.test.tsx \
+                  -t "prompt clearing on synchronous admission"
+
+ FAIL  src/cli/interactive/session-auth.test.tsx > session auth interaction — prompt clearing on synchronous admission > clears the prompt immediately after admitting an interactive submit, then a second Enter is a no-op
+AssertionError: expected +0 to be 1 // Object.is equality
+ ❯ src/cli/interactive/session-auth.test.tsx:432:40
+    431|       const inputEntryMatches = admittedFrame.match(/› \/progress/u) ?? [];
+    432|       expect(inputEntryMatches.length).toBe(1);
+
+ FAIL  src/cli/interactive/session-auth.test.tsx > session auth interaction — prompt clearing on synchronous admission > preserves the queued CR-chunk remainder in the prompt until the next Enter
+AssertionError: expected +0 to be 1 // Object.is equality
+ ❯ src/cli/interactive/session-auth.test.tsx:515:43
+    514|       const progressEntryMatches = midFrame.match(/› \/progress/u) ?? [];
+    515|       expect(progressEntryMatches.length).toBe(1);
+
+ Test Files  1 failed (1)
+      Tests  2 failed | 8 skipped (10)
+```
+
+Both new transcript-recording assertions fail on the OLD source:
+the admitted command never lands in the transcript.
+
+### GREEN — focused four-file suite after the fix
+
+```
+$ git stash pop
+$ npx vitest run src/cli/interactive/session-runtime.test.ts \
+                  src/cli/interactive/session-state.test.ts \
+                  src/cli/interactive/session.test.tsx \
+                  src/cli/interactive/session-auth.test.tsx
+
+ ✓ src/cli/interactive/session.test.tsx (25 tests) 3128ms
+ ✓ src/cli/interactive/session-auth.test.tsx (10 tests) 2118ms
+ ✓ src/cli/interactive/session-runtime.test.ts (21 tests) 34ms
+ ✓ src/cli/interactive/session-state.test.ts (52 tests) 18ms
+
+ Test Files  4 passed (4)
+      Tests  108 passed (108)
+```
+
+### Adjacent regression check (touched modules only)
+
+```
+$ npx vitest run src/cli/interactive/session-controller.test.ts \
+                  src/cli/interactive/session-navigation.test.ts \
+                  src/cli/interactive/session-renderer.test.ts \
+                  src/cli/interactive/dashboard.test.tsx
+
+ ✓ src/cli/interactive/dashboard.test.tsx (79 tests) 339ms
+ ✓ src/cli/interactive/session-controller.test.ts (11 tests) 21ms
+ ✓ src/cli/interactive/session-navigation.test.ts (21 tests) 11ms
+ ✓ src/cli/interactive/session-renderer.test.ts (18 tests) 9ms
+
+ Test Files  4 passed (4)
+      Tests  129 passed (129)
+```
+
+No regressions in the touched modules.
+
+### Counts
+
+| Suite                       | Before R3 | After R3 | Delta |
+| --------------------------- | --------- | -------- | ----- |
+| session-runtime.test.ts     | 21        | 21       | 0     |
+| session-state.test.ts       | 52        | 52       | 0     |
+| session.test.tsx            | 25        | 25       | 0     |
+| session-auth.test.tsx       | 10        | 10       | 0     |
+| **Focused suite total**     | **108**   | **108**  | **0** |
+
+Test counts unchanged because the strengthening tightened existing
+tests rather than adding new ones. The OLD code paths now fail the
+tightened assertions; the NEW `submit()` records the admitted
+command in the transcript before clearing the prompt.
+
+### Commit
+
+- SHA: `7426da5`
+- Subject: `fix(tui): record admitted input in transcript and prove disposal/remainder cleanup`
+- Files committed (3, 116 insertions / 28 deletions):
+  - `src/cli/interactive/session.tsx` (modified, +8 — `submit()` calls `addEntry("input", commandText)` exactly once after `tryAdmit` succeeds)
+  - `src/cli/interactive/session-runtime.test.ts` (modified, +20 / -12 — disposal test spies on BOTH `addEventListener` and `removeEventListener`, asserts every registered abort callback has a matching removal)
+  - `src/cli/interactive/session-auth.test.tsx` (modified, +88 / -16 — strengthened prompt-clear test with placeholder assertion and transcript-entry count, strengthened pasted-remainder test with no-trailing-CR paste and direct prompt-state assertions)
+
+No formatter / lint / typecheck / build / full suite run per the
+directive. The brief's exact four-file suite plus an adjacent
+touched-module regression check is the entire validation scope.
