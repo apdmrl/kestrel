@@ -566,7 +566,31 @@ export function Session({
   // abort only the current command so the session can keep accepting
  // new ones; the lifetime signal stays untouched.
   const drainQueue = async (commands: readonly string[]): Promise<void> => {
-    commandQueue.current.push(...commands);
+    // Filter out `/clear` and `/exit` commands queued while the
+    // admission slot is busy. They cannot run until the slot is
+    // free, but if they remain in `commandQueue` the drain loop
+    // will re-submit them after the slot releases (e.g. once
+    // Ctrl+C aborts the prior child), reaching `close()` and
+    // unmounting Ink — contrary to SESSION-EXIT-002. The
+    // rejection notice is rendered here exactly once so the
+    // transcript reflects the user's intent, and the queued
+    // duplicate never reaches `submit` again.
+    const accepted: string[] = [];
+    for (const cmd of commands) {
+      const trimmed = cmd.trim();
+      const isControl =
+        trimmed === "/exit" ||
+        trimmed === "/clear" ||
+        trimmed.startsWith("/exit ") ||
+        trimmed.startsWith("/clear ");
+      if (!isControl || !admissionSlot.current.running) {
+        accepted.push(cmd);
+      } else {
+        addEntry("input", trimmed);
+        addEntry("output", "Cannot run /clear or /exit while a command is in flight");
+      }
+    }
+    commandQueue.current.push(...accepted);
     if (drainingQueue.current) return;
     drainingQueue.current = true;
     try {

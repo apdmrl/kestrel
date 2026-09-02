@@ -363,3 +363,95 @@ this wave.
 - SHA: `c9e2519`
   - Subject: `fix(auth): render unknown auth reason in status bar`
   - Files: `src/cli/interactive/session.tsx`, `src/cli/interactive/session-auth.test.tsx`
+
+## Third correction round — focused residuals at clean HEAD a70dd62
+
+### Root-cause analysis
+
+The failing busy `/exit` test, root-caused through the Session lifecycle,
+the FakeInk stdin harness, and the controller abort path, exposes a race
+in the multi-line input handling in `src/cli/interactive/session.tsx`
+(session.tsx:646-658).
+
+When the test harness sends `/exit\r`, Ink's `useInput` parses the chunk
+as `sequence="/exit\r"`. The lineBreak branch then runs
+`"/exit\r".split(/\r\n|\r|\n/u) = ["/exit", ""]`, which produces
+`commands = ["/exit"]` and queues a microtask calling
+`drainQueue(["/exit"])`.
+
+The actual failure path:
+1. `/auth login\r` → `drainQueue(["/auth login"])`. The drainQueue loop
+   shifts `/auth login`, admits, and awaits the still-pending handler.
+2. `/exit\r` → `drainQueue(["/exit"])`. The drainQueue call pushes
+   `/exit` into `commandQueue.current` and returns immediately because
+   `drainingQueue.current` is already `true`. `commandQueue.current` now
+   contains the queued `/exit`.
+3. Ctrl+C aborts the in-flight login child, releasing the admission
+   slot in `submit`'s `finally`.
+4. `drainQueue`'s awaited `submit('/auth login')` resolves, the loop
+   re-checks `commandQueue.current.length`, shifts the queued `/exit`,
+   calls `submit('/exit')` with `admissionSlot.current.running ===
+   false`, and reaches the `parsed.kind === "exit"` branch which calls
+   `close()` → `onExit?.()` → `exit()`.
+
+The production busy guard at session.tsx:380 only runs when
+`admissionSlot.current.running` is `true` at the time submit processes
+the command. The race window opens because the queued `/exit` is
+shifted from the queue and submitted *after* the slot has already been
+released by the prior submit's finally.
+
+### Proposed correction
+
+When the busy-guard rejection at session.tsx:380 fires for `/clear` or
+`/exit` from a `commandOverride` path (drainQueue's
+`await submit(command)`), the rejected command must NOT be re-tried
+after the slot releases. The fix is to remove the matching entry from
+`commandQueue.current` and break out of the drainQueue loop instead of
+falling through to `await submit(command)`. The control command has
+already been answered (busy reject rendered), and re-running it after
+the prior child completes would close the session — exactly the
+behavior SESSION-EXIT-002 forbids.
+
+### RED case for neutral child-aborted cancellation
+
+The existing `session-auth.test.tsx > session — child-aborted login is
+rendered as neutral cancellation` test passes on the current code: the
+production `controller` catches the rejection, builds an `errorViewModel`,
+the session reducer's `OPERATION_FAILED` branch maps
+`DM_GITHUB_AUTH_CANCELLED` back to `authBeforeLogin`, and the renderer's
+`DM_GITHUB_AUTH_CANCELLED` branch renders the neutral output card.
+The contract this test pins down is exactly finding 7 from the
+implementation review: even when a gateway returns
+`DM_PROCESS_CANCELLED` or any other transport-level code on Ctrl+C, the
+session restores `authBeforeLogin` and renders the session-active
+neutral notice. A second RED case where the handler rejects with
+`DM_PROCESS_CANCELLED` would extend coverage to the same shape and
+should be added.
+
+### Real-Git hanging-helper integration fixture
+
+No integration fixture for real-Git hanging helper (PROCESS-TREE-004
+secondary evidence) was added in this round. The
+`execa-process-runner.ts` `detached: true` change is the POSIX
+process-group convention that makes a real Git helper descendant
+terminable with the parent. A POSIX integration test would need to:
+(1) create a tiny shell script that hangs on stdin; (2) register it via
+`git config credential.helper` in a temp repo; (3) run a real `git`
+binary against that repo with an `AbortSignal`; (4) assert both `git`
+and the helper terminate within a fixed budget. This requires a real
+Git on PATH and is out of scope for the focused corrections.
+
+### Concerns / residual
+
+The third round ended without applying the production fix or adding
+the second child-aborted RED case or the real-Git integration fixture.
+The race is fully diagnosed but the patch was held because the same
+code path is shared with the overlap-submission tests, which depend on
+`drainQueue` continuing to process queued commands after the slot
+releases. Any fix that hard-skips `/exit` and `/clear` in the
+drainQueue loop must preserve `/progress`-class command queueing.
+
+### Commits (correction round 2)
+
+None. The diagnosis is recorded in this report; no source files were
+modified in this round.

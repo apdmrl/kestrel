@@ -1,4 +1,5 @@
-import { execa } from "execa";
+import { spawn } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import { platform } from "node:os";
 import { isAbsolute, join } from "node:path";
@@ -104,65 +105,115 @@ export class ExecaProcessRunner implements ProcessRunner {
     if (!executableExists(options.executable)) {
       throw notFoundError();
     }
-    let result;
+    const isPosix = platform() !== "win32";
+    // Spawn the child via `node:child_process.spawn` directly so
+    // the runner owns the lifecycle. `execa`'s `cancelSignal` only
+    // kills the direct child via `subprocess.kill()`, which leaves
+    // a real Git credential helper (a descendant of the direct git
+    // child) holding the stdout/stderr streams open — the runner's
+    // promise would never settle. With `detached: true` the child
+    // is its own process group leader; on AbortSignal the runner
+    // sends SIGTERM to the negated child PID so the entire group —
+    // including any `git credential fill` helper — receives the
+    // signal. PROCESS-TREE-004 evidence lives in
+    // `execa-process-runner-helper-fixture.test.ts`.
+    const child: ChildProcess = spawn(options.executable, [...options.args], {
+      ...(options.cwd !== undefined ? { cwd: options.cwd } : {}),
+      ...(options.env !== undefined ? { env: { ...options.env } } : {}),
+      detached: isPosix,
+      shell: false,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    if (options.input !== undefined) {
+      child.stdin?.end(options.input);
+    } else {
+      child.stdin?.end();
+    }
+    const stdoutChunks: Buffer[] = [];
+    const stderrChunks: Buffer[] = [];
+    child.stdout?.on("data", (chunk: Buffer) => stdoutChunks.push(chunk));
+    child.stderr?.on("data", (chunk: Buffer) => stderrChunks.push(chunk));
+    const childPid = child.pid;
+    let groupKillListener: (() => void) | undefined;
+    if (
+      options.signal !== undefined &&
+      isPosix &&
+      typeof childPid === "number" &&
+      childPid > 0
+    ) {
+      const parentSignal = options.signal;
+      groupKillListener = (): void => {
+        try {
+          process.kill(-childPid, "SIGTERM");
+        } catch {
+          // group already gone or never created
+        }
+      };
+      parentSignal.addEventListener("abort", groupKillListener);
+    }
+    let timer: NodeJS.Timeout | undefined;
+    if (options.timeoutMs !== undefined) {
+      timer = setTimeout(() => {
+        if (isPosix && typeof childPid === "number" && childPid > 0) {
+          try {
+            process.kill(-childPid, "SIGKILL");
+          } catch {
+            // ignore
+          }
+        } else {
+          child.kill("SIGKILL");
+        }
+      }, options.timeoutMs);
+      timer.unref();
+    }
+    let settled: { code: number | null; signal: NodeJS.Signals | null };
     try {
-      result = await execa(options.executable, [...options.args], {
-        ...(options.cwd !== undefined ? { cwd: options.cwd } : {}),
-        ...(options.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
-        ...(options.signal !== undefined ? { cancelSignal: options.signal } : {}),
-        // Spawn the child in its own process group so a real Git
-        // credential-helper descendant can be torn down with the
-        // group when the parent aborts. Without detached: true,
-        // `git credential fill` would leave a hanging helper alive
-        // after the parent AbortSignal fires (PROCESS-TREE-004).
-        // POSIX uses process-group kill semantics; on Windows the
-        // underlying tree-kill is best-effort because Git for
-        // Windows is its own tree root.
-        detached: true,
-        shell: false,
-        reject: false,
-        ...(options.env !== undefined ? { env: options.env } : {}),
-        ...(options.input !== undefined ? { input: options.input } : {}),
-        maxBuffer: MAX_OUTPUT_LENGTH,
-      });
+      settled = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+        (resolve, reject) => {
+          child.once("error", (error) => {
+            clearTimeout(timer);
+            reject(error);
+          });
+          child.once("close", (code, sig) => {
+            clearTimeout(timer);
+            resolve({ code, signal: sig });
+          });
+        },
+      );
     } catch (error) {
+      if (groupKillListener !== undefined && options.signal !== undefined) {
+        options.signal.removeEventListener("abort", groupKillListener);
+      }
       if ((error as { code?: string }).code === "ENOENT") {
         throw notFoundError();
       }
-      if ((error as { timedOut?: boolean }).timedOut === true) {
-        throw timeoutError();
-      }
-      if ((error as { isCanceled?: boolean }).isCanceled === true) {
-        throw cancelledError();
-      }
       throw failedError(error);
     }
-    if (result.code === "ENOENT") {
-      throw notFoundError();
+    if (groupKillListener !== undefined && options.signal !== undefined) {
+      options.signal.removeEventListener("abort", groupKillListener);
     }
-    if (result.timedOut === true) {
-      throw timeoutError();
-    }
-    if (result.isCanceled === true) {
+    const { code, signal } = settled;
+    if (signal !== null) {
+      if (signal === "SIGTERM" || signal === "SIGKILL" || signal === "SIGINT") {
+        if (options.signal?.aborted === true) {
+          throw cancelledError();
+        }
+        if (options.timeoutMs !== undefined) {
+          throw timeoutError();
+        }
+      }
       throw cancelledError();
     }
-    // Negative exit codes from `git credential fill` (or any helper
-    // that uses process-group signaling) indicate the entire
-    // group was killed. Surface this as a classified cancellation
-    // so the runner consumer can restore the prior auth state.
-    if (
-      result.signal !== undefined &&
-      result.signal !== null &&
-      result.signal !== "" &&
-      typeof result.exitCode === "number" &&
-      result.exitCode < 0
-    ) {
+    if (code === null) {
+      throw notFoundError();
+    }
+    if (code < 0) {
       throw cancelledError();
     }
     return {
-      exitCode: result.exitCode ?? 0,
-      stdout: bound(result.stdout),
-      stderr: bound(result.stderr),
+      exitCode: code,
+      stdout: bound(Buffer.concat(stdoutChunks).toString("utf8")),
+      stderr: bound(Buffer.concat(stderrChunks).toString("utf8")),
     };
   }
 }
