@@ -793,6 +793,11 @@ describe("DashboardShell entries row budget (criticality-preserving)", () => {
         "output",
         80,
       ),
+      metadata: {
+        kind: "device-authorization",
+        verificationUri: "https://github.com/login/device",
+        userCode: "ABCD-1234",
+      },
     });
     input.push({
       id: 1001,
@@ -858,6 +863,11 @@ describe("DashboardShell entries row budget (criticality-preserving)", () => {
         kind: "output",
         criticality: "critical",
         rows: estimateEntryRows(uri, "output", capabilities.columns),
+        metadata: {
+          kind: "device-authorization",
+          verificationUri: "https://github.com/login/device",
+          userCode: "ABCD-1234",
+        },
       });
       const rec = "Recommendation ID: rec-42";
       input.push({
@@ -921,6 +931,11 @@ describe("DashboardShell entries row budget (criticality-preserving)", () => {
         "output",
         80,
       ),
+      metadata: {
+        kind: "device-authorization",
+        verificationUri: "https://github.com/login/device",
+        userCode: "ABCD-1234",
+      },
     });
     // Many noncritical fillers between the critical entry and the bottom.
     for (let i = 0; i < 30; i += 1) {
@@ -1272,19 +1287,55 @@ describe("windowTranscriptEntries (bounded critical retention)", () => {
     criticality: "critical" | "noncritical" = "noncritical",
     kind: "input" | "output" | "error" | "system" = "output",
     rows = 1,
+    metadata?: RenderableTranscriptEntry["metadata"],
   ): RenderableTranscriptEntry {
-    return { id, text, kind, criticality, rows };
+    return {
+      id,
+      text,
+      kind,
+      criticality,
+      rows,
+      ...(metadata === undefined ? {} : { metadata }),
+    };
   }
 
-  it("compacts repeated auth device payloads — keeps only the latest", () => {
+  it("compacts repeated auth device payloads — keeps only the latest typed metadata", () => {
+    // The latest typed device-authorization entry wins. The bounded
+    // representation is rendered from the latest entry's metadata
+    // (URI + user code), so the older entry's payload is fully
+    // superseded — both the text and the user code of the older
+    // payload disappear from the bounded output.
     const list: RenderableTranscriptEntry[] = [
-      entry(1, "Open https://github.com/login/device and enter AAAA-1111", "critical", "output", 2),
+      entry(
+        1,
+        "Open https://github.com/login/device and enter AAAA-1111",
+        "critical",
+        "output",
+        2,
+        {
+          kind: "device-authorization",
+          verificationUri: "https://github.com/login/device",
+          userCode: "AAAA-1111",
+        },
+      ),
       entry(2, "filler a", "noncritical", "output", 1),
-      entry(3, "Open https://github.com/login/device and enter BBBB-2222", "critical", "output", 2),
+      entry(
+        3,
+        "Open https://github.com/login/device and enter BBBB-2222",
+        "critical",
+        "output",
+        2,
+        {
+          kind: "device-authorization",
+          verificationUri: "https://github.com/login/device",
+          userCode: "BBBB-2222",
+        },
+      ),
       entry(4, "filler b", "noncritical", "output", 1),
     ];
     const visible = windowTranscriptEntries(list, 4);
-    // Only the latest critical entry survives: BBBB-2222, not AAAA-1111.
+    // Only the latest typed device-authorization entry survives:
+    // BBBB-2222, not AAAA-1111.
     expect(visible.some((e) => e.text.includes("BBBB-2222"))).toBe(true);
     expect(visible.some((e) => e.text.includes("AAAA-1111"))).toBe(false);
   });
@@ -1302,7 +1353,18 @@ describe("windowTranscriptEntries (bounded critical retention)", () => {
 
   it("preserves chronological order of retained entries", () => {
     const list: RenderableTranscriptEntry[] = [
-      entry(1, "Open https://github.com/login/device and enter AAAA-1111", "critical", "output", 2),
+      entry(
+        1,
+        "Open https://github.com/login/device and enter AAAA-1111",
+        "critical",
+        "output",
+        2,
+        {
+          kind: "device-authorization",
+          verificationUri: "https://github.com/login/device",
+          userCode: "AAAA-1111",
+        },
+      ),
       entry(2, "filler between", "noncritical", "output", 1),
       entry(3, "Recommendation ID: rec-9", "critical", "output", 2),
     ];
@@ -1325,7 +1387,20 @@ describe("windowTranscriptEntries (bounded critical retention)", () => {
   it("renders a bounded critical representation when the critical entry itself exceeds the budget", () => {
     const text =
       "Open https://github.com/login/device and enter ABCDE-12345 to authenticate your session";
-    const list: RenderableTranscriptEntry[] = [entry(1, text, "critical", "output", 10)];
+    const list: RenderableTranscriptEntry[] = [
+      entry(
+        1,
+        text,
+        "critical",
+        "output",
+        10,
+        {
+          kind: "device-authorization",
+          verificationUri: "https://github.com/login/device",
+          userCode: "ABCDE-12345",
+        },
+      ),
+    ];
     const visible = windowTranscriptEntries(list, 3);
     expect(visible).toHaveLength(1);
     const bounded = visible[0];
@@ -1427,6 +1502,11 @@ describe("windowTranscriptEntries — long bounded critical (≥ pane width)", (
         kind: "output",
         criticality: "critical",
         rows: 2,
+        metadata: {
+          kind: "device-authorization",
+          verificationUri: "https://github.com/login/device",
+          userCode: "ABCD-1234",
+        },
       },
       {
         id: 2,
@@ -1468,6 +1548,11 @@ describe("windowTranscriptEntries — long bounded critical (≥ pane width)", (
         kind: "output",
         criticality: "critical",
         rows: 2,
+        metadata: {
+          kind: "device-authorization",
+          verificationUri: "https://github.com/login/device",
+          userCode: "AAAA-1111",
+        },
       },
       {
         id: 2,
