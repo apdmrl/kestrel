@@ -168,8 +168,13 @@ const SECTION_LABELS: Readonly<
 > = {
   home: { label: "Home" },
   find: { label: "Find", requires: "github" },
-  mission: { label: "Mission", requires: "github" },
-  agent: { label: "Agent", requires: "github" },
+  // Mission and Agent are local-first: their slash commands operate on the
+  // mission sidecar and the journey index without calling GitHub. Gating them
+  // behind GitHub authentication would block the developer from recording
+  // evidence while offline, while credentials are still being verified, or
+  // while a stored token has expired. Only Verify depends on GitHub.
+  mission: { label: "Mission" },
+  agent: { label: "Agent" },
   verify: { label: "Verify", requires: "github" },
   progress: { label: "Progress" },
   journey: { label: "Journey" },

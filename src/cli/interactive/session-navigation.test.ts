@@ -178,23 +178,21 @@ describe("actionsForSection — Find availability", () => {
     expect(status?.command).toBe("/auth status");
   });
 
-  it("disables Mission, Agent, and Verify during checking auth with /auth status recovery", () => {
-    for (const section of ["mission", "agent", "verify"] as const) {
-      const actions = actionsForSection(section, { status: "checking", attemptId: 1 }, null);
-      const recovery = actions.find(
-        (action) => action.id === "auth.status" || action.id === "auth.login",
-      );
-      expect(recovery, `expected recovery action for ${section}`).toBeDefined();
-      expect(recovery?.command).toBe("/auth status");
-      // Every GitHub-dependent base action is disabled with /auth status recovery.
-      const disabledActions = actions.filter(
-        (action) => action.availability.status === "disabled",
-      );
-      expect(disabledActions.length, `expected disabled actions for ${section}`).toBeGreaterThan(0);
-      for (const action of disabledActions) {
-        if (action.availability.status !== "disabled") continue;
-        expect(action.availability.recoveryCommand).toBe("/auth status");
-      }
+  it("disables Verify during checking auth with /auth status recovery", () => {
+    const actions = actionsForSection("verify", { status: "checking", attemptId: 1 }, null);
+    const recovery = actions.find(
+      (action) => action.id === "auth.status" || action.id === "auth.login",
+    );
+    expect(recovery, "expected recovery action for verify").toBeDefined();
+    expect(recovery?.command).toBe("/auth status");
+    // Every Verify base action is disabled with /auth status recovery.
+    const disabledActions = actions.filter(
+      (action) => action.availability.status === "disabled",
+    );
+    expect(disabledActions.length, "expected disabled actions for verify").toBeGreaterThan(0);
+    for (const action of disabledActions) {
+      if (action.availability.status !== "disabled") continue;
+      expect(action.availability.recoveryCommand).toBe("/auth status");
     }
   });
 });
@@ -215,6 +213,104 @@ describe("actionsForSection — local categories", () => {
       command: "/journey",
       availability: { status: "enabled" },
     });
+  });
+});
+describe("actionsForSection — local Mission and Agent availability", () => {
+  // Mission and Agent are local-first sections: their slash commands operate
+  // on the mission sidecar and the journey index, and never call into GitHub.
+  // They must stay enabled across every non-connected auth state so a developer
+  // can keep recording evidence while offline, while the credentials are still
+  // being verified, or while the stored token has expired.
+  const DISCONNECTED_STATES: ReadonlyArray<{
+    readonly label: string;
+    readonly state: SessionAuthState;
+  }> = [
+    { label: "required", state: { status: "required" } },
+    { label: "expired", state: { status: "expired" } },
+    { label: "checking", state: { status: "checking", attemptId: 1 } },
+    {
+      label: "unknown",
+      state: { status: "unknown", errorCode: "DM_NETWORK_UNAVAILABLE" },
+    },
+  ];
+
+  it("keeps every local Mission action enabled for each disconnected auth state", () => {
+    const expectedCommands: Readonly<Record<string, string>> = {
+      "mission.current": "/mission current",
+      "mission.accept": "/mission accept --id ",
+      "mission.prepare": "/mission prepare",
+      "mission.resume": "/mission resume",
+      "mission.complete": "/mission complete",
+      "mission.abandon": "/mission abandon --reason ",
+    };
+    for (const { state } of DISCONNECTED_STATES) {
+      const actions = actionsForSection("mission", state, null);
+      for (const [id, command] of Object.entries(expectedCommands)) {
+        const action = actions.find((entry) => entry.id === id);
+        expect(action, `${id} must surface under Mission for ${state.status}`).toBeDefined();
+        expect(action?.command).toBe(command);
+        expect(action?.availability, `${id} must be enabled for ${state.status}`).toEqual({
+          status: "enabled",
+        });
+      }
+      // No GitHub recovery action is ever appended to a local Mission list.
+      expect(actions.find((entry) => entry.id === "auth.login")).toBeUndefined();
+      expect(actions.find((entry) => entry.id === "auth.status")).toBeUndefined();
+    }
+  });
+
+  it("keeps the Agent /agent brief action enabled for each disconnected auth state", () => {
+    for (const { state } of DISCONNECTED_STATES) {
+      const actions = actionsForSection("agent", state, null);
+      const brief = actions.find((entry) => entry.id === "agent.brief");
+      expect(brief, `/agent brief must surface for ${state.status}`).toBeDefined();
+      expect(brief?.command).toBe("/agent brief");
+      expect(brief?.availability, `/agent brief must be enabled for ${state.status}`).toEqual({
+        status: "enabled",
+      });
+      // No GitHub recovery action is ever appended to a local Agent list.
+      expect(actions.find((entry) => entry.id === "auth.login")).toBeUndefined();
+      expect(actions.find((entry) => entry.id === "auth.status")).toBeUndefined();
+    }
+  });
+
+  it("does not classify Mission or Agent as GitHub-dependent in the sidebar", () => {
+    const mission = NAVIGATION_SECTIONS.find((section) => section.id === "mission");
+    const agent = NAVIGATION_SECTIONS.find((section) => section.id === "agent");
+    expect(mission?.requires).toBeUndefined();
+    expect(agent?.requires).toBeUndefined();
+  });
+
+  it("keeps Find gated for each disconnected auth state with the right recovery", () => {
+    for (const { state } of DISCONNECTED_STATES) {
+      const actions = actionsForSection("find", state, null);
+      const find = actions.find((entry) => entry.id === "find.run");
+      expect(find?.availability).toMatchObject({ status: "disabled" });
+      const recoveryId =
+        state.status === "checking" || state.status === "unknown"
+          ? "auth.status"
+          : "auth.login";
+      const recovery = actions.find((entry) => entry.id === recoveryId);
+      expect(recovery?.availability).toEqual({ status: "enabled" });
+    }
+  });
+
+  it("keeps Verify gated for each disconnected auth state with the right recovery", () => {
+    for (const { state } of DISCONNECTED_STATES) {
+      const actions = actionsForSection("verify", state, null);
+      for (const id of ["verify.submission", "verify.link", "verify.merge"]) {
+        const action = actions.find((entry) => entry.id === id);
+        expect(action?.availability, `${id} must stay disabled for ${state.status}`).toMatchObject({
+          status: "disabled",
+        });
+      }
+      const recoveryId =
+        state.status === "checking" || state.status === "unknown"
+          ? "auth.status"
+          : "auth.login";
+      const recovery = actions.find((entry) => entry.id === recoveryId);
+      expect(recovery?.availability).toEqual({ status: "enabled" });
+    }
   });
 });
 
