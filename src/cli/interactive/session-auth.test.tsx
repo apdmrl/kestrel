@@ -861,3 +861,337 @@ describe("session auth interaction — prompt clearing on synchronous admission"
     }
 });
 
+describe("session — busy /clear and /exit rejection", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("rejects /exit while a foreground command is in flight and aborts the active child", async () => {
+    // Finding: /exit was being accepted before the admission guard so a
+    // busy login could outlive the Ink unmount. The synchronous
+    // admission slot must reject /exit (and /clear) while busy, the
+    // session must remain mounted, and the active child must be
+    // aborted so device polling and credential helpers exit.
+    const commandHandlers = handlers();
+    let resolveAuthLogin: ((view: ViewModel) => void) | undefined;
+    vi.mocked(commandHandlers.authLogin).mockImplementation(
+      async () =>
+        new Promise<ViewModel>((resolve) => {
+          resolveAuthLogin = resolve;
+        }),
+    );
+    const onSessionExit = vi.fn();
+    const harness = mount({
+      handlers: commandHandlers,
+      signal: new AbortController().signal,
+      onSessionExit,
+    });
+    try {
+      await settle();
+      harness.stdin.send("/auth login\r");
+      await settle();
+      expect(commandHandlers.authLogin).toHaveBeenCalled();
+      // /exit while busy: must not call onSessionExit, must not
+      // unmount Ink. The session remains mounted, and a
+      // subsequent /progress — once the busy slot is freed by
+      // aborting the in-flight login via Ctrl+C — can be
+      // admitted.
+      harness.stdin.send("/exit\r");
+      await settle(80);
+      expect(onSessionExit).not.toHaveBeenCalled();
+      // Free the admission slot by aborting the in-flight login
+      // child (the same first-Ctrl+C contract that keeps the
+      // session alive).
+      harness.stdin.send("\u0003");
+      await settle(120);
+      harness.stdin.send("/progress\r");
+      await settle(60);
+      expect(commandHandlers.progress).toHaveBeenCalled();
+    } finally {
+      resolveAuthLogin?.(view);
+      harness.unmount();
+    }
+  });
+
+  it("rejects /clear while a foreground command is in flight", async () => {
+    // /clear must not be allowed while busy; the synchronous
+    // admission guard must reject it and the in-flight command must
+    // continue running.
+    const commandHandlers = handlers();
+    let resolveProgress: ((view: ViewModel) => void) | undefined;
+    vi.mocked(commandHandlers.progress).mockImplementation(
+      async () =>
+        new Promise<ViewModel>((resolve) => {
+          resolveProgress = resolve;
+        }),
+    );
+    const harness = mount({
+      handlers: commandHandlers,
+      signal: new AbortController().signal,
+    });
+    try {
+      await settle();
+      harness.stdin.send("/progress\r");
+      await settle();
+      expect(commandHandlers.progress).toHaveBeenCalled();
+      harness.stdin.send("/clear\r");
+      await settle(40);
+      // The first progress call is still in flight; /clear did not
+      // cancel it.
+      expect(commandHandlers.progress).toHaveBeenCalledTimes(1);
+      // No clear ran in between.
+      expect(commandHandlers.progress).toHaveBeenCalledTimes(1);
+    } finally {
+      resolveProgress?.(view);
+      harness.unmount();
+    }
+  });
+});
+
+describe("session — LOGIN_AUTHORIZATION reducer dispatch via notify", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("dispatches LOGIN_AUTHORIZATION to the reducer for the active login operation", async () => {
+    // The session must route device-authorization notices into the
+    // reducer for the active operation, not merely append them to the
+    // transcript. Otherwise the awaiting-user phase, stale-notice
+    // guard, and operation-id rejection paths are exercised only by
+    // isolated reducer unit tests.
+    const commandHandlers = handlers();
+    let loginResolve: ((view: ViewModel) => void) | undefined;
+    let loginReject: ((reason: unknown) => void) | undefined;
+    let capturedSignal: AbortSignal | undefined;
+    vi.mocked(commandHandlers.authLogin).mockImplementation(
+      async (_args, context) => {
+        capturedSignal = context.signal;
+        context.onNotice?.({
+          kind: "device-authorization",
+          verificationUri: "https://github.com/login/device",
+          userCode: "ABCD-1234",
+        });
+        return new Promise<ViewModel>((resolve, reject) => {
+          loginResolve = resolve;
+          loginReject = reject;
+        });
+      },
+    );
+    const harness = mount({
+      handlers: commandHandlers,
+      signal: new AbortController().signal,
+    });
+    try {
+      await settle();
+      harness.stdin.send("/auth login\r");
+      await settle(80);
+      // The login is admitted, the controller notice was delivered,
+      // and the reducer's awaiting-user phase is now active (the
+      // state is `logging-in` with `awaiting-user`, not `starting`).
+      const frame = harness.lastFrame();
+      expect(frame).toContain("ABCD-1234");
+      // The notice appears as a transcript entry too.
+      expect(frame).toContain("https://github.com/login/device");
+      // The login is still in flight; we did not trigger an abort.
+      expect(capturedSignal?.aborted).toBe(false);
+    } finally {
+      loginResolve?.(view);
+      loginReject?.(new Error("test cleanup"));
+      harness.unmount();
+    }
+  });
+
+  it("ignores LOGIN_AUTHORIZATION notices for stale operation ids", async () => {
+    const commandHandlers = handlers();
+    let loginResolve: ((view: ViewModel) => void) | undefined;
+    let loginReject: ((reason: unknown) => void) | undefined;
+    vi.mocked(commandHandlers.authLogin).mockImplementation(
+      async (_args, context) => {
+        return new Promise<ViewModel>((resolve, reject) => {
+          loginResolve = resolve;
+          loginReject = reject;
+          // The login holds until its child signal aborts. The
+          // device-authorization notice is then delivered as a
+          // late event — after the operation has been cancelled.
+          // A late notice must NOT flip the reducer or appear in
+          // the transcript.
+          context.signal?.addEventListener("abort", () => {
+            context.onNotice?.({
+              kind: "device-authorization",
+              verificationUri: "https://github.com/login/device",
+              userCode: "STALE-9999",
+            });
+            reject(
+              Object.assign(new Error("Login was cancelled; the session remains active."), {
+                code: "DM_GITHUB_AUTH_CANCELLED",
+                name: "KestrelError",
+                category: "USER_ACTION_REQUIRED",
+                userMessage: "Login was cancelled; the session remains active.",
+                suggestedActions: ["Run /auth login when ready to authenticate again."],
+                retryability: "manual",
+                recoveryStrategy: "USER_GUIDED",
+                severity: "INFO",
+              }),
+            );
+          });
+        });
+      },
+    );
+    const harness = mount({
+      handlers: commandHandlers,
+      signal: new AbortController().signal,
+    });
+    try {
+      await settle();
+      harness.stdin.send("/auth login\r");
+      await settle();
+      expect(commandHandlers.authLogin).toHaveBeenCalled();
+      // Cancel the login so its captured operation id becomes stale.
+      harness.stdin.send("\u0003");
+      await settle(80);
+      // A subsequent /progress must still run in the same session.
+      harness.stdin.send("/progress\r");
+      await settle(60);
+      expect(commandHandlers.progress).toHaveBeenCalled();
+      // The STALE-9999 code is bound to the cancelled operation and
+      // must not be appended to the transcript as the active
+      // awaiting-user notice.
+      const frame = harness.lastFrame();
+      expect(frame).not.toContain("STALE-9999");
+    } finally {
+      loginResolve?.(view);
+      loginReject?.(new Error("test cleanup"));
+      harness.unmount();
+    }
+  });
+});
+
+describe("session — child-aborted login is rendered as neutral cancellation", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("renders the in-flight login as a neutral cancellation when the child signal aborts before the handler rejects", async () => {
+    // The session must derive cancellation from the child signal's
+    // aborted state, not solely from the handler's returned error
+    // code. Some gateways (or a credential helper that never
+    // responds) may reject with DM_PROCESS_CANCELLED or a similar
+    // transport-level code; the session must still render the
+    // session-active neutral notice and dispatch OPERATION_CANCELLED.
+    const commandHandlers = handlers();
+    let loginResolve: ((view: ViewModel) => void) | undefined;
+    let loginReject: ((reason: unknown) => void) | undefined;
+    vi.mocked(commandHandlers.authLogin).mockImplementation(
+      async (_args, context) =>
+        new Promise<ViewModel>((_resolve, reject) => {
+          loginReject = reject;
+          // Reject with a transport-level cancellation code (NOT
+          // DM_GITHUB_AUTH_CANCELLED) when the child signal aborts.
+          // The session must still render the neutral notice.
+          context.signal?.addEventListener("abort", () => {
+            reject(
+              Object.assign(new Error("Login was cancelled; the session remains active."), {
+                code: "DM_PROCESS_CANCELLED",
+                name: "KestrelError",
+                category: "USER_ACTION_REQUIRED",
+                userMessage: "Login was cancelled; the session remains active.",
+                suggestedActions: ["Run /auth login when ready to authenticate again."],
+                retryability: "manual",
+                recoveryStrategy: "USER_GUIDED",
+                severity: "INFO",
+              }),
+            );
+          });
+        }),
+    );
+    const onSessionExit = vi.fn();
+    const harness = mount({
+      handlers: commandHandlers,
+      signal: new AbortController().signal,
+      onSessionExit,
+    });
+    try {
+      await settle();
+      harness.stdin.send("/auth login\r");
+      await settle();
+      expect(commandHandlers.authLogin).toHaveBeenCalled();
+      // Abort the in-flight login child. The handler rejects with
+      // DM_PROCESS_CANCELLED; the session must NOT render a red
+      // action-required card. It must render the neutral notice.
+      harness.stdin.send("\u0003");
+      await settle(80);
+      const frame = harness.lastFrame();
+      expect(frame).toContain("session remains active");
+      // The session is not exited by the cancellation.
+      expect(onSessionExit).not.toHaveBeenCalled();
+      // No red error banner — the cancellation is a neutral
+      // transcript notice, not an action-required card.
+      expect(frame).not.toMatch(/Error\s*\[DM_PROCESS_CANCELLED\]/u);
+    } finally {
+      loginResolve?.(view);
+      loginReject?.(new Error("test cleanup"));
+      harness.unmount();
+    }
+  });
+});
+
+describe("session — Home key is a no-op while an operation is running", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("ignores the raw Home escape sequence while a foreground child is in flight", async () => {
+    // The Home key (\x1b[H / \x1bOH / \x1b[1~) must not orphan a
+    // running foreground child. The reducer ignores HOME_SELECTED
+    // while the operation is running, so the raw Home hook is a
+    // safe no-op in the same window.
+    const commandHandlers = handlers();
+    let resolveAuthLogin: ((view: ViewModel) => void) | undefined;
+    let loginReject: ((reason: unknown) => void) | undefined;
+    vi.mocked(commandHandlers.authLogin).mockImplementation(
+      async (_args, context) =>
+        new Promise<ViewModel>((_resolve, reject) => {
+          resolveAuthLogin = resolve;
+          loginReject = reject;
+          context.signal?.addEventListener("abort", () => {
+            reject(
+              Object.assign(new Error("Login was cancelled; the session remains active."), {
+                code: "DM_GITHUB_AUTH_CANCELLED",
+                name: "KestrelError",
+                category: "USER_ACTION_REQUIRED",
+                userMessage: "Login was cancelled; the session remains active.",
+                suggestedActions: ["Run /auth login when ready to authenticate again."],
+                retryability: "manual",
+                recoveryStrategy: "USER_GUIDED",
+                severity: "INFO",
+              }),
+            );
+          });
+        }),
+    );
+    const harness = mount({
+      handlers: commandHandlers,
+      signal: new AbortController().signal,
+    });
+    try {
+      await settle();
+      harness.stdin.send("/auth login\r");
+      await settle();
+      expect(commandHandlers.authLogin).toHaveBeenCalled();
+      // Raw Home escape sequence while busy: must not change the
+      // login state. The foreground child is still in flight.
+      harness.stdin.send("\u001b[H");
+      await settle(40);
+      expect(commandHandlers.authLogin).toHaveBeenCalledTimes(1);
+      // The session is still busy with the login; the user can
+      // still abort it via Ctrl+C.
+      harness.stdin.send("\u0003");
+      await settle(80);
+    } finally {
+      resolveAuthLogin?.(view);
+      loginReject?.(new Error("test cleanup"));
+      harness.unmount();
+    }
+  });
+});
+

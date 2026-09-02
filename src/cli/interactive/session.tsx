@@ -25,6 +25,7 @@ import {
 } from "./session-runtime.js";
 import {
   initialSessionState,
+  isLoginCommand,
   sessionReducer,
   type SessionAuthState,
   type SessionEvent,
@@ -284,11 +285,14 @@ export function Session({
   // verification URI + user code without falling back to a host-specific
   // text regex. The plain / JSON renderers are unchanged and never read
   // this field.
+  const activeOperationForNotice = useRef<{
+    readonly operationId: number;
+    readonly command: string;
+  } | null>(null);
   const controller = createSessionController(handlers, (received) => {
     const rendered = renderSessionView(received);
     addEntry(rendered.kind, rendered.text, rendered.metadata);
   });
-
   const close = (): void => {
     if (closing.current) return;
     closing.current = true;

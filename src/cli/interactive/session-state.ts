@@ -220,14 +220,26 @@ export function sessionReducer(state: SessionState, event: SessionEvent): Sessio
     case "OPERATION_CANCELLED": {
       const running = state.operation;
       if (running.status !== "running" || running.operationId !== event.operationId) return state;
-      if (!isLoginCommand(running.command)) {
-        return { ...state, operation: { status: "idle" } };
+      if (isLoginCommand(running.command)) {
+        return {
+          ...state,
+          operation: { status: "idle" },
+          auth: running.authBeforeLogin ?? { status: "required" },
+        };
       }
-      return {
-        ...state,
-        operation: { status: "idle" },
-        auth: running.authBeforeLogin ?? { status: "required" },
-      };
+      // Credential-validation failures invalidate any cached
+      // connected state so the affected GitHub action stops being
+      // advertised as enabled. Post-validation network/timeout/
+      // provider errors leave the auth state untouched.
+      if (event.type === "OPERATION_FAILED") {
+        if (event.errorCode === "DM_GITHUB_AUTH_REQUIRED") {
+          return { ...state, operation: { status: "idle" }, auth: { status: "required" } };
+        }
+        if (event.errorCode === "DM_GITHUB_AUTH_EXPIRED") {
+          return { ...state, operation: { status: "idle" }, auth: { status: "expired" } };
+        }
+      }
+      return { ...state, operation: { status: "idle" } };
     }
     case "INPUT_CHANGED": {
       if (state.input === event.input) return state;
@@ -264,13 +276,18 @@ export function sessionReducer(state: SessionState, event: SessionEvent): Sessio
       return { ...state, focus: event.focus };
     }
     case "HOME_SELECTED": {
-      const restoredLoginAuth =
-        state.operation.status === "running" && isLoginCommand(state.operation.command)
-          ? (state.operation.authBeforeLogin ?? { status: "required" })
-          : state.auth;
+      // A running foreground command owns the admission slot; the
+      // component is responsible for aborting and releasing the
+      // child before issuing HOME_SELECTED. The reducer cannot
+      // cancel a child signal on its own, so it must ignore
+      // HOME_SELECTED while an operation is running. This
+      // prevents a Home keypress from clearing reducer state and
+      // stranding the controller where late events can no longer
+      // match the running operation id.
+      if (state.operation.status === "running") return state;
       return {
         ...state,
-        auth: restoredLoginAuth,
+        auth: state.auth,
         operation: { status: "idle" },
         latestRecommendation: null,
         input: "",

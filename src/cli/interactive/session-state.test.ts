@@ -673,7 +673,11 @@ describe("session reducer", () => {
     });
   });
 
-  it("restores authBeforeLogin when HOME_SELECTED abandons a running login", () => {
+  it("ignores HOME_SELECTED while a login is running so the foreground child is not orphaned", () => {
+    // The reducer must reject HOME_SELECTED while a login owns the
+    // admission slot; otherwise the visible auth state would desync
+    // from the still-running controller and a late device flow could
+    // store a credential after the user already abandoned the login.
     const expired = sessionReducer(initialSessionState(), {
       type: "AUTH_RESOLVED",
       attemptId: 1,
@@ -688,8 +692,50 @@ describe("session reducer", () => {
     });
     expect(started.auth).toEqual({ status: "logging-in", phase: "starting" });
     const home = sessionReducer(started, { type: "HOME_SELECTED" });
-    expect(home.auth).toEqual({ status: "expired" });
-    expect(home.operation).toEqual({ status: "idle" });
+    expect(home).toBe(started);
+    expect(home.auth).toEqual({ status: "logging-in", phase: "starting" });
+    expect(home.operation).toMatchObject({ status: "running", operationId: 4 });
+  });
+
+
+  it("ignores HOME_SELECTED while an operation is running so the foreground child is not orphaned", () => {
+    // Finding: Home should not abandon a live foreground operation by
+    // clearing reducer state independently. While a command owns the
+    // admission slot, the reducer must reject HOME_SELECTED so the
+    // component either aborts the child through the controller or
+    // makes Home a no-op.
+    const connected = sessionReducer(initialSessionState(), {
+      type: "AUTH_RESOLVED",
+      attemptId: 1,
+      detail: "CONNECTED",
+      login: "octocat",
+    });
+    const started = sessionReducer(connected, {
+      type: "OPERATION_STARTED",
+      operationId: 4,
+      command: "/find",
+      cancellable: true,
+    });
+    const homeWhileBusy = sessionReducer(started, { type: "HOME_SELECTED" });
+    expect(homeWhileBusy).toBe(started);
+  });
+
+  it("preserves auth on OPERATION_CANCELLED for a non-login operation", () => {
+    const connected = sessionReducer(initialSessionState(), {
+      type: "AUTH_RESOLVED",
+      attemptId: 1,
+      detail: "CONNECTED",
+      login: "octocat",
+    });
+    const started = sessionReducer(connected, {
+      type: "OPERATION_STARTED",
+      operationId: 5,
+      command: "/find",
+      cancellable: true,
+    });
+    const cancelled = sessionReducer(started, { type: "OPERATION_CANCELLED", operationId: 5 });
+    expect(cancelled.auth).toEqual({ status: "connected", login: "octocat" });
+    expect(cancelled.operation).toEqual({ status: "idle" });
   });
 
   describe.each([
@@ -749,6 +795,80 @@ describe("session reducer", () => {
       expect(failed.operation).toEqual({ status: "idle" });
     });
   });
+  it("invalidates the connected state to required when an operation fails with DM_GITHUB_AUTH_REQUIRED", () => {
+    // Finding: a stored credential is missing or revoked while a
+    // connected session runs /find (or a verify command). The
+    // application's guard raises DM_GITHUB_AUTH_REQUIRED, and the
+    // reducer must invalidate the connected auth so the affected
+    // GitHub action is no longer advertised as enabled.
+    const connected = sessionReducer(initialSessionState(), {
+      type: "AUTH_RESOLVED",
+      attemptId: 1,
+      detail: "CONNECTED",
+      login: "octocat",
+    });
+    const started = sessionReducer(connected, {
+      type: "OPERATION_STARTED",
+      operationId: 9,
+      command: "/find",
+      cancellable: true,
+    });
+    const failed = sessionReducer(started, {
+      type: "OPERATION_FAILED",
+      operationId: 9,
+      errorCode: "DM_GITHUB_AUTH_REQUIRED",
+    });
+    expect(failed.auth).toEqual({ status: "required" });
+    expect(failed.operation).toEqual({ status: "idle" });
+  });
+
+  it("invalidates the connected state to expired when an operation fails with DM_GITHUB_AUTH_EXPIRED", () => {
+    const connected = sessionReducer(initialSessionState(), {
+      type: "AUTH_RESOLVED",
+      attemptId: 1,
+      detail: "CONNECTED",
+      login: "octocat",
+    });
+    const started = sessionReducer(connected, {
+      type: "OPERATION_STARTED",
+      operationId: 9,
+      command: "/verify submission --pr 1",
+      cancellable: true,
+    });
+    const failed = sessionReducer(started, {
+      type: "OPERATION_FAILED",
+      operationId: 9,
+      errorCode: "DM_GITHUB_AUTH_EXPIRED",
+    });
+    expect(failed.auth).toEqual({ status: "expired" });
+    expect(failed.operation).toEqual({ status: "idle" });
+  });
+
+  it("preserves the connected state when an operation fails with a post-auth network error", () => {
+    // Post-validation network errors must not invalidate the
+    // connected auth state; only DM_GITHUB_AUTH_REQUIRED / EXPIRED
+    // (credential-validation failures) flip the state.
+    const connected = sessionReducer(initialSessionState(), {
+      type: "AUTH_RESOLVED",
+      attemptId: 1,
+      detail: "CONNECTED",
+      login: "octocat",
+    });
+    const started = sessionReducer(connected, {
+      type: "OPERATION_STARTED",
+      operationId: 9,
+      command: "/find",
+      cancellable: true,
+    });
+    const failed = sessionReducer(started, {
+      type: "OPERATION_FAILED",
+      operationId: 9,
+      errorCode: "DM_NETWORK_UNAVAILABLE",
+    });
+    expect(failed.auth).toEqual({ status: "connected", login: "octocat" });
+    expect(failed.operation).toEqual({ status: "idle" });
+  });
+
   });
 
 describe("initialSessionState", () => {
