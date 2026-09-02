@@ -113,8 +113,12 @@ class FakeCredentialStore implements CredentialStore {
   readonly stored: Credential[] = [];
   readonly getSignals: AbortSignal[] = [];
 
-  async get(_service: string, _account: string, signal?: AbortSignal): Promise<Credential | undefined> {
-    if (signal !== undefined) this.getSignals.push(signal);
+  async get(
+    _service: string,
+    _account: string,
+    signal: AbortSignal,
+  ): Promise<Credential | undefined> {
+    this.getSignals.push(signal);
     return this.credential;
   }
 
@@ -517,6 +521,30 @@ describe("bootstrap auth commands", () => {
       detail: "LOGGED_OUT",
     });
     expect(store.deleted).toEqual(["octocat"]);
+  });
+
+  it("authLogout forwards the per-invocation context signal into the credential lookup", async () => {
+    const store = new FakeCredentialStore();
+    store.credential = { service: "github", account: "octocat", token: "cached-token" };
+    const handlers = await bootstrap(createConfig({ KESTREL_HOME: dir }), {
+      credentialStore: store,
+      gateway: new FakeGateway(),
+    });
+    const controller = new AbortController();
+    const view = await handlers.authLogout(
+      { confirmation: "github.com" },
+      { signal: controller.signal },
+    );
+    expect(view).toEqual({
+      kind: "auth-status",
+      connected: false,
+      login: null,
+      detail: "LOGGED_OUT",
+    });
+    expect(store.deleted).toEqual(["octocat"]);
+    // Causal assertion: the controller's signal — not the use case's
+    // never-aborted fallback — is what the credential port sees.
+    expect(store.getSignals).toEqual([controller.signal]);
   });
 });
 

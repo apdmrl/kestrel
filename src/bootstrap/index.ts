@@ -581,8 +581,14 @@ export async function bootstrap(
       );
       return { kind: "auth-status", ...status };
     },
-    authLogout: async ({ confirmation }) => {
-      const result = await logoutGitHub({ credentialStore }, { confirmation });
+    authLogout: async ({ confirmation }, context) => {
+      const result = await logoutGitHub(
+        { credentialStore },
+        {
+          confirmation,
+          ...(context.signal === undefined ? {} : { signal: context.signal }),
+        },
+      );
       return { kind: "auth-status", ...result };
     },
     find: async ({ mood, type }, context) => {

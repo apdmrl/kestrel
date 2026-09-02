@@ -11,6 +11,10 @@ export interface AuthStatus {
   readonly detail: AuthStatusDetail;
 }
 
+/** A signal that is never aborted; supplied to the credential port when the
+ * caller did not compose a cancellation context of its own. */
+const NEVER_ABORTED: AbortSignal = new AbortController().signal;
+
 export interface GetAuthStatusDeps {
   readonly credentialStore: CredentialStore;
   readonly gateway: GitHubGateway;
@@ -45,7 +49,7 @@ export async function getAuthStatus(
   const cached = await deps.credentialStore.get(
     "github",
     input.account,
-    input.signal,
+    input.signal ?? NEVER_ABORTED,
   );
   if (cached === undefined) {
     return NOT_CONNECTED;

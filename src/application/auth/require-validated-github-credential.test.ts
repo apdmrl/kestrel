@@ -21,7 +21,7 @@ class FakeCredentialStore implements CredentialStore {
   async get(
     _service: string,
     _account: string,
-    signal?: AbortSignal,
+    signal: AbortSignal,
   ): Promise<Credential | undefined> {
     this.capturedSignal = signal;
     return this.credential;

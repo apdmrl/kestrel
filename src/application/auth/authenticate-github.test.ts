@@ -25,11 +25,10 @@ class FakeCredentialStore implements CredentialStore {
   async get(
     service: string,
     account: string,
-    _signal?: AbortSignal,
+    _signal: AbortSignal,
   ): Promise<Credential | undefined> {
     return this.creds.get(service + ":" + account);
   }
-
   async store(credential: Credential): Promise<void> {
     this.stored.push(credential);
     this.creds.set(credential.service + ":" + credential.account, credential);
@@ -55,11 +54,10 @@ class AccountInsensitiveStore implements CredentialStore {
   async get(
     _service: string,
     _account: string,
-    _signal?: AbortSignal,
+    _signal: AbortSignal,
   ): Promise<Credential | undefined> {
     return this.credential;
   }
-
   async store(credential: Credential): Promise<void> {
     this.stored.push(credential);
     this.credential = credential;

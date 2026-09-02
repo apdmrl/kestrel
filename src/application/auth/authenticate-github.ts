@@ -8,6 +8,10 @@ export interface AuthenticateGitHubDeps {
   readonly gateway: GitHubGateway;
 }
 
+/** A signal that is never aborted; supplied to the credential port when the
+ * caller did not compose a cancellation context of its own. */
+const NEVER_ABORTED: AbortSignal = new AbortController().signal;
+
 export interface AuthenticateGitHubInput {
   readonly account: string;
   readonly signal?: AbortSignal;
@@ -44,10 +48,11 @@ export async function authenticateGitHub(
   deps: AuthenticateGitHubDeps,
   input: AuthenticateGitHubInput,
 ): Promise<AuthenticateGitHubResult> {
+  const lookupSignal = input.signal ?? NEVER_ABORTED;
   const cached = await deps.credentialStore.get(
     "github",
     input.account,
-    input.signal,
+    lookupSignal,
   );
   if (cached !== undefined) {
     try {

@@ -6,12 +6,16 @@ import { confirmLogout, logoutConfirmationToken, logoutGitHub } from "./logout-g
 class FakeCredentialStore implements CredentialStore {
   credential: Credential | undefined;
   readonly deleted: { service: string; account: string }[] = [];
+  /** Every signal the store saw across `get` calls, including the
+   * never-aborted sentinel when the caller did not pass one. */
+  readonly getSignals: AbortSignal[] = [];
 
   async get(
     _service: string,
     _account: string,
-    _signal?: AbortSignal,
+    signal: AbortSignal,
   ): Promise<Credential | undefined> {
+    this.getSignals.push(signal);
     return this.credential;
   }
 
@@ -102,5 +106,62 @@ describe("logoutGitHub", () => {
     credentialStore.credential = { service: "github", account: "octocat", token: "secret-token" };
     const result = await logoutGitHub({ credentialStore }, { confirmation: token });
     expect(JSON.stringify(result)).not.toContain("secret-token");
+  });
+
+  it("forwards the caller's cancellation signal into the credential lookup", async () => {
+    const credentialStore = new FakeCredentialStore();
+    credentialStore.credential = { service: "github", account: "octocat", token: "cached-token" };
+    const controller = new AbortController();
+    await logoutGitHub(
+      { credentialStore },
+      { confirmation: token, signal: controller.signal },
+    );
+    expect(credentialStore.getSignals).toEqual([controller.signal]);
+    expect(credentialStore.deleted).toEqual([{ service: "github", account: "octocat" }]);
+  });
+
+  it("propagates an aborted lookup signal as a DM_PROCESS_CANCELLED error before any deletion", async () => {
+    const credentialStore = new FakeCredentialStore();
+    let receivedSignal: AbortSignal | undefined;
+    credentialStore.get = async (
+      _service: string,
+      _account: string,
+      signal: AbortSignal,
+    ) => {
+      receivedSignal = signal;
+      if (signal.aborted === true) {
+        throw Object.assign(new Error("lookup aborted"), {
+          code: "DM_PROCESS_CANCELLED",
+          name: "KestrelError",
+          category: "USER_ACTION_REQUIRED",
+          userMessage: "credential lookup cancelled",
+          suggestedActions: ["retry"],
+          retryability: "NO_RETRY",
+          recoveryStrategy: "USER_ACTION",
+          severity: "INFO",
+        });
+      }
+      return credentialStore.credential;
+    };
+    const controller = new AbortController();
+    controller.abort();
+    await expect(
+      logoutGitHub(
+        { credentialStore },
+        { confirmation: token, signal: controller.signal },
+      ),
+    ).rejects.toMatchObject({ code: "DM_PROCESS_CANCELLED" });
+    expect(receivedSignal).toBe(controller.signal);
+    expect(credentialStore.deleted).toEqual([]);
+  });
+
+  it("supplies a never-aborted signal when the caller did not pass one", async () => {
+    const credentialStore = new FakeCredentialStore();
+    credentialStore.credential = { service: "github", account: "octocat", token: "cached-token" };
+    await logoutGitHub({ credentialStore }, { confirmation: token });
+    expect(credentialStore.getSignals).toHaveLength(1);
+    const lookupSignal = credentialStore.getSignals[0];
+    expect(lookupSignal?.aborted).toBe(false);
+    expect(credentialStore.deleted).toEqual([{ service: "github", account: "octocat" }]);
   });
 });

@@ -92,3 +92,31 @@ Duration    156.29s
 ```
 
 Directly affected auth/credential/built tests also passed 52/52.
+
+### Re-review Completion
+
+The second scoped review found residual cancellation and evidence gaps:
+
+- credential helper detection (`git config`) and logout lookup lacked signals;
+- the credential signal remained optional at the port;
+- `cli-built.test.ts` still allowed stale build output;
+- the FakeInk store assertion did not invoke the real auth use case;
+- the approved credential check allowed extra fields.
+
+The credential signal is now required and reaches fill, helper detection, login,
+status, validation, and logout. The logout handler forwards its invocation
+context. The built suite requires a successful build. The FakeInk scenario
+invokes real `authenticateGitHub` with a held fake gateway and a real fake-store
+spy; Ctrl+C aborts polling before `CredentialStore.store`. The approval fixture
+is compared to one exact normalized protocol record.
+
+```text
+$ npm run build
+(exit 0)
+
+Test Files  6 passed (6)
+Tests       88 passed (88)
+Duration    160.42s
+```
+
+The affected auth/credential/bootstrap slice also passed 72/72 tests.

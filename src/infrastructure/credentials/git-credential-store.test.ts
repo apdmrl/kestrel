@@ -34,7 +34,7 @@ describe("GitCredentialStore", () => {
   it("fills a credential via git credential fill", async () => {
     const runner = new FakeRunner();
     const store = new GitCredentialStore(runner);
-    const credential = await store.get("github", "octocat");
+    const credential = await store.get("github", "octocat", new AbortController().signal);
     expect(credential).toEqual({ service: "github", account: "octocat", token: "secret-token" });
     expect(runner.calls[0]?.args).toEqual(["credential", "fill"]);
     expect(runner.calls[0]?.input).toContain("host=github.com");
@@ -62,7 +62,9 @@ describe("GitCredentialStore", () => {
     const runner = new FakeRunner();
     runner.helperConfigured = false;
     const store = new GitCredentialStore(runner);
-    await expect(store.get("github", "octocat")).rejects.toMatchObject({
+    await expect(
+      store.get("github", "octocat", new AbortController().signal),
+    ).rejects.toMatchObject({
       code: "DM_GITHUB_AUTH_REQUIRED",
       category: "USER_ACTION_REQUIRED",
     });
@@ -78,5 +80,25 @@ describe("GitCredentialStore", () => {
     // the parent tears down — the execa runner wires options.signal
     // into the cancelSignal that triggers SIGTERM.
     expect(runner.calls[0]?.signal).toBe(controller.signal);
+  });
+
+  it("forwards the AbortSignal into the helper-detection subprocess when fill returns no credentials", async () => {
+    const runner = new FakeRunner();
+    runner.helperConfigured = false;
+    const store = new GitCredentialStore(runner);
+    const controller = new AbortController();
+    // Causal assertion: the same AbortSignal that reaches `credential fill`
+    // also reaches the follow-up `git config --get credential.helper`
+    // subprocess. Otherwise a hung `credential fill` could exit because of
+    // the signal but the helper-detection call could outlive the parent.
+    await expect(store.get("github", "octocat", controller.signal)).rejects.toMatchObject({
+      code: "DM_GITHUB_AUTH_REQUIRED",
+    });
+    const fillCall = runner.calls.find((call) => call.args.includes("fill"));
+    const helperCall = runner.calls.find(
+      (call) => call.args[0] === "config" && call.args[1] === "--get",
+    );
+    expect(fillCall?.signal).toBe(controller.signal);
+    expect(helperCall?.signal).toBe(controller.signal);
   });
 });

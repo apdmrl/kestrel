@@ -6,6 +6,11 @@ function hostFor(service: string): string {
   return service + ".com";
 }
 
+/** A sentinel signal that is never aborted; used when the port entry point
+ * does not accept one (e.g. `store`) but the helper-detection subprocess
+ * still needs a non-null AbortSignal to satisfy the contract. */
+const NEVER_ABORTED: AbortSignal = new AbortController().signal;
+
 function parseField(stdout: string, key: string): string | undefined {
   for (const line of stdout.split("\n")) {
     if (line.startsWith(key + "=")) {
@@ -39,28 +44,28 @@ export class GitCredentialStore implements CredentialStore {
   async get(
     service: string,
     _account: string,
-    signal?: AbortSignal,
+    signal: AbortSignal,
   ): Promise<Credential | undefined> {
     const result = await this.runner.run({
       executable: "git",
       args: ["credential", "fill"],
-      ...(signal !== undefined ? { signal } : {}),
+      signal,
       input: "protocol=https\nhost=" + hostFor(service) + "\n\n",
     });
     if (result.exitCode !== 0) {
       return undefined;
     }
-    const account = parseField(result.stdout, "username");
+    const accountField = parseField(result.stdout, "username");
     const token = parseField(result.stdout, "password");
-    if (account === undefined || token === undefined) {
-      await this.requireHelper();
+    if (accountField === undefined || token === undefined) {
+      await this.requireHelper(signal);
       return undefined;
     }
-    return { service, account, token };
+    return { service, account: accountField, token };
   }
 
   async store(credential: Credential): Promise<void> {
-    await this.requireHelper();
+    await this.requireHelper(NEVER_ABORTED);
     await this.runner.run({
       executable: "git",
       args: ["credential", "approve"],
@@ -82,11 +87,11 @@ export class GitCredentialStore implements CredentialStore {
       input: "protocol=https\nhost=" + hostFor(service) + "\nusername=" + account + "\n\n",
     });
   }
-
-  private async requireHelper(): Promise<void> {
+  private async requireHelper(signal: AbortSignal): Promise<void> {
     const result = await this.runner.run({
       executable: "git",
       args: ["config", "--get", "credential.helper"],
+      signal,
     });
     if (result.exitCode !== 0 || result.stdout.trim().length === 0) {
       throw helperRequiredError();

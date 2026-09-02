@@ -12,19 +12,12 @@ const execFileAsync = promisify(execFile);
 const distMain = join(root, "dist", "cli", "main.js");
 
 /** Run npm. On Windows `npm` is `npm.cmd` and needs the command interpreter.
- * The pre-existing source tree has TypeScript errors that surface on
- * `npm run build`; those errors do not block this test because the
- * commit-history `dist/` is fresh enough. We log the build output and
- * continue regardless of exit code so the focused Task 6 tests can
- * run. */
+ * A non-zero exit rejects so a broken build fails the suite instead of
+ * silently shipping a stale `dist/`. */
 async function runNpm(args: string[]): Promise<void> {
-  try {
-    await (process.platform === "win32"
-      ? execFileAsync("cmd.exe", ["/c", "npm", ...args], { cwd: root, timeout: 120_000 })
-      : execFileAsync("npm", args, { cwd: root, timeout: 120_000 }));
-  } catch {
-    /* build emits a fresh dist despite pre-existing TS errors; ignore */
-  }
+  await (process.platform === "win32"
+    ? execFileAsync("cmd.exe", ["/c", "npm", ...args], { cwd: root, timeout: 120_000 })
+    : execFileAsync("npm", args, { cwd: root, timeout: 120_000 }));
 }
 function runCli(
   args: string[],
@@ -53,11 +46,7 @@ function runCli(
 
 describe("built CLI", () => {
   beforeAll(async () => {
-    // Skip the rebuild when a fresh `dist/cli/main.js` already exists
-    // so concurrent file runs don't see `dist/` deleted mid-test.
-    if (!existsSync(distMain)) {
-      await runNpm(["run", "build"]);
-    }
+    await runNpm(["run", "build"]);
   }, 120_000);
   it("exposes the complete v0.1 command hierarchy", async () => {
     for (const [group, expected] of [

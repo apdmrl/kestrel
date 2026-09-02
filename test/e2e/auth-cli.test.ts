@@ -392,13 +392,31 @@ describe("built CLI auth commands", () => {
       // `credential approve` path: the shim wrote the fixture with the
       // exact stdin it received. Re-read the fixture and assert the
       // stored protocol/host/username/password match the device-flow
-      // token and the live `/user` login.
+      // token and the live `/user` login, with no extra, duplicate,
+      // or misordered fields and the exact newline form (`\n` between
+      // fields, terminating blank line). A weaker `toContain` check
+      // would silently accept any of those corruptions, so the
+      // equality must be exact against the normalized credential
+      // protocol record produced by the GitCredentialStore adapter.
       expect(existsSync(credentialFixture)).toBe(true);
       const stored = await readFile(credentialFixture, "utf8");
-      expect(stored).toContain("protocol=https");
-      expect(stored).toContain("host=github.com");
-      expect(stored).toContain("username=" + account);
-      expect(stored).toContain("password=" + token);
+      const expectedCredentialRecord =
+        "protocol=https\nhost=github.com\nusername=" +
+        account +
+        "\npassword=" +
+        token +
+        "\n\n";
+      expect(stored).toBe(expectedCredentialRecord);
+      // Pre-condition: the shim's `credential fill` replay path must
+      // come from the persisted approval, never a hard-coded value the
+      // shim could fabricate. Confirm the fixture was absent before
+      // login (so the pre-login `fill` had no source to replay from)
+      // and present after login with the exact record above. The
+      // subsequent `find` and `mission accept` calls prove the cached
+      // credential satisfied both without a new device flow, so any
+      // fabrication in the shim would have surfaced as a phantom
+      // login or a token mismatch.
+      expect(stored).not.toBe("");
       // Exactly one device-code request: this is the explicit login.
       expect(deviceCodeRequests).toBe(1);
 

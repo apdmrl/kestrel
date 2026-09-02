@@ -73,7 +73,7 @@ describe("GitCredentialStore integration with the real process runner", () => {
       const runner = new ExecaProcessRunner();
       const store = new GitCredentialStore(runner);
 
-      const credential = await store.get("github", "octocat");
+      const credential = await store.get("github", "octocat", new AbortController().signal);
       expect(credential?.token).toBe("REAL_TOKEN_123");
 
       const gateway = new FakeGateway();

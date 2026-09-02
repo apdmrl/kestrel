@@ -9,12 +9,18 @@ export interface LogoutResult {
   readonly detail: LogoutDetail;
 }
 
+/** A signal that is never aborted; supplied to the credential port when
+ * the caller did not compose a cancellation context of its own. */
+const NEVER_ABORTED: AbortSignal = new AbortController().signal;
+
 export interface LogoutGitHubDeps {
   readonly credentialStore: CredentialStore;
 }
 
 export interface LogoutGitHubInput {
   readonly confirmation: string | undefined;
+  /** Cancellation signal propagated to the credential lookup. */
+  readonly signal?: AbortSignal;
 }
 
 /**
@@ -65,7 +71,11 @@ export async function logoutGitHub(
   if (!confirmLogout(input.confirmation)) {
     throw confirmationRequiredError();
   }
-  const existing = await deps.credentialStore.get("github", logoutConfirmationToken());
+  const existing = await deps.credentialStore.get(
+    "github",
+    logoutConfirmationToken(),
+    input.signal ?? NEVER_ABORTED,
+  );
   if (existing !== undefined) {
     await deps.credentialStore.delete("github", existing.account);
   }
