@@ -44,7 +44,11 @@ export async function authenticateGitHub(
   deps: AuthenticateGitHubDeps,
   input: AuthenticateGitHubInput,
 ): Promise<AuthenticateGitHubResult> {
-  const cached = await deps.credentialStore.get("github", input.account);
+  const cached = await deps.credentialStore.get(
+    "github",
+    input.account,
+    input.signal,
+  );
   if (cached !== undefined) {
     try {
       const viewer = await deps.gateway.getViewer(cached.token, input.signal);

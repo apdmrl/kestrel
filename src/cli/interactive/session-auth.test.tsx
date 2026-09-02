@@ -560,12 +560,21 @@ describe("session auth interaction — prompt clearing on synchronous admission"
     //       the filled prompt invokes `missionAccept` exactly once
     const commandHandlers = handlers();
     let heldTokenRequestClosed = false;
+    // `storeCredentialCalls` is the credential-store spy for this
+    // scenario. It is wired onto the HELD token request's resolution
+    // path — the only branch that, in a real auth flow, would hand
+    // the freshly-polled token to `credentialStore.store(...)`. The
+    // cancellation branch rejects before that resolution runs, so the
+    // spy stays at zero unless the held request somehow completes.
+    // The assertion below fails if the cancel path ever reaches the
+    // store (e.g. a future change that resolves the promise instead
+    // of rejecting it on abort).
     let storeCredentialCalls = 0;
     vi.mocked(commandHandlers.authLogin).mockImplementation(
       async (_args, context) => {
         const signal = context.signal;
         if (signal === undefined) return view;
-        return new Promise<ViewModel>((_resolve, reject) => {
+        const held = new Promise<ViewModel>((resolve, reject) => {
           signal.addEventListener(
             "abort",
             () => {
@@ -589,6 +598,18 @@ describe("session auth interaction — prompt clearing on synchronous admission"
             },
             { once: true },
           );
+        });
+        // The store spy is attached as a `.then` step so it ONLY runs
+        // on the resolution branch — i.e. the path that, in the real
+        // `authenticateGitHub` use case, would call
+        // `credentialStore.store({...})` with the polled token. The
+        // abort path rejects the promise, so the spy is never called.
+        // This is the causal linkage: bumping `storeCredentialCalls`
+        // requires the held token request to actually complete, which
+        // it must not do under a Ctrl+C cancellation.
+        return held.then((view) => {
+          storeCredentialCalls += 1;
+          return view;
         });
       },
     );
@@ -664,7 +685,14 @@ describe("session auth interaction — prompt clearing on synchronous admission"
       expect(onSessionExit).not.toHaveBeenCalled();
       // No credential was stored: the abort path rejected before any
       // storage step could run. The storeCredentialCalls counter is
-      // never bumped.
+      // never bumped. Because the spy is wired to the held promise's
+      // resolution path, this assertion FAILS if the cancellation
+      // ever reaches the store (i.e. if the rejection is replaced
+      // with a resolution that hands a token back to the session).
+      expect(storeCredentialCalls).toBe(0);
+      // Sanity: the rejected handler has settled; no later resolution
+      // can still fire the spy from a queued microtask.
+      await settle(40);
       expect(storeCredentialCalls).toBe(0);
 
       // (2) Same-session local /progress runs after the cancellation.
@@ -708,7 +736,6 @@ describe("session auth interaction — prompt clearing on synchronous admission"
       expect(missionAcceptCalls).toBe(beforeAcceptCalls);
       const filledFrame = harness.lastFrame();
       expect(filledFrame).toContain("/mission accept --id rec-42");
-
       // (4) Second Enter on the filled prompt submits the exact
       // command. missionAccept is invoked exactly once with the
       // exact recommendation id bound to the action.
@@ -716,6 +743,12 @@ describe("session auth interaction — prompt clearing on synchronous admission"
       await settle();
       expect(missionAcceptCalls).toBe(beforeAcceptCalls + 1);
       expect(missionAcceptId).toBe("rec-42");
+      // Final causal assertion: after the entire scenario runs, the
+      // store spy is still unbumped. The cancellation closed the
+      // held request before any token reached storage; the rest of
+      // the session never exercises the auth path again.
+      expect(storeCredentialCalls).toBe(0);
+
     } finally {
       harness.unmount();
     }

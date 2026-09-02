@@ -34,6 +34,7 @@ export async function requireValidatedGitHubCredential(
   const credential = await deps.credentialStore.get(
     "github",
     input.account,
+    input.signal,
   );
   if (credential === undefined) {
     throw githubAuthRequiredError();

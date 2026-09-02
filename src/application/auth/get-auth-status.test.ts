@@ -9,7 +9,11 @@ class FakeCredentialStore implements CredentialStore {
   readonly deleted: string[] = [];
   readonly stored: Credential[] = [];
 
-  async get(): Promise<Credential | undefined> {
+  async get(
+    _service: string,
+    _account: string,
+    _signal?: AbortSignal,
+  ): Promise<Credential | undefined> {
     return this.credential;
   }
 

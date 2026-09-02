@@ -7,13 +7,14 @@ import type {
 import { GitCredentialStore } from "./git-credential-store.js";
 
 class FakeRunner implements ProcessRunner {
-  readonly calls: { args: string[]; input?: string }[] = [];
+  readonly calls: { args: string[]; input?: string; signal?: AbortSignal }[] = [];
   helperConfigured = true;
 
   async run(options: RunProcessOptions): Promise<ProcessResult> {
     this.calls.push({
       args: [...options.args],
       ...(options.input !== undefined ? { input: options.input } : {}),
+      ...(options.signal !== undefined ? { signal: options.signal } : {}),
     });
     if (options.args.includes("fill")) {
       return {
@@ -65,5 +66,17 @@ describe("GitCredentialStore", () => {
       code: "DM_GITHUB_AUTH_REQUIRED",
       category: "USER_ACTION_REQUIRED",
     });
+  });
+
+  it("forwards the AbortSignal into git credential fill so SIGTERM cancels a hung helper", async () => {
+    const runner = new FakeRunner();
+    const store = new GitCredentialStore(runner);
+    const controller = new AbortController();
+    await store.get("github", "octocat", controller.signal);
+    // The startup auth check forwards its context signal into the
+    // `git credential fill` subprocess so a hung helper exits when
+    // the parent tears down — the execa runner wires options.signal
+    // into the cancelSignal that triggers SIGTERM.
+    expect(runner.calls[0]?.signal).toBe(controller.signal);
   });
 });

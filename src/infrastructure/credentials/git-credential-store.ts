@@ -36,10 +36,15 @@ function helperRequiredError(): ReturnType<typeof createKestrelError> {
 export class GitCredentialStore implements CredentialStore {
   constructor(private readonly runner: ProcessRunner) {}
 
-  async get(service: string, _account: string): Promise<Credential | undefined> {
+  async get(
+    service: string,
+    _account: string,
+    signal?: AbortSignal,
+  ): Promise<Credential | undefined> {
     const result = await this.runner.run({
       executable: "git",
       args: ["credential", "fill"],
+      ...(signal !== undefined ? { signal } : {}),
       input: "protocol=https\nhost=" + hostFor(service) + "\n\n",
     });
     if (result.exitCode !== 0) {

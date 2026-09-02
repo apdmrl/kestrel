@@ -132,9 +132,12 @@ describe("built CLI", () => {
   it("releases a hanging credential helper on SIGTERM without ever starting a device flow", async () => {
     // Task 6 regression: when the startup auth check hangs because the
     // user-configured `git credential fill` shim refuses to exit, a
-    // signal to the built CLI must (a) cancel the hung child, (b) tear
-    // the Ink shell down cleanly, and (c) never start an implicit
-    // device flow. The local HTTP fixture records every URL the
+    // SIGTERM to the built CLI must (a) cancel the hung child via the
+    // AbortSignal the runner forwards into `git credential fill`,
+    // (b) tear the Ink shell down cleanly without ever invoking the
+    // device flow, and (c) exit the parent within a bounded budget
+    // with the helper's exit marker present — no timeout, no
+    // SIGKILL fallback. The local HTTP fixture records every URL the
     // gateway sees; the assertion that `/login/device/code` was never
     // requested pins the "no implicit device flow" contract.
     const home = mkdtempSync(join(tmpdir(), "kestrel-built-hang-"));
@@ -144,7 +147,6 @@ describe("built CLI", () => {
     const helperScript = [
       "#!/usr/bin/env node",
       'const fs = require("node:fs");',
-      'const path = require("node:path");',
       "const args = process.argv.slice(2);",
       "const fillMarker = process.env.KESTREL_FILL_MARKER;",
       "const exitMarker = process.env.KESTREL_EXIT_MARKER;",
@@ -206,69 +208,63 @@ describe("built CLI", () => {
           KESTREL_EXIT_MARKER: exitMarker,
         },
         stdio: ["ignore", "pipe", "pipe"],
-
       });
       child.on("error", (err) => {
         console.error("CHILD ERROR:", err.message);
       });
       // The startup auth check kicks off `git credential fill` from a
       // mount-time useEffect; the helper writes its marker the moment
-      // the child process is spawned. Wait for the marker to appear
-      // via fs.watch (no wall-clock polling), proving the request
-      // reached the shim before we signal cancel.
-
-      // Poll for the fill marker. The marker is written the moment
-      // `git credential fill` is invoked; we yield to the event loop
-      // between checks instead of sleeping for a fixed duration. The
-      // marker appears well within the 5-second startup deadline
-      // window so the bounded poll always wins.
+      // the child process is spawned. Poll for the marker with a
+      // bounded deadline so the test fails fast if the helper never
+      // receives the request.
       const fillDeadline = Date.now() + 5_000;
       while (!existsSync(fillMarker) && Date.now() < fillDeadline) {
         await new Promise((resolve) => setImmediate(resolve));
       }
       expect(existsSync(fillMarker), "credential fill marker was never written").toBe(true);
-      // Cancel the CLI. SIGTERM matches the production handler wired in
-      // src/cli/main.ts; the abort listener tears Ink down and the
+      // Send SIGTERM as soon as the helper has been reached. The
+      // built CLI must propagate the signal into the hung
+      // `git credential fill` subprocess via the AbortSignal the
+      // startup auth check forwards, so the helper exits and writes
+      // its exit marker before the parent tears down.
       child.kill("SIGTERM");
-      // Wait for the CLI child to exit, with a bounded budget so a
-      // production-side leak of the helper child (which keeps the
-      // event loop alive) does not hang the test.
-      const { promise: exitPromise, resolve: resolveExit } = Promise.withResolvers<number | null>();
-      child.on("exit", (code) => resolveExit(code));
-      child.on("error", () => resolveExit(null));
-      const exitTimeout = setTimeout(() => resolveExit(null), 10_000);
-      const exitCode = await exitPromise;
-      clearTimeout(exitTimeout);
-      // If the CLI has not exited within the budget, force-kill it
-      // so the test can clean up. A leak here signals a production
-      // bug (the helper child keeps the event loop alive) but the
-      // Task 6 contract — no implicit device flow during startup
-      // or shutdown — is still observed.
-      if (exitCode === null) {
-        child.kill("SIGKILL");
-        await new Promise<void>((resolve) => child.once("exit", () => resolve()));
-      }
-      // Clean exit OR a forced-130 termination both count as "the
-      // shell came down" — the signal handler in main.ts sets the
-      // exit code from process.exitCode, which is allowed to be 130
-      // for a cancelled startup.
-      expect(exitCode === 0 || exitCode === 130 || exitCode === null).toBe(true);
-      // The hung helper is a separate child process; the Task 6
-      // contract is proven by the parent exit and the zero
-      // device-code count. The helper's exit marker is observed
-      // when present (e.g. when execa successfully kills the
-      // child) but its absence does not fail this test, since
-      // forcing the helper to be killed is out of Task 6 scope.
-      void existsSync;
+      // Wait for the CLI child to exit. The budget covers Node startup
+      // (~500ms), the credential-fill helper spawn, and Ink's render
+      // cycle before its abort handler unmounts the shell. A parent
+      // that exceeds the budget without a SIGKILL fallback signals
+      // that production leaked the hung helper.
+      const exitCode = await new Promise<number | null>((resolve) => {
+        const timer = setTimeout(() => resolve(null), 15_000);
+        child.on("exit", (code) => {
+          clearTimeout(timer);
+          resolve(code);
+        });
+        child.on("error", () => {
+          clearTimeout(timer);
+          resolve(null);
+        });
+      });
+      // Graceful bounded exit only — no timeout (null) or SIGKILL
+      // fallback. The CLI's own signal handler aborts the
+      // AbortController, execa cancels the helper, and Ink's abort
+      // listener unmounts the shell — all graceful exits.
+      expect(exitCode, "CLI parent did not exit gracefully within the bounded budget").not.toBeNull();
+      // 0 (clean), 130/143 (signal-induced termination), or 1 (the
+      // non-TTY Ink render error after the signal handler tore the
+      // session down) all count as "the shell came down".
+      expect([0, 1, 130, 143].includes(exitCode as number)).toBe(true);
+      // Causal linkage: the abort signal forwarded into
+      // `git credential fill` is what tore the hung helper down.
+      // Without the AbortSignal wire-through, execa would leak the
+      // child and the exit marker would never appear.
+      expect(existsSync(exitMarker), "git credential fill helper exited without writing its marker").toBe(true);
       // No implicit device flow: the gateway never saw a
       // /login/device/code request during startup or shutdown.
       expect(deviceCodePaths).toEqual([]);
-
     } finally {
-
       const { promise: closed, resolve: resolveClosed } = Promise.withResolvers<void>();
       server.close(() => resolveClosed());
       await closed;
     }
-  }, 60_000);
+  }, 30_000);
 });

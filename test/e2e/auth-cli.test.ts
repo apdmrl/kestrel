@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { spawn, spawnSync } from "node:child_process";
-import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
@@ -85,19 +85,12 @@ function runAsync(argv: string[], env: Record<string, string>): Promise<CliResul
 }
 
 beforeAll(async () => {
-  // The pre-existing source tree has TypeScript errors that surface
-  // on `npm run build`; those errors do not block this test because
-  // the commit-history `dist/` is fresh enough. Skip the rebuild when
-  // a fresh `dist/cli/main.js` already exists so concurrent file
-  // runs (e.g. `workflows.test.ts`) don't see `dist/` deleted mid-test.
-  // Continue regardless of build exit code so the focused Task 6
-  // tests can run.
-  if (!existsSync(cli)) {
-    spawnSync(
-      process.platform === "win32" ? "cmd.exe" : "npm",
-      process.platform === "win32" ? ["/c", "npm", "run", "build"] : ["run", "build"],
-      { cwd: root },
-    );
+  const build =
+    process.platform === "win32"
+      ? spawnSync("cmd.exe", ["/c", "npm", "run", "build"], { cwd: root })
+      : spawnSync("npm", ["run", "build"], { cwd: root });
+  if (build.status !== 0) {
+    throw new Error("npm run build failed:\n" + (build.stderr?.toString() ?? ""));
   }
   home = await mkdtemp(join(tmpdir(), "kestrel-auth-e2e-"));
   shimDir = await mkdtemp(join(tmpdir(), "kestrel-auth-shim-"));
@@ -248,55 +241,55 @@ describe("built CLI auth commands", () => {
 
   it("drives login → find → exact-id accept through the local fixture exactly once", async () => {
     // Task 6 regression: the built one-shot successful flow uses only the
-    // local fixture (no real GitHub) and a stateful credential shim that
-    // yields a known token on `credential fill`. The device-code counter
-    // must increment exactly once (during the explicit `auth login`),
-    // remain at 1 across the subsequent `find` and `mission accept`,
-    // and the exact recommendation ID returned by `find` must be the
-    // one `mission accept` accepts.
+    // local fixture (no real GitHub) and a stateful credential shim whose
+    // `credential approve` reads its stdin and persists the exact
+    // protocol/host/username/password the auth use case approved. Every
+    // subsequent `credential fill` replays exactly those persisted values,
+    // so the cached credential comes from the same write the device flow
+    // produced. The device-code counter must increment exactly once
+    // (during the explicit `auth login`), remain at 1 across the
+    // subsequent `find` and `mission accept`, and the exact recommendation
+    // ID returned by `find` must be the one `mission accept` accepts.
     const token = "DEVICE_FLOW_TEST_TOKEN";
+    const account = "octocat";
     const workspace = await mkdtemp(join(tmpdir(), "kestrel-success-workspace-"));
     const remoteName = "test-owner/test-repo";
     const statefulShim = await mkdtemp(join(tmpdir(), "kestrel-success-shim-"));
-    // the login to begin the device flow) and the stored token on
-    // every subsequent `fill` (so the post-login `find` finds a
-    // valid cached credential without re-entering the device flow).
-    // The shim's `approve` records the write so the test can
-    const approveMarker = join(statefulShim, "approve.arrived");
-    // Persist a counter file so the first `fill` returns nothing
-    // (forcing login to begin the device flow) and every subsequent
-    // `fill` returns the token (so the post-login find has a valid
-    // cached credential without re-entering the device flow). The
-    // shim's `approve` records the credential write so the test can
-    // confirm the credential was stored.
-    const fillCountFile = join(statefulShim, "fill-count");
+    // The shim persists whatever `credential approve` writes to a fixture
+    // file (`credential-store`). `credential fill` replays exactly the
+    // stored protocol/host/username/password when the fixture exists, and
+    // emits nothing when it does not (so the pre-login `fill` returns no
+    // credential and the device flow must run).
+    const credentialFixture = join(statefulShim, "credential-store");
     const statefulShimScript = [
       "#!/usr/bin/env node",
       "const fs = require('node:fs');",
       "const args = process.argv.slice(2);",
-      "const approveMarker = process.env.KESTREL_APPROVE_MARKER;",
-      "const fillCountFile = process.env.KESTREL_FILL_COUNT_FILE;",
-      "const token = process.env.KESTREL_TOKEN;",
+      "const fixture = process.env.KESTREL_CREDENTIAL_FIXTURE;",
+      "function readAllStdin() {",
+      "  return new Promise((resolve) => {",
+      "    let buf = '';",
+      "    process.stdin.setEncoding('utf8');",
+      "    process.stdin.on('data', (c) => { buf += c; });",
+      "    process.stdin.on('end', () => resolve(buf));",
+      "    process.stdin.on('error', () => resolve(buf));",
+      "  });",
+      "}",
       "if (args[0] === 'credential' && args[1] === 'fill') {",
-      "  let count = 0;",
-      "  if (fillCountFile !== undefined) {",
-      "    try { count = Number(fs.readFileSync(fillCountFile, 'utf8')) || 0; } catch { /* noop */ }",
-      "  }",
-      "  count = count + 1;",
-      "  if (fillCountFile !== undefined) {",
-      "    try { fs.writeFileSync(fillCountFile, String(count)); } catch { /* noop */ }",
-      "  }",
-      "  if (count === 1) {",
-      "    process.exit(0);",
-      "  }",
-      "  process.stdout.write('username=octocat\\npassword=' + token + '\\n');",
+      "  if (fixture === undefined) { process.exit(0); }",
+      "  let stored = '';",
+      "  try { stored = fs.readFileSync(fixture, 'utf8'); } catch { process.exit(0); }",
+      "  process.stdout.write(stored);",
       "  process.exit(0);",
       "}",
       "if (args[0] === 'credential' && args[1] === 'approve') {",
-      "  if (approveMarker !== undefined) {",
-      "    try { fs.writeFileSync(approveMarker, String(Date.now())); } catch { /* noop */ }",
-      "  }",
-      "  process.exit(0);",
+      "  readAllStdin().then((body) => {",
+      "    if (fixture !== undefined) {",
+      "      try { fs.writeFileSync(fixture, body); } catch { /* noop */ }",
+      "    }",
+      "    process.exit(0);",
+      "  });",
+      "  return;",
       "}",
       "if (args[0] === 'config' && args[1] === '--get' && args[2] === 'credential.helper') {",
       "  process.stdout.write('stateful-helper\\n');",
@@ -308,6 +301,7 @@ describe("built CLI auth commands", () => {
     ].join("\n");
     const helperPath = join(statefulShim, "git");
     await writeFile(helperPath, statefulShimScript, "utf8");
+    await writeFile(join(statefulShim, "git.cmd"), '@echo off\r\nnode "%~dp0git" %*\r\n', "utf8");
     await chmod(helperPath, 0o755);
 
     let deviceCodeRequests = 0;
@@ -387,17 +381,24 @@ describe("built CLI auth commands", () => {
         GIT_TERMINAL_PROMPT: "0",
         GITHUB_API_URL: serverUrl,
         GITHUB_CLIENT_ID: "Iv1.test-client",
-        KESTREL_FILL_COUNT_FILE: fillCountFile,
-        KESTREL_APPROVE_MARKER: approveMarker,
-        KESTREL_TOKEN: token,
+        KESTREL_CREDENTIAL_FIXTURE: credentialFixture,
       };
       const loginResult = await runAsync([cli, "--no-browser", "auth", "login"], loginEnv);
-      expect(loginResult.status, "login failed:\nstdout:" + loginResult.stdout + "\nstderr:" + loginResult.stderr).toBe(0);
-      // The auth subsystem persisted the credential through the
-      // shim's `credential approve` path: the shim wrote its marker
-      // exactly once, proving the token from the device flow was
-      // stored.
-      expect(existsSync(approveMarker)).toBe(true);
+      expect(
+        loginResult.status,
+        "login failed:\nstdout:" + loginResult.stdout + "\nstderr:" + loginResult.stderr,
+      ).toBe(0);
+      // The auth subsystem persisted the credential through the shim's
+      // `credential approve` path: the shim wrote the fixture with the
+      // exact stdin it received. Re-read the fixture and assert the
+      // stored protocol/host/username/password match the device-flow
+      // token and the live `/user` login.
+      expect(existsSync(credentialFixture)).toBe(true);
+      const stored = await readFile(credentialFixture, "utf8");
+      expect(stored).toContain("protocol=https");
+      expect(stored).toContain("host=github.com");
+      expect(stored).toContain("username=" + account);
+      expect(stored).toContain("password=" + token);
       // Exactly one device-code request: this is the explicit login.
       expect(deviceCodeRequests).toBe(1);
 

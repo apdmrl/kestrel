@@ -61,3 +61,34 @@ The workflow file also passed independently: 47/47 tests in 135.68 seconds. The 
 ## Process Deviations
 
 Two Task 6 implementers stopped with incomplete uncommitted work. One temporarily changed the build script to emit despite errors; that out-of-scope change was removed before validation. A parallel compile-correction batch repaired four independent strict TypeScript errors, and a parallel E2E batch repaired auth CLI setup and migrated legacy workflow scenarios. One workflow agent was cancelled after becoming unresponsive; its completed edits were retained and independently verified.
+
+## Review Fix Round
+
+The scoped reviewer found four evidence/lifecycle gaps. Corrections:
+
+- `CredentialStore.get` now accepts an abort signal; `GitCredentialStore`
+  forwards it to `ProcessRunner.run`, and every auth caller propagates its
+  operation signal. The hanging-helper test now requires a graceful bounded
+  parent exit and `fill.exited`; no forced-kill or timeout result is accepted.
+- Built E2E setup no longer catches build errors or silently reuses stale
+  output. Auth CLI and workflow suites require a successful ordinary build.
+- The FakeInk cancellation store assertion is attached to the held token
+  promise's success branch; cancellation rejects before that branch. Mutation
+  to resolve the promise makes the assertion fail.
+- The stateful credential helper persists the exact `credential approve`
+  payload and replays it on later `credential fill`; the test asserts the
+  fixture account/token rather than fabricating them from a call counter.
+
+Fresh evidence after these changes:
+
+```text
+$ npm run build
+> node scripts/clean.mjs dist && tsc -p tsconfig.build.json
+(exit 0)
+
+Test Files  6 passed (6)
+Tests       88 passed (88)
+Duration    156.29s
+```
+
+Directly affected auth/credential/built tests also passed 52/52.

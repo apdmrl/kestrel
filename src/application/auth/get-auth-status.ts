@@ -42,7 +42,11 @@ export async function getAuthStatus(
   deps: GetAuthStatusDeps,
   input: GetAuthStatusInput,
 ): Promise<AuthStatus> {
-  const cached = await deps.credentialStore.get("github", input.account);
+  const cached = await deps.credentialStore.get(
+    "github",
+    input.account,
+    input.signal,
+  );
   if (cached === undefined) {
     return NOT_CONNECTED;
   }

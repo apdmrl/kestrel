@@ -701,17 +701,10 @@ async function findRepo(): Promise<string> {
 }
 
 beforeAll(async () => {
-  // The pre-existing source tree has TypeScript errors that surface
-  // on `npm run build`; those errors do not block this test because
-  // the commit-history `dist/` is fresh enough. Continue regardless
-  // of build exit code so the focused Task 6 tests can run.
-  try {
-    await (process.platform === "win32"
-      ? execFileAsync("cmd.exe", ["/c", "npm", "run", "build"], { cwd: root, encoding: "utf8" })
-      : execFileAsync("npm", ["run", "build"], { cwd: root, encoding: "utf8" }));
-  } catch {
-    /* build emits a fresh dist despite pre-existing TS errors; ignore */
-  }
+  // On Windows `npm` is `npm.cmd` and requires the command interpreter.
+  await (process.platform === "win32"
+    ? execFileAsync("cmd.exe", ["/c", "npm", "run", "build"], { cwd: root, encoding: "utf8" })
+    : execFileAsync("npm", ["run", "build"], { cwd: root, encoding: "utf8" }));
 
   home = await mkdtemp(join(tmpdir(), "kestrel-e2e-home-"));
   workspace = await mkdtemp(join(tmpdir(), "kestrel-e2e-ws-"));
