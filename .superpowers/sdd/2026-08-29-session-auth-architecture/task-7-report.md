@@ -121,7 +121,7 @@ The browser flow was not completed and no new credential was stored.
 
 This task produces the following commit:
 
-- SHA: `a0b8f6d`
+- SHA: `e1cf109`
 - Subject: `docs: explain interactive authentication recovery`
 - Files committed:
   - `README.md`
