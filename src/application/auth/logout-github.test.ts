@@ -9,6 +9,8 @@ class FakeCredentialStore implements CredentialStore {
   /** Every signal the store saw across `get` calls, including the
    * never-aborted sentinel when the caller did not pass one. */
   readonly getSignals: AbortSignal[] = [];
+  /** Every signal the store saw across `delete` calls. */
+  readonly deleteSignals: AbortSignal[] = [];
 
   async get(
     _service: string,
@@ -19,12 +21,13 @@ class FakeCredentialStore implements CredentialStore {
     return this.credential;
   }
 
-  async store(credential: Credential): Promise<void> {
+  async store(credential: Credential, _signal: AbortSignal): Promise<void> {
     this.credential = credential;
   }
 
-  async delete(service: string, account: string): Promise<void> {
+  async delete(service: string, account: string, signal: AbortSignal): Promise<void> {
     this.deleted.push({ service, account });
+    this.deleteSignals.push(signal);
     this.credential = undefined;
   }
 }
@@ -163,5 +166,18 @@ describe("logoutGitHub", () => {
     const lookupSignal = credentialStore.getSignals[0];
     expect(lookupSignal?.aborted).toBe(false);
     expect(credentialStore.deleted).toEqual([{ service: "github", account: "octocat" }]);
+  });
+  it("forwards the caller's cancellation signal into the credential delete so SIGTERM cancels a hung reject", async () => {
+    const credentialStore = new FakeCredentialStore();
+    credentialStore.credential = { service: "github", account: "octocat", token: "cached-token" };
+    const controller = new AbortController();
+    await logoutGitHub(
+      { credentialStore },
+      { confirmation: token, signal: controller.signal },
+    );
+    // The same AbortSignal that reaches the credential lookup must also
+    // reach the credential delete — otherwise a hung `git credential
+    // reject` subprocess outlives the caller's CTRL+C.
+    expect(credentialStore.deleteSignals).toEqual([controller.signal]);
   });
 });

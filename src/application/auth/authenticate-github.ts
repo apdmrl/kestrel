@@ -43,27 +43,28 @@ function deviceFlowRequiresInteractiveError() {
  * Authenticate with GitHub: reuse a valid cached token, otherwise run the device
  * flow. A cached token is always validated against the stored account before it
  * is reused; expired or revoked tokens are removed before re-authenticating.
+ *
+ * The same effective `AbortSignal` (caller's signal or a never-aborted
+ * fallback) reaches every credential effect — `get`, `delete` (on mismatch and
+ * expiry), and `store` — so a hung Git credential helper exits when the parent
+ * aborts.
  */
 export async function authenticateGitHub(
   deps: AuthenticateGitHubDeps,
   input: AuthenticateGitHubInput,
 ): Promise<AuthenticateGitHubResult> {
-  const lookupSignal = input.signal ?? NEVER_ABORTED;
-  const cached = await deps.credentialStore.get(
-    "github",
-    input.account,
-    lookupSignal,
-  );
+  const signal = input.signal ?? NEVER_ABORTED;
+  const cached = await deps.credentialStore.get("github", input.account, signal);
   if (cached !== undefined) {
     try {
-      const viewer = await deps.gateway.getViewer(cached.token, input.signal);
+      const viewer = await deps.gateway.getViewer(cached.token, signal);
       if (viewer.login === cached.account) {
         return { account: cached.account, token: cached.token };
       }
-      await deps.credentialStore.delete("github", cached.account);
+      await deps.credentialStore.delete("github", cached.account, signal);
     } catch (error) {
       if (isKestrelError(error) && error.code === "DM_GITHUB_AUTH_EXPIRED") {
-        await deps.credentialStore.delete("github", cached.account);
+        await deps.credentialStore.delete("github", cached.account, signal);
       } else {
         throw error;
       }
@@ -74,15 +75,18 @@ export async function authenticateGitHub(
     throw deviceFlowRequiresInteractiveError();
   }
 
-  const authorization = await deps.gateway.beginDeviceFlow(input.signal);
+  const authorization = await deps.gateway.beginDeviceFlow(signal);
   if (input.onAuthorization !== undefined) {
     await input.onAuthorization(authorization);
   }
-  const token = await deps.gateway.pollForToken(authorization.deviceCode, input.signal);
-  await deps.credentialStore.store({
-    service: "github",
-    account: token.account,
-    token: token.token,
-  });
+  const token = await deps.gateway.pollForToken(authorization.deviceCode, signal);
+  await deps.credentialStore.store(
+    {
+      service: "github",
+      account: token.account,
+      token: token.token,
+    },
+    signal,
+  );
   return { account: token.account, token: token.token };
 }

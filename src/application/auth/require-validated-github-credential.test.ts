@@ -27,12 +27,12 @@ class FakeCredentialStore implements CredentialStore {
     return this.credential;
   }
 
-  async store(credential: Credential): Promise<void> {
+  async store(credential: Credential, _signal: AbortSignal): Promise<void> {
     this.stored.push(credential);
     this.credential = credential;
   }
 
-  async delete(_service: string, account: string): Promise<void> {
+  async delete(_service: string, account: string, _signal: AbortSignal): Promise<void> {
     this.deleted.push(account);
     if (this.credential?.account === account) {
       this.credential = undefined;

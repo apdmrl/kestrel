@@ -63,6 +63,10 @@ function confirmationRequiredError() {
  *
  * The stored account is read first so the reject payload carries the username
  * the helper recorded. Logging out with nothing stored is not an error.
+ *
+ * The same effective `AbortSignal` (caller's signal or a never-aborted
+ * fallback) reaches both the lookup and the delete so a hung Git credential
+ * helper exits when the parent aborts.
  */
 export async function logoutGitHub(
   deps: LogoutGitHubDeps,
@@ -71,13 +75,14 @@ export async function logoutGitHub(
   if (!confirmLogout(input.confirmation)) {
     throw confirmationRequiredError();
   }
+  const signal = input.signal ?? NEVER_ABORTED;
   const existing = await deps.credentialStore.get(
     "github",
     logoutConfirmationToken(),
-    input.signal ?? NEVER_ABORTED,
+    signal,
   );
   if (existing !== undefined) {
-    await deps.credentialStore.delete("github", existing.account);
+    await deps.credentialStore.delete("github", existing.account, signal);
   }
   return { connected: false, login: null, detail: "LOGGED_OUT" };
 }

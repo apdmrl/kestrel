@@ -6,11 +6,6 @@ function hostFor(service: string): string {
   return service + ".com";
 }
 
-/** A sentinel signal that is never aborted; used when the port entry point
- * does not accept one (e.g. `store`) but the helper-detection subprocess
- * still needs a non-null AbortSignal to satisfy the contract. */
-const NEVER_ABORTED: AbortSignal = new AbortController().signal;
-
 function parseField(stdout: string, key: string): string | undefined {
   for (const line of stdout.split("\n")) {
     if (line.startsWith(key + "=")) {
@@ -37,6 +32,12 @@ function helperRequiredError(): ReturnType<typeof createKestrelError> {
 /**
  * Stores GitHub credentials through the user's configured Git credential helper
  * (Git Credential Manager or an OS keychain helper), never as a plaintext file.
+ *
+ * Every public method takes an `AbortSignal` and forwards it into the helper
+ * detection, approve, and reject subprocesses. The same signal that reaches
+ * `get` / `store` / `delete` must reach every underlying `git` invocation so a
+ * hung credential helper exits when the parent aborts — a separate never-aborted
+ * sentinel would leak past CTRL+C and collide with a later login attempt.
  */
 export class GitCredentialStore implements CredentialStore {
   constructor(private readonly runner: ProcessRunner) {}
@@ -64,11 +65,12 @@ export class GitCredentialStore implements CredentialStore {
     return { service, account: accountField, token };
   }
 
-  async store(credential: Credential): Promise<void> {
-    await this.requireHelper(NEVER_ABORTED);
+  async store(credential: Credential, signal: AbortSignal): Promise<void> {
+    await this.requireHelper(signal);
     await this.runner.run({
       executable: "git",
       args: ["credential", "approve"],
+      signal,
       input:
         "protocol=https\nhost=" +
         hostFor(credential.service) +
@@ -80,10 +82,11 @@ export class GitCredentialStore implements CredentialStore {
     });
   }
 
-  async delete(service: string, account: string): Promise<void> {
+  async delete(service: string, account: string, signal: AbortSignal): Promise<void> {
     await this.runner.run({
       executable: "git",
       args: ["credential", "reject"],
+      signal,
       input: "protocol=https\nhost=" + hostFor(service) + "\nusername=" + account + "\n\n",
     });
   }

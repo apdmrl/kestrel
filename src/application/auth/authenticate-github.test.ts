@@ -21,6 +21,10 @@ class FakeCredentialStore implements CredentialStore {
   readonly creds = new Map<string, Credential>();
   readonly deleted: string[] = [];
   readonly stored: Credential[] = [];
+  /** Every signal the store saw across `store` calls. */
+  readonly storeSignals: AbortSignal[] = [];
+  /** Every signal the store saw across `delete` calls. */
+  readonly deleteSignals: AbortSignal[] = [];
 
   async get(
     service: string,
@@ -29,13 +33,15 @@ class FakeCredentialStore implements CredentialStore {
   ): Promise<Credential | undefined> {
     return this.creds.get(service + ":" + account);
   }
-  async store(credential: Credential): Promise<void> {
+  async store(credential: Credential, signal: AbortSignal): Promise<void> {
     this.stored.push(credential);
+    this.storeSignals.push(signal);
     this.creds.set(credential.service + ":" + credential.account, credential);
   }
 
-  async delete(service: string, account: string): Promise<void> {
+  async delete(service: string, account: string, signal: AbortSignal): Promise<void> {
     this.deleted.push(account);
+    this.deleteSignals.push(signal);
     this.creds.delete(service + ":" + account);
   }
 }
@@ -58,12 +64,12 @@ class AccountInsensitiveStore implements CredentialStore {
   ): Promise<Credential | undefined> {
     return this.credential;
   }
-  async store(credential: Credential): Promise<void> {
+  async store(credential: Credential, _signal: AbortSignal): Promise<void> {
     this.stored.push(credential);
     this.credential = credential;
   }
 
-  async delete(_service: string, account: string): Promise<void> {
+  async delete(_service: string, account: string, _signal: AbortSignal): Promise<void> {
     this.deleted.push(account);
     if (this.credential?.account === account) {
       this.credential = undefined;
@@ -353,5 +359,63 @@ describe("authenticateGitHub", () => {
     });
     expect(gateway.capturedDeviceSignal).toBe(controller.signal);
     expect(result.token).toBe("fresh-token");
+  });
+  it("forwards the invocation signal into the credential delete when the cached login mismatches", async () => {
+    const store = new FakeCredentialStore();
+    store.creds.set("github:octocat", { service: "github", account: "octocat", token: "cached" });
+    const gateway = new FakeGateway();
+    gateway.viewerFn = () => ({ login: "different-user", id: 1 });
+    const controller = new AbortController();
+    await authenticateGitHub(deps(store, gateway), {
+      account: "octocat",
+      signal: controller.signal,
+    });
+    // The cancellation signal that reaches the gateway's viewer call
+    // must also reach the credential delete that follows the login
+    // mismatch — otherwise a hung credential helper outlives the
+    // caller's CTRL+C.
+    expect(store.deleteSignals).toEqual([controller.signal]);
+  });
+
+  it("forwards the invocation signal into the credential delete when the cached token is expired", async () => {
+    const store = new FakeCredentialStore();
+    store.creds.set("github:octocat", { service: "github", account: "octocat", token: "expired" });
+    const gateway = new FakeGateway();
+    gateway.viewerFn = () => {
+      throw createKestrelError({
+        code: "DM_GITHUB_AUTH_EXPIRED",
+        category: "USER_ACTION_REQUIRED",
+        userMessage: "token expired",
+        suggestedActions: ["re-authenticate"],
+        retryability: "NO_RETRY",
+        recoveryStrategy: "REAUTHENTICATE",
+        severity: "ERROR",
+      });
+    };
+    const controller = new AbortController();
+    await authenticateGitHub(deps(store, gateway), {
+      account: "octocat",
+      signal: controller.signal,
+    });
+    // The same AbortSignal that reaches the gateway's viewer call must
+    // also reach the credential delete that follows the expiry — a hung
+    // reject subprocess must exit when the parent aborts.
+    expect(store.deleteSignals).toEqual([controller.signal]);
+  });
+
+  it("forwards the invocation signal into the credential store after the device flow completes", async () => {
+    const store = new FakeCredentialStore();
+    const gateway = new FakeGateway();
+    gateway.pollFn = () => ({ token: "fresh-token", account: "octocat" });
+    const controller = new AbortController();
+    await authenticateGitHub(deps(store, gateway), {
+      account: "octocat",
+      signal: controller.signal,
+    });
+    // The same AbortSignal that reaches `beginDeviceFlow` /
+    // `pollForToken` must also reach the credential store call that
+    // persists the new token — otherwise a hung approval helper
+    // outlives the caller's CTRL+C.
+    expect(store.storeSignals).toEqual([controller.signal]);
   });
 });

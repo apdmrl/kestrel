@@ -6,7 +6,7 @@ export interface Credential {
 
 /** Stores/retrieves/deletes a credential token by service and account.
  *
- * `get` requires a cancellation `signal` so a hung credential helper or
+ * Every method requires a cancellation `signal` so a hung credential helper or
  * network call never outlives the caller's command. Pass the per-invocation
  * `CommandContext.signal` (or a fresh `AbortController().signal` when the
  * caller has no broader cancellation to compose with). Implementations must
@@ -18,6 +18,6 @@ export interface CredentialStore {
     account: string,
     signal: AbortSignal,
   ): Promise<Credential | undefined>;
-  store(credential: Credential): Promise<void>;
-  delete(service: string, account: string): Promise<void>;
+  store(credential: Credential, signal: AbortSignal): Promise<void>;
+  delete(service: string, account: string, signal: AbortSignal): Promise<void>;
 }

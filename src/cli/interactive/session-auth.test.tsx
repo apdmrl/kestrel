@@ -588,14 +588,14 @@ describe("session auth interaction — prompt clearing on synchronous admission"
     let storeCredentialCalls = 0;
     const storedCredentials: Credential[] = [];
     const fakeCredentialStore: CredentialStore = {
-      async get() {
+      async get(_service, _account, _signal) {
         return undefined;
       },
-      async store(credential) {
+      async store(credential, _signal) {
         storeCredentialCalls += 1;
         storedCredentials.push(credential);
       },
-      async delete() {
+      async delete(_service, _account, _signal) {
         // Cancellation rejects before any storage step; the login
         // path never deletes here, so this branch stays empty.
       },
