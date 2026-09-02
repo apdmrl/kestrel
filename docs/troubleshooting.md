@@ -1,10 +1,12 @@
 # Troubleshooting
 
-- **"GitHub authentication is required"** — set `GITHUB_CLIENT_ID` and run `kestrel auth login` to complete the device flow, or verify your Git Credential Manager.
+- **`Auth required`** — in the interactive shell, pick `Auth` in the sidebar and choose `/auth login`. The first Enter fills the prompt; the second Enter starts the device flow. From the one-shot CLI, set `GITHUB_CLIENT_ID` and run `kestrel auth login` to complete the device flow, or verify your Git Credential Manager.
 - **Not sure whether you are connected** — run `kestrel auth status`. It validates the stored token against GitHub and reports the live login, `Not connected`, or an expired credential. It never deletes a credential.
+- **`Auth status unavailable` in the shell** — startup status can be slow, blocked, or offline; the session still mounts and local mission, progress, journey, and preference commands stay available. Run `/auth status` again to retry; the result is informational and does not start a device flow.
 - **The browser did not open** — the verification URL and code are always printed, so open the URL yourself. Kestrel refuses to open anything that is not an `https:` URL with a real host and no embedded credentials. Suppress the launch with `--no-browser`, `KESTREL_NO_BROWSER=1`, or `--json`. On Linux the launch needs `xdg-open`; on WSL it prefers `wslview` and falls back to `xdg-open`.
 - **`kestrel auth logout` refuses to run** — it clears the shared `github.com` credential that `git` and `gh` also use, so it requires `--confirm github.com`.
-- **Ctrl+C during `/auth login` in the shell** — this cancels the login and closes the session. The cancellation signal is process-wide and one-shot, so a session that stayed open would fail every later command. Start a new session and run `/auth login` again.
+- **Ctrl+C while `/auth login` waits for device authorization** — Ctrl+C cancels only the in-flight login child. The session stays mounted, no credential is stored, and you can run other local commands. Run `/auth login` again when ready to retry.
+- **Restart during `/auth login`** — closing the session or restarting Kestrel while a device flow is in flight discards the in-flight authorization, because authorization state is transient. Start a new explicit `/auth login` (or `kestrel auth login` from the one-shot CLI) to authenticate again. There is no automatic resume.
 - **Mission is locked** — wait for the other operation to finish. If the lock is stale (left by a crashed process), break it with `kestrel mission break-lock --id <missionId>`.
 - **Corrupt state** — a `.corrupt-<timestamp>` backup is created automatically; restore from it or remove the corrupt file.
 - **Interrupted preparation** — rerun the same command to resume; use "start over" only with an explicit confirmation token.

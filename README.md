@@ -34,21 +34,18 @@ kestrel --no-browser auth login   # authenticate without opening a browser
 
 ## Connecting to GitHub
 
-Kestrel authenticates with the GitHub OAuth device flow and stores the token through your Git
-credential helper. Set the client id of a GitHub OAuth App that has device flow enabled, then
-log in:
+Kestrel renders the interactive session immediately and checks GitHub status for up to five seconds. It never starts login automatically. If GitHub is required, select Auth, choose `/auth login`, then press Enter again to start the device flow. Local mission, progress, journey, and preference commands remain available while disconnected or offline.
 
-```
-export GITHUB_CLIENT_ID=<your-oauth-app-client-id>
-kestrel auth login
-```
+One-shot forms (`kestrel auth login`, `kestrel auth status`) are unchanged.
 
-Kestrel prints the verification URL and a short user code, then opens the URL in your browser.
-The URL and code are always printed, so authentication still works when no browser can be
-opened. Suppress the browser with `--no-browser`, `KESTREL_NO_BROWSER=1`, or `--json`.
+In the interactive shell:
 
-Commands that need GitHub (`find`, `verify ...`) still authenticate on demand if you have not
-run `auth login` first.
+1. Pick a category from the sidebar (for example `Auth`).
+2. Pick a contextual action from the prompt (for example `/auth login`).
+3. Press Enter once to fill the prompt with the action.
+4. Press Enter again to execute it.
+
+The second Enter is the explicit confirmation; nothing runs until you press it. Authorization is transient: a restart requires a new explicit login, and the session does not resume an in-flight device flow across restarts.
 
 `auth logout` clears the shared `github.com` credential that `git` and `gh` also use, so it
 requires `--confirm github.com`.
