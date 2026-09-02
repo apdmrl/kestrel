@@ -474,22 +474,30 @@ export function Session({
       } else if (result.kind === "exit") {
         close();
       } else if (result.kind === "error") {
+        // Detect child-driven cancellation independently of the
+        // adapter-specific error code. The session renders neutral
+        // cancellation and restores the prior auth state whenever
+        // the child signal aborted, even if the handler rejects
+        // with an adapter error code that does not match
+        // DM_GITHUB_AUTH_CANCELLED (e.g. DM_PROCESS_CANCELLED from
+        // a transport-level helper, or a plain Error from a
+        // credential lookup). Finding 7 of the implementation
+        // review.
+        const childAborted = child.controller.signal.aborted;
         const rendered = renderSessionView(result.view);
-        addEntry(rendered.kind, rendered.text);
-        // Dispatch the matching reducer event for the captured IDs.
-        // The reducer is the sole authority on auth state — the
-        // component no longer carries a parallel `setAuthState` policy.
-        // For `/auth status` the reducer's AUTH_FAILED path maps a
-        // classified code onto `unknown(errorCode)`. For all other
-        // operations OPERATION_FAILED preserves the current auth
-        // (which is the connected state when auth-status already
-        // succeeded) so the Find.run action remains enabled.
-        if (isAuthStatus) {
-          const errorCode = result.view.kind === "error" ? result.view.code : "UNKNOWN";
-          dispatch({ type: "AUTH_FAILED", attemptId: capturedAttemptId, errorCode });
+        const isAuthLogin = !isAuthStatus && parsed.kind === "auth-login";
+        if (childAborted && isAuthLogin) {
+          addEntry("output", "Login was cancelled; the session remains active.");
+          dispatch({ type: "OPERATION_CANCELLED", operationId: capturedOperationId });
         } else {
-          const errorCode = result.view.kind === "error" ? result.view.code : "UNKNOWN";
-          dispatch({ type: "OPERATION_FAILED", operationId: capturedOperationId, errorCode });
+          addEntry(rendered.kind, rendered.text);
+          if (isAuthStatus) {
+            const errorCode = result.view.kind === "error" ? result.view.code : "UNKNOWN";
+            dispatch({ type: "AUTH_FAILED", attemptId: capturedAttemptId, errorCode });
+          } else {
+            const errorCode = result.view.kind === "error" ? result.view.code : "UNKNOWN";
+            dispatch({ type: "OPERATION_FAILED", operationId: capturedOperationId, errorCode });
+          }
         }
       } else {
         const rendered = renderSessionView(result.view);

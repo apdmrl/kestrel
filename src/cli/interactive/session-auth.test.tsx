@@ -1153,6 +1153,60 @@ describe("session — child-aborted login is rendered as neutral cancellation", 
       harness.unmount();
     }
   });
+
+  it("renders the in-flight login as a neutral cancellation when the child signal aborts and the handler rejects with no error code", async () => {
+    // The session must treat the child signal's aborted state as the
+    // cancellation source regardless of the adapter-specific error
+    // shape. A handler that rejects with a plain Error (no `code`,
+    // no `userMessage`) still represents user-driven Ctrl+C — the
+    // session must still render the neutral notice and keep the
+    // session mounted. This pins finding 7 of the implementation
+    // review (neutral cancellation at any login phase) for a
+    // credential/lookup/browser phase, not just the device-flow
+    // poll phase.
+    const commandHandlers = handlers();
+    let loginReject: ((reason: unknown) => void) | undefined;
+    vi.mocked(commandHandlers.authLogin).mockImplementation(
+      async (_args, context) =>
+        new Promise<ViewModel>((_resolve, reject) => {
+          loginReject = reject;
+          // Reject with a plain Error — no code, no KestrelError
+          // shape. The session must still treat this as a
+          // neutral cancellation because the child signal aborted.
+          context.signal?.addEventListener("abort", () => {
+            reject(
+              Object.assign(new Error("credential lookup cancelled"), {
+                name: "CredentialAbortError",
+              }),
+            );
+          });
+        }),
+    );
+    const onSessionExit = vi.fn();
+    const harness = mount({
+      handlers: commandHandlers,
+      signal: new AbortController().signal,
+      onSessionExit,
+    });
+    try {
+      await settle();
+      harness.stdin.send("/auth login\r");
+      await settle();
+      expect(commandHandlers.authLogin).toHaveBeenCalled();
+      harness.stdin.send("\u0003");
+      await settle(80);
+      const frame = harness.lastFrame();
+      // No red error banner — the cancellation is a neutral
+      // transcript notice, not an action-required card.
+      expect(frame).not.toMatch(/Action required/u);
+      expect(frame).not.toMatch(/credential lookup cancelled/u);
+      // The session is not exited by the cancellation.
+      expect(onSessionExit).not.toHaveBeenCalled();
+    } finally {
+      loginReject?.(new Error("test cleanup"));
+      harness.unmount();
+    }
+  });
 });
 
 describe("session — Home key is a no-op while an operation is running", () => {
