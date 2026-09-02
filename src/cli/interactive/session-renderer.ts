@@ -1,4 +1,5 @@
 import type { ViewModel } from "../presentation/view-models.js";
+import type { TranscriptMetadata } from "./session-view-models.js";
 import { renderPlain } from "../presentation/plain-renderer.js";
 
 /**
@@ -16,11 +17,20 @@ import { renderPlain } from "../presentation/plain-renderer.js";
  * generated "Run /auth <verb> to continue." line is appended only when no
  * identical line already exists in the rendered output.
  */
-
 export interface SessionRenderedView {
   readonly kind: "output" | "error";
   readonly text: string;
   readonly recoveryCommand?: string;
+  /**
+   * Optional semantic metadata. Only set when the source view model
+   * carries typed fields the bounded transcript classifier needs
+   * (currently: a `device-authorization` view). The session
+   * propagates the metadata into the transcript entry so the
+   * bounded window keeps the exact validation URI / user code,
+   * not a host-specific text regex. The plain / JSON renderers
+   * never read this field.
+   */
+  readonly metadata?: TranscriptMetadata;
 }
 
 const AUTH_LOGIN = "/auth login";
@@ -121,7 +131,6 @@ function renderSessionError(view: Extract<ViewModel, { kind: "error" }>): Sessio
     ...(recovery === undefined ? {} : { recoveryCommand: recovery }),
   };
 }
-
 function renderDeviceAuthorization(
   view: Extract<ViewModel, { kind: "device-authorization" }>,
 ): SessionRenderedView {
@@ -129,6 +138,11 @@ function renderDeviceAuthorization(
     kind: "output",
     text: `Open ${view.verificationUri} and enter ${view.userCode}`,
     recoveryCommand: AUTH_LOGIN,
+    metadata: {
+      kind: "device-authorization",
+      verificationUri: view.verificationUri,
+      userCode: view.userCode,
+    },
   };
 }
 /**

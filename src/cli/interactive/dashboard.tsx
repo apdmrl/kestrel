@@ -4,6 +4,7 @@ import { Box, Text } from "ink";
 import stringWidth from "string-width";
 import { NAVIGATION_SECTIONS } from "./session-navigation.js";
 import type { SessionAction } from "./session-navigation.js";
+import type { TranscriptMetadata } from "./session-view-models.js";
 
 /**
  * Renderable transcript entry. The shell accepts structured entries
@@ -12,6 +13,12 @@ import type { SessionAction } from "./session-navigation.js";
  * React children. `rows` is a plain-text row count that already accounts
  * for embedded newlines, narrow-width wrapping, and the entry's own
  * vertical chrome (border, padding, label).
+ *
+ * `metadata` carries the typed semantic intent of the entry. The
+ * bounded window classifier and bounded renderer key off the
+ * metadata to retain the latest device-authorization payload
+ * verbatim (validation URI + user code), independent of the entry's
+ * text. Plain / JSON renderers ignore this field.
  */
 export interface RenderableTranscriptEntry {
   readonly id: number;
@@ -19,6 +26,7 @@ export interface RenderableTranscriptEntry {
   readonly kind: "input" | "output" | "error" | "system";
   readonly criticality: "critical" | "noncritical";
   readonly rows: number;
+  readonly metadata?: TranscriptMetadata;
 }
 /**
  * Wrap a single line of text to the available width, breaking on
@@ -142,26 +150,46 @@ export function toRenderableEntry(
 
 /**
  * Classify an entry's criticality from its text. Entries that contain
- * verification URI / user code, recommendation ID / accept command,
- * typed-input echoes, or the explicit "Run /auth login to continue"
- * recovery are critical. Everything else is noncritical so it can be
- * dropped when the budget is tight.
-/**
- * Classify an entry's criticality from its text. Entries that contain
- * a verification URI / user code, recommendation ID / accept command,
- * or the explicit "/auth login" / "/auth status" recovery line are
- * critical. The typed prompt is rendered separately by PromptLine and
- * is NOT promoted to critical here — typing "/" would otherwise match
+ * a recommendation ID / accept command or the explicit
+ * "/auth login" / "/auth status" recovery line are critical. The
+ * typed prompt is rendered separately by PromptLine and is NOT
+ * promoted to critical here — typing "/" would otherwise match
  * every command echo and blow past the budget.
+ *
+ * Device-authorization criticality is intentionally NOT classified
+ * here. The session attaches typed `metadata` to the entry on the
+ * `notify` channel; the metadata is the single source of truth
+ * for the bounded window so an arbitrary HTTPS URL text entry
+ * (e.g. a documentation link) cannot impersonate a device payload.
+ * Use `classifyTranscriptEntry` for the entry-level classifier.
  */
 export function isCriticalTranscriptText(text: string, promptInput: string): boolean {
   const trimmed = text;
   void promptInput; // deliberately unused: the prompt is rendered separately
-  if (/https?:\/\/github\.com\/login\/device/u.test(trimmed)) return true;
   if (/Recommendation ID:\s*\S+/u.test(trimmed)) return true;
   if (/\/mission\s+accept\s+--id\s+\S+/u.test(trimmed)) return true;
   if (/Run\s+\/auth\s+(login|status)\s+to\s+continue/u.test(trimmed)) return true;
   return false;
+}
+
+/**
+ * Classify a renderable entry's criticality. The metadata takes
+ * precedence over the text-only path: a `device-authorization`
+ * entry is always critical regardless of its rendered text. Every
+ * other entry falls through to `isCriticalTranscriptText` so the
+ * recommendation / recovery regexes continue to flag their
+ * respective entries. The classifier is the single source of
+ * truth used by the bounded window.
+ */
+export function classifyTranscriptEntry(
+  entry: {
+    readonly text: string;
+    readonly metadata?: TranscriptMetadata;
+  },
+  promptInput: string,
+): "critical" | "noncritical" {
+  if (entry.metadata?.kind === "device-authorization") return "critical";
+  return isCriticalTranscriptText(entry.text, promptInput) ? "critical" : "noncritical";
 }
 /**
  * Window transcript entries to honour the row budget. Critical entries
@@ -260,9 +288,14 @@ export function windowTranscriptEntries(
   paneWidth = 80,
 ): readonly RenderableTranscriptEntry[] {
   if (rowBudget <= 0 || entries.length === 0) return [];
+  // Select the latest device-authorization payload by typed metadata
+  // so any HTTPS verification URI (GitHub.com, GitHub Enterprise,
+  // etc.) is retained verbatim. The text-regex fallback was removed
+  // because arbitrary URL text cannot impersonate a device payload
+  // without the metadata the session attaches on the notify channel.
   const latestAuthDevice = [...entries]
     .reverse()
-    .find((entry) => /https?:\/\/github\.com\/login\/device/u.test(entry.text));
+    .find((entry) => entry.metadata?.kind === "device-authorization");
   const latestRecommendation = [...entries]
     .reverse()
     .find(
@@ -337,11 +370,14 @@ function renderBoundedCritical(entry: RenderableTranscriptEntry): string {
   // Prefer a real bounded form that keeps the user-actionable
   // information: the verification URI + user code, the recommendation
   // ID, or the exact accept command.
-  if (/https?:\/\/github\.com\/login\/device/u.test(entry.text)) {
-    const match = entry.text.match(/(https?:\/\/github\.com\/login\/device\S*)\s+and\s+enter\s+(\S+)/u);
-    if (match !== null) return `${match[1]} (code ${match[2]})`;
-    const uri = entry.text.match(/https?:\/\/github\.com\/login\/device\S*/u);
-    if (uri !== null) return uri[0];
+  // The device-authorization path is driven by typed metadata so the
+  // exact validation URI + user code survive even when the host is
+  // github.enterprise.example.com (or any other host); arbitrary
+  // URL text never reaches this branch because only entries the
+  // session tagged on the notify channel carry the device-authorization
+  // metadata.
+  if (entry.metadata?.kind === "device-authorization") {
+    return `${entry.metadata.verificationUri} (code ${entry.metadata.userCode})`;
   }
   if (/Recommendation ID:\s*\S+/u.test(entry.text)) {
     const id = entry.text.match(/Recommendation ID:\s*(\S+)/u);

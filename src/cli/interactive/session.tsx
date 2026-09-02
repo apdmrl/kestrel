@@ -7,7 +7,7 @@ import {
   DEFAULT_MISSION_SUGGESTIONS,
   DEFAULT_QUICK_COMMANDS,
   estimateEntryRows,
-  isCriticalTranscriptText,
+  classifyTranscriptEntry,
   type RenderableTranscriptEntry,
   type TerminalCapabilities,
 } from "./dashboard.js";
@@ -264,18 +264,29 @@ export function Session({
   // operation / attempt, so supersession is implicit.
   const nextOperationId = useRef(1);
   const nextAttemptId = useRef(1);
-  const addEntry = (kind: TranscriptEntry["kind"], text: string): void => {
+  const addEntry = (
+    kind: TranscriptEntry["kind"],
+    text: string,
+    metadata?: TranscriptEntry["metadata"],
+  ): void => {
     const id = nextId.current;
     nextId.current += 1;
-    setTranscript((entries) => appendEntry(entries, { id, kind, text }));
+    setTranscript((entries) =>
+      appendEntry(entries, metadata === undefined ? { id, kind, text } : { id, kind, text, metadata }),
+    );
   };
   // Interim guidance (device-flow instructions) must land in the transcript.
   // A raw stderr write would tear the Ink frame it renders inside. The
   // controller delivers a `ViewModel`; route it through `renderSessionView` so
-  // auth/error/device paths use interactive slash-command recovery.
+  // auth/error/device paths use interactive slash-command recovery. The
+  // device-authorization view's typed metadata is carried through
+  // `renderSessionView` so the bounded window can keep the exact
+  // verification URI + user code without falling back to a host-specific
+  // text regex. The plain / JSON renderers are unchanged and never read
+  // this field.
   const controller = createSessionController(handlers, (received) => {
     const rendered = renderSessionView(received);
-    addEntry(rendered.kind, rendered.text);
+    addEntry(rendered.kind, rendered.text, rendered.metadata);
   });
 
   const close = (): void => {
@@ -650,15 +661,20 @@ export function Session({
   const renderableEntries = useMemo<readonly RenderableTranscriptEntry[]>(() => {
     const width = capabilities.columns;
     const base: RenderableTranscriptEntry[] = transcript.map((entry) => {
-      const criticality = isCriticalTranscriptText(entry.text, input)
-        ? "critical"
-        : "noncritical";
+      // `classifyTranscriptEntry` consults the entry's typed
+      // metadata (so a device-authorization entry is always
+      // critical, even when the verification URI is on a
+      // non-github.com host) and falls through to the
+      // text-regex path for recommendation / recovery / typed
+      // input echoes.
+      const criticality = classifyTranscriptEntry(entry, input);
       return {
         id: entry.id,
         text: entry.text,
         kind: entry.kind,
         criticality,
         rows: estimateEntryRows(entry.text, entry.kind, width),
+        ...(entry.metadata === undefined ? {} : { metadata: entry.metadata }),
       };
     });
     // Mirror the original Session fallback: when the transcript is just

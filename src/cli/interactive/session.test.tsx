@@ -1041,3 +1041,94 @@ describe("actionsForSection — existing behavior preserved", () => {
     );
   });
 });
+
+describe("Session — typed device-authorization propagation (metadata)", () => {
+  afterEach(cleanup);
+
+  it("retains an enterprise device-authorization URI + code inside the bounded frame under filler pressure", async () => {
+    // Behavioral test for Finding 5: the session must propagate a
+    // typed `device-authorization` view (with a non-github.com
+    // verification URI) into the bounded transcript without relying
+    // on a github.com-specific text regex. The Session delivers the
+    // notification through the controller's `notify` channel; the
+    // resulting entry is classified and bounded by metadata so the
+    // exact enterprise URI and user code survive row-budget eviction.
+    const verificationUri = "https://github.enterprise.example.com/login/device";
+    const userCode = "WXYZ-9876";
+    const commandHandlers = handlers();
+    let loginReject: ((reason: unknown) => void) | undefined;
+    vi.mocked(commandHandlers.authLogin).mockImplementation(async (_args, context) => {
+      context.onNotice?.({
+        kind: "device-authorization",
+        verificationUri,
+        userCode,
+      });
+      // Hold the handler open until the child signal aborts so the
+      // session can be observed in the Working state — mirrors the
+      // existing session-auth.test.tsx harness for device-flow
+      // notices that are still in flight.
+      return new Promise<ViewModel>((_resolve, reject) => {
+        context.signal?.addEventListener("abort", () => {
+          reject(
+            Object.assign(new Error("Login was cancelled; the session remains active."), {
+              code: "DM_GITHUB_AUTH_CANCELLED",
+              name: "KestrelError",
+              category: "USER_ACTION_REQUIRED",
+              userMessage: "Login was cancelled; the session remains active.",
+              suggestedActions: ["Run /auth login when ready to authenticate again."],
+              retryability: "manual",
+              recoveryStrategy: "USER_GUIDED",
+              severity: "INFO",
+            }),
+          );
+        });
+        loginReject = reject;
+      });
+    });
+    const harness = mountInteractive({
+      handlers: commandHandlers,
+      signal: new AbortController().signal,
+      capabilities: { columns: 80, rows: 24, color: true },
+    });
+    try {
+      await settle();
+      // Trigger the device-flow notice.
+      harness.stdin.send("/auth login\r");
+      await settle();
+      expect(commandHandlers.authLogin).toHaveBeenCalled();
+      // Busy Ctrl+C aborts the in-flight login child. Enter alone is a
+      // no-op while busy (the submit path returns early when
+      // admissionSlot.current.running is true), so the login would
+      // hang and the filler commands would never run.
+      harness.stdin.send("\u0003");
+      await settle(120);
+      // Drive enough noncritical filler to force the bounded window
+      // to evict the older transcript entries. Each `/progress` runs
+      // a handler that returns a plain `verification` view, which is
+      // noncritical and short — perfect for filling the budget.
+      for (let i = 0; i < 12; i += 1) {
+        harness.stdin.send("/progress\r");
+        await settle(60);
+      }
+      // The filler handler must actually have been invoked the
+      // intended number of times — otherwise the test scaffolding
+      // missed the post-abort ready state and we cannot trust the
+      // URI/code assertion that follows.
+      expect(vi.mocked(commandHandlers.progress).mock.calls.length).toBeGreaterThanOrEqual(12);
+      const frame = harness.lastFrame();
+      // The exact enterprise URI and user code must survive the
+      // bounded window. Without metadata-driven criticality, the
+      // github.com-only regex would drop the device entry on the
+      // floor under filler pressure.
+      expect(frame).toContain(verificationUri);
+      expect(frame).toContain(userCode);
+      // Frame stays within the row budget.
+      expect(frame.split("\n").length).toBeLessThanOrEqual(24);
+    } finally {
+      // If the test fails before the abort listener fires, settle
+      // the pending promise so React/Vitest can shut down cleanly.
+      loginReject?.(new Error("test cleanup"));
+      harness.unmount();
+    }
+  });
+});

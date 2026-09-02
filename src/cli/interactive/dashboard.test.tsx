@@ -13,6 +13,7 @@ import {
   Header,
   isCriticalTranscriptText,
   isWideTerminal,
+  classifyTranscriptEntry,
   MissionCard,
   navigationRowMarkers,
   NavItem,
@@ -1031,15 +1032,6 @@ describe("estimateEntryRows", () => {
 });
 
 describe("isCriticalTranscriptText", () => {
-  it("flags verification URI and user code", () => {
-    expect(
-      isCriticalTranscriptText(
-        "Open https://github.com/login/device and enter ABCD-1234",
-        "",
-      ),
-    ).toBe(true);
-  });
-
   it("flags recommendation accept commands and recovery lines", () => {
     expect(isCriticalTranscriptText("/mission accept --id rec-42", "")).toBe(true);
     expect(isCriticalTranscriptText("Run /auth login to continue.", "")).toBe(true);
@@ -1051,8 +1043,59 @@ describe("isCriticalTranscriptText", () => {
     );
   });
 
+  it("does not flag a device-authorization text entry (text path is metadata-free)", () => {
+    // Device-authorization criticality is now driven by the typed
+    // `metadata` the session attaches on the notify channel. The
+    // text-only path no longer hard-codes the github.com host, so
+    // an entry whose text happens to contain a github.com URI is
+    // not promoted here — only `classifyTranscriptEntry` will
+    // recognise it as critical, and only when the metadata is set.
+    expect(
+      isCriticalTranscriptText("Open https://github.com/login/device and enter ABCD-1234", ""),
+    ).toBe(false);
+  });
+
   it("does not flag plain informational filler", () => {
     expect(isCriticalTranscriptText("Older filler 3", "")).toBe(false);
+  });
+});
+
+describe("classifyTranscriptEntry", () => {
+  it("flags a device-authorization entry by metadata regardless of host", () => {
+    expect(
+      classifyTranscriptEntry(
+        {
+          text: "Open https://github.enterprise.example.com/login/device and enter WXYZ-9876",
+          metadata: {
+            kind: "device-authorization",
+            verificationUri: "https://github.enterprise.example.com/login/device",
+            userCode: "WXYZ-9876",
+          },
+        },
+        "",
+      ),
+    ).toBe("critical");
+  });
+
+  it("flags a non-device entry by text (recommendation / recovery)", () => {
+    expect(classifyTranscriptEntry({ text: "/mission accept --id rec-42" }, "")).toBe(
+      "critical",
+    );
+    expect(
+      classifyTranscriptEntry({ text: "Run /auth login to continue." }, ""),
+    ).toBe("critical");
+  });
+
+  it("returns noncritical for an arbitrary HTTPS URL text entry without metadata", () => {
+    // A documentation link without device-authorization metadata
+    // must not be promoted. The metadata is the only path that
+    // surfaces a URL as a bounded critical entry.
+    expect(
+      classifyTranscriptEntry(
+        { text: "Read the docs at https://docs.example.com/article/42" },
+        "",
+      ),
+    ).toBe("noncritical");
   });
 });
 
@@ -1484,5 +1527,127 @@ describe("DashboardShell wide-mode 57–80 cell row cap (live pane width)", () =
     );
     const frame = lastFrame() ?? "";
     expect(frame.split("\n").length).toBeLessThanOrEqual(wideCaps.rows);
+  });
+});
+
+describe("windowTranscriptEntries — typed device-authorization metadata", () => {
+  // The smallest typed contract the bounded windowing helper must honor:
+  // a renderable entry may carry an optional `metadata` field that
+  // declares the semantic intent of the entry. The device-authorization
+  // shape is the only kind required to keep the latest GitHub Enterprise
+  // device-flow payload critical and bounded without hard-coding
+  // github.com into the text-regex. The metadata carries the validated
+  // `verificationUri` and `userCode` from the typed view, and the
+  // bounded representation must render them verbatim.
+  const deviceAuthMetadata = (
+    verificationUri: string,
+    userCode: string,
+  ): { readonly kind: "device-authorization"; readonly verificationUri: string; readonly userCode: string } => ({
+    kind: "device-authorization",
+    verificationUri,
+    userCode,
+  });
+
+  function deviceEntry(
+    id: number,
+    verificationUri: string,
+    userCode: string,
+    rows = 2,
+  ): RenderableTranscriptEntry {
+    return {
+      id,
+      text: `Open ${verificationUri} and enter ${userCode}`,
+      kind: "output",
+      criticality: "critical",
+      rows,
+      metadata: deviceAuthMetadata(verificationUri, userCode),
+    };
+  }
+
+  it("retains a typed device-authorization entry with a non-github.com HTTPS URI under filler pressure", () => {
+    // A GitHub Enterprise (or any other) device-flow payload uses a
+    // different verification URI. The previous github.com-only regex
+    // dropped these entries on the floor under filler pressure because
+    // the text did not match the hard-coded host. The metadata-driven
+    // path must keep the latest typed device payload critical and
+    // bound the URI/code from metadata, not from the github.com regex.
+    const verificationUri = "https://github.enterprise.example.com/login/device";
+    const userCode = "WXYZ-9876";
+    const list: RenderableTranscriptEntry[] = [
+      deviceEntry(1, verificationUri, userCode, 2),
+    ];
+    for (let i = 0; i < 12; i += 1) {
+      list.push({
+        id: 100 + i,
+        text: `filler line ${i}`,
+        kind: "output",
+        criticality: "noncritical",
+        rows: estimateEntryRows(`filler line ${i}`, "output", 80),
+      });
+    }
+    const visible = windowTranscriptEntries(
+      list,
+      availableTranscriptRows({ columns: 80, rows: 24, color: true }),
+    );
+    // The exact enterprise URI and code survive the bounded window.
+    const joined = visible.map((e) => e.text).join("\n");
+    expect(joined).toContain(verificationUri);
+    expect(joined).toContain(userCode);
+    // The frame stays within the declared row budget.
+    const totalRows = visible.reduce((sum, e) => sum + e.rows, 0);
+    expect(totalRows).toBeLessThanOrEqual(
+      availableTranscriptRows({ columns: 80, rows: 24, color: true }),
+    );
+    // The oldest filler was evicted; the bounded device payload is
+    // preserved.
+    expect(visible.some((e) => e.text === "filler line 0")).toBe(false);
+  });
+
+  it("does not promote an arbitrary HTTPS URL text entry without device metadata", () => {
+    // A text entry that contains an unrelated HTTPS URL — but lacks the
+    // typed `metadata` — must not be promoted to critical. The metadata
+    // is the single source of truth for device-authorization
+    // criticality; arbitrary URL text stays noncritical so it is
+    // evicted under filler pressure and cannot impersonate a device
+    // payload.
+    const list: RenderableTranscriptEntry[] = [
+      {
+        id: 1,
+        text: "Read the docs at https://docs.example.com/article/42 for more context",
+        kind: "output",
+        criticality: "noncritical",
+        rows: 2,
+      },
+    ];
+    for (let i = 0; i < 20; i += 1) {
+      list.push({
+        id: 100 + i,
+        text: `filler line ${i}`,
+        kind: "output",
+        criticality: "noncritical",
+        rows: estimateEntryRows(`filler line ${i}`, "output", 80),
+      });
+    }
+    const visible = windowTranscriptEntries(
+      list,
+      availableTranscriptRows({ columns: 80, rows: 24, color: true }),
+    );
+    const joined = visible.map((e) => e.text).join("\n");
+    expect(joined).not.toContain("docs.example.com/article/42");
+  });
+
+  it("bounds a typed device-authorization entry that exceeds the budget to '<URI> (code <code>)'", () => {
+    // The bounded representation must render the exact metadata
+    // values, not a github.com-derived substring. A long URI + code
+    // pair is collapsed into the canonical "<URI> (code <code>)"
+    // shape, preserving both fields verbatim.
+    const verificationUri = "https://github.enterprise.example.com/login/device";
+    const userCode = "WXYZ-9876";
+    const list: RenderableTranscriptEntry[] = [deviceEntry(1, verificationUri, userCode, 10)];
+    const visible = windowTranscriptEntries(list, 3);
+    expect(visible).toHaveLength(1);
+    const bounded = visible[0];
+    expect(bounded?.text).toContain(verificationUri);
+    expect(bounded?.text).toContain(`(code ${userCode})`);
   });
 });
