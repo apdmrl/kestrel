@@ -10,9 +10,14 @@ export async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const config = createConfig(process.env as Record<string, string | undefined>);
   // Wire the commander --no-interactive flag into bootstrap before handlers run.
-  const interactive = !args.includes("--no-interactive");
+  // `--json` is a hard override: machine-mode output never begins device
+  // flow (it has no place to write the verification URI or user code, and
+  // it would block the machine caller on a manual browser step). Spec
+  // §10 requires `--json` to suppress browser/device flow; we extend that
+  // to interactive prompts too.
+  const json = args.includes("--json");
+  const interactive = !args.includes("--no-interactive") && !json;
   // The browser launch decision is a policy, not a presentation concern, so it
-  // is resolved once here and passed to bootstrap rather than decided deeper in.
   const openBrowser = shouldOpenBrowser({
     noBrowserFlag: args.includes("--no-browser"),
     envDisabled: config.noBrowser,

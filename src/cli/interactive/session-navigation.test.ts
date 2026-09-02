@@ -56,7 +56,11 @@ describe("actionsForSection — auth", () => {
     {
       label: "checking",
       state: { status: "checking", attemptId: 1 },
-      expectations: { primaryId: "auth.status", primaryCommand: "/auth status" },
+      expectations: {
+        primaryId: "auth.status",
+        primaryCommand: "/auth status",
+        primaryDisabled: true,
+      },
     },
     {
       label: "required",

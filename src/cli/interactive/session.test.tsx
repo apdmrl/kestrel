@@ -752,9 +752,20 @@ describe("persistent session — live stdout capabilities", () => {
     // terminal.
     const stdin = new FakeInkStdin();
     const stdout = new FakeInkStdout(59, 24);
+    const commandHandlers = handlers();
+    // The mount-time startup auth check needs a real auth-status view
+    // so the reducer reaches a known-good state (connected) instead of
+    // falling back to the "unknown" branch the spec reserves for
+    // classification failures.
+    vi.mocked(commandHandlers.authStatus).mockResolvedValue({
+      kind: "auth-status",
+      connected: true,
+      login: "octocat",
+      detail: "CONNECTED",
+    });
     const instance = renderInk(
       createElement(Session, {
-        handlers: handlers(),
+        handlers: commandHandlers,
         signal: new AbortController().signal,
       }),
       {

@@ -221,12 +221,21 @@ function disabled(reason: string, recoveryCommand?: string): ActionAvailability 
 function authActions(auth: SessionAuthState): readonly SessionAction[] {
   switch (auth.status) {
     case "checking":
+      // Spec §8.2 requires that the status indicator be disabled
+      // with no secondary action while the mount-time startup
+      // check is still running. Surfacing an executable `/auth
+      // status` here would let the user start a second
+      // credential-helper/GitHub validation concurrently with
+      // the mount-time check.
       return [
         {
           id: "auth.status",
           label: "Check authentication",
           command: "/auth status",
-          availability: ENABLED,
+          availability: {
+            status: "disabled",
+            reason: "Authentication check is already running. Please wait for the result.",
+          },
         },
       ];
     case "required":

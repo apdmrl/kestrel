@@ -285,17 +285,60 @@ export function Session({
   // verification URI + user code without falling back to a host-specific
   // text regex. The plain / JSON renderers are unchanged and never read
   // this field.
+  // The notify callback is created once during the initial render.
+  // The active-operation ref tracks the operation that was
+  // admitted synchronously in `submit()` so the first
+  // onAuthorization call (which fires inside the same call frame
+  // as the OPERATION_STARTED dispatch) sees the active operation
+  // even before React re-renders. A sibling child-controller ref
+  // tracks the abort state so a late device-authorization notice
+  // (one that arrives after the user has already Ctrl+C'd) can
+  // be dropped instead of leaking the URI/code into the bounded
+  // frame.
   const activeOperationForNotice = useRef<{
     readonly operationId: number;
     readonly command: string;
   } | null>(null);
+  const childForNotice = useRef<AbortController | null>(null);
   const controller = createSessionController(handlers, (received) => {
+    if (received.kind === "device-authorization") {
+      const op = activeOperationForNotice.current;
+      const childSignal = childForNotice.current?.signal;
+      if (op === null || !isLoginCommand(op.command) || (childSignal !== undefined && childSignal.aborted)) {
+        return;
+      }
+    }
     const rendered = renderSessionView(received);
     addEntry(rendered.kind, rendered.text, rendered.metadata);
+    if (received.kind === "device-authorization") {
+      const op = activeOperationForNotice.current;
+      if (op !== null && isLoginCommand(op.command)) {
+        dispatch({
+          type: "LOGIN_AUTHORIZATION",
+          operationId: op.operationId,
+          authorization: {
+            verificationUri: received.verificationUri,
+            userCode: received.userCode,
+            expiresAt: Date.now() + 15 * 60 * 1000,
+          },
+        });
+      }
+    }
   });
   const close = (): void => {
     if (closing.current) return;
     closing.current = true;
+    // Abort the active foreground child before unmounting Ink so
+    // device-flow polls, credential helpers, or any other
+    // in-flight subprocess are torn down. Without this, /exit (or
+    // an outside-in unmount) would close the session while the
+    // child signal is still linked to the still-live process
+    // lifetime.
+    if (activeOperation.current !== null) {
+      activeOperation.current.controller.abort();
+      activeOperation.current.dispose();
+      activeOperation.current = null;
+    }
     onExit?.();
     exit();
   };
@@ -330,6 +373,18 @@ export function Session({
       addEntry("error", `! ${parsed.message}`);
       return;
     }
+    // /clear and /exit are control commands that must be rejected
+    // while the synchronous admission slot is running, per spec
+    // §12 (/exit is unavailable while busy) and the same rule
+    // for /clear so a foreground child can never be abandoned.
+    if ((parsed.kind === "clear" || parsed.kind === "exit") && admissionSlot.current.running) {
+      addEntry("input", commandText);
+      addEntry("output", "Cannot run /clear or /exit while a command is in flight");
+      // Clear the prompt buffer so the rejected command is not
+      // silently prepended to the user's next keystrokes.
+      if (!hasCommandOverride) setInput("");
+      return;
+    }
     if (parsed.kind === "clear") {
       addEntry("input", commandText);
       setTranscript([]);
@@ -354,7 +409,9 @@ export function Session({
     // The `busy` state mirrors the slot for the renderer but cannot be
     // relied on for admission because React state updates are deferred.
     const admission = tryAdmit(admissionSlot.current);
-    if (admission === null) return;
+    if (admission === null) {
+      return;
+    }
     admissionSlot.current = admission.slot;
     admissionToken.current = admission.token;
     // Record the admitted command in the transcript exactly once, before
@@ -400,6 +457,13 @@ export function Session({
     // clobber a freshly installed one.
     const child = createChildOperation(signal);
     activeOperation.current = child;
+    // Install the notice-channel refs synchronously so the
+    // controller's first onAuthorization call sees the active
+    // operation AND its child signal even before React re-renders.
+    activeOperationForNotice.current = isAuthStatus
+      ? null
+      : { operationId, command: commandText };
+    childForNotice.current = child.controller;
     const capturedOperationId = operationId;
     const capturedAttemptId = attemptId;
     setBusy(true);
@@ -485,6 +549,17 @@ export function Session({
         setBusy(false);
       }
       child.dispose();
+      // Clear the notice-channel refs so a late device-authorization
+      // notice (arriving after the operation completed) cannot
+      // dispatch a LOGIN_AUTHORIZATION into the reducer for an
+      // already-finished operation id, and so the abort-check
+      // refuses stale notices too.
+      if (activeOperationForNotice.current?.operationId === capturedOperationId) {
+        activeOperationForNotice.current = null;
+      }
+      if (childForNotice.current === child.controller) {
+        childForNotice.current = null;
+      }
     }
   };
   // Cancel the in-flight foreground child operation. Busy Ctrl+C must
@@ -650,15 +725,19 @@ export function Session({
     { isActive: true },
   );
 
-  // Status string reflects the busy flag. Until Task 5 wires the auth
-  // reducer into the live session, the Session surfaces a conservative
-  // `Ready` placeholder so the test harness and unit suite continue to
-  // observe the calm status bar; the authoritative state lives in
-  // `sessionReducer` once that lands.
-  const status = busy ? "Working" : "Ready";
+  // The status bar reflects the live auth state when it is
+  // "unknown" so the user sees the failure reason instead of
+  // an empty "Ready" placeholder. Spec §9.3 and §13.3 require a
+  // visible explanation for offline / external-dependency
+  // failures; the recovery action remains `/auth status`.
+  const status = ((): string => {
+    if (busy) return "Working";
+    if (authState.status === "unknown") {
+      return `Auth status unavailable (${authState.errorCode})`;
+    }
+    return "Ready";
+  })();
   const sessionStatus = "active";
-  // Build the structured transcript entries with plain-text row metadata
-  // and criticality. The shell windows these against the row budget so a
   // long transcript never blows past `capabilities.rows` and critical
   // entries (verification URI, recommendation ID, typed command, auth
   // recovery line) survive older noncritical fillers.

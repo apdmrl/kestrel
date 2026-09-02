@@ -110,6 +110,15 @@ export class ExecaProcessRunner implements ProcessRunner {
         ...(options.cwd !== undefined ? { cwd: options.cwd } : {}),
         ...(options.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
         ...(options.signal !== undefined ? { cancelSignal: options.signal } : {}),
+        // Spawn the child in its own process group so a real Git
+        // credential-helper descendant can be torn down with the
+        // group when the parent aborts. Without detached: true,
+        // `git credential fill` would leave a hanging helper alive
+        // after the parent AbortSignal fires (PROCESS-TREE-004).
+        // POSIX uses process-group kill semantics; on Windows the
+        // underlying tree-kill is best-effort because Git for
+        // Windows is its own tree root.
+        detached: true,
         shell: false,
         reject: false,
         ...(options.env !== undefined ? { env: options.env } : {}),
@@ -135,6 +144,19 @@ export class ExecaProcessRunner implements ProcessRunner {
       throw timeoutError();
     }
     if (result.isCanceled === true) {
+      throw cancelledError();
+    }
+    // Negative exit codes from `git credential fill` (or any helper
+    // that uses process-group signaling) indicate the entire
+    // group was killed. Surface this as a classified cancellation
+    // so the runner consumer can restore the prior auth state.
+    if (
+      result.signal !== undefined &&
+      result.signal !== null &&
+      result.signal !== "" &&
+      typeof result.exitCode === "number" &&
+      result.exitCode < 0
+    ) {
       throw cancelledError();
     }
     return {

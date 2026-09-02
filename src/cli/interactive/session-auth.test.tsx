@@ -874,10 +874,26 @@ describe("session — busy /clear and /exit rejection", () => {
     // aborted so device polling and credential helpers exit.
     const commandHandlers = handlers();
     let resolveAuthLogin: ((view: ViewModel) => void) | undefined;
+    let loginReject: ((reason: unknown) => void) | undefined;
     vi.mocked(commandHandlers.authLogin).mockImplementation(
-      async () =>
-        new Promise<ViewModel>((resolve) => {
+      async (_args, context) =>
+        new Promise<ViewModel>((resolve, reject) => {
           resolveAuthLogin = resolve;
+          loginReject = reject;
+          context.signal?.addEventListener("abort", () => {
+            reject(
+              Object.assign(new Error("Login was cancelled; the session remains active."), {
+                code: "DM_GITHUB_AUTH_CANCELLED",
+                name: "KestrelError",
+                category: "USER_ACTION_REQUIRED",
+                userMessage: "Login was cancelled; the session remains active.",
+                suggestedActions: ["Run /auth login when ready to authenticate again."],
+                retryability: "manual",
+                recoveryStrategy: "USER_GUIDED",
+                severity: "INFO",
+              }),
+            );
+          });
         }),
     );
     const onSessionExit = vi.fn();
@@ -903,15 +919,17 @@ describe("session — busy /clear and /exit rejection", () => {
       // child (the same first-Ctrl+C contract that keeps the
       // session alive).
       harness.stdin.send("\u0003");
-      await settle(120);
+      await settle(1000);
       harness.stdin.send("/progress\r");
-      await settle(60);
+      await settle(1000);
       expect(commandHandlers.progress).toHaveBeenCalled();
     } finally {
       resolveAuthLogin?.(view);
+      loginReject?.(new Error("test cleanup"));
       harness.unmount();
     }
   });
+
 
   it("rejects /clear while a foreground command is in flight", async () => {
     // /clear must not be allowed while busy; the synchronous

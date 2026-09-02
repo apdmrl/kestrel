@@ -88,11 +88,10 @@ export type SessionEvent =
   | { readonly type: "FOCUS_CHANGED"; readonly focus: FocusArea }
   | { readonly type: "HOME_SELECTED" };
 
-function isLoginCommand(command: string): boolean {
+export function isLoginCommand(command: string): boolean {
   const trimmed = command.trim();
   return trimmed === "/auth login" || trimmed.startsWith("/auth login ");
 }
-
 export function initialSessionState(): SessionState {
   return {
     auth: { status: "checking", attemptId: INITIAL_ATTEMPT_ID },
