@@ -34,7 +34,7 @@ kestrel --no-browser auth login   # authenticate without opening a browser
 
 ## Connecting to GitHub
 
-Kestrel renders the interactive session immediately and checks GitHub status for up to five seconds. It never starts login automatically. If GitHub is required, select Auth, choose `/auth login`, then press Enter again to start the device flow. Local mission, progress, journey, and preference commands remain available while disconnected or offline.
+Kestrel renders the interactive session immediately and checks GitHub status for up to five seconds. It never starts login automatically. If GitHub is required, select Auth, choose `/auth login`, then press Enter again to start the device flow. Local progress, journey, and preference commands remain available while disconnected or offline; Mission actions require an authenticated GitHub session and stay disabled until you sign in.
 
 One-shot forms (`kestrel auth login`, `kestrel auth status`) are unchanged.
 
@@ -45,7 +45,7 @@ In the interactive shell:
 3. Press Enter once to fill the prompt with the action.
 4. Press Enter again to execute it.
 
-The second Enter is the explicit confirmation; nothing runs until you press it. Authorization is transient: a restart requires a new explicit login, and the session does not resume an in-flight device flow across restarts.
+The second Enter is the explicit confirmation; nothing runs until you press it. Only an in-flight device authorization cannot resume after restart; a completed login credential, once stored through your configured Git credential helper, is reused on the next session without re-authenticating.
 
 `auth logout` clears the shared `github.com` credential that `git` and `gh` also use, so it
 requires `--confirm github.com`.

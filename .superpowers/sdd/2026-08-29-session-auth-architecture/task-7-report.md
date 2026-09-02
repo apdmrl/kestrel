@@ -25,16 +25,18 @@ change is preserved outside the staged diff.
 Replaced the old "Connecting to GitHub" prose (which described implicit
 `find` login and a single-step browser launch) with the verified interactive
 behavior:
-
 - The session renders the first frame immediately and checks GitHub status
   for up to five seconds; it never starts login automatically.
 - If GitHub is required, the user picks `Auth` in the sidebar, chooses
   `/auth login`, presses Enter once to fill the prompt, then presses Enter
   again to start the device flow.
-- Local mission, progress, journey, and preference commands stay available
-  while disconnected or offline.
-- Authorization is transient: a restart requires a new explicit login, and
-  the session does not resume an in-flight device flow across restarts.
+- Local progress, journey, and preference commands stay available while
+  disconnected or offline; Mission actions require an authenticated
+  GitHub session and remain disabled until the user signs in.
+- Only the in-flight device authorization cannot resume after restart; a
+  completed login credential, once stored by the configured Git
+  credential helper, is reused on the next session without
+  re-authenticating.
 - The one-shot forms `kestrel auth login` and `kestrel auth status` are
   spelled as one-shot forms.
 - The `auth logout` requires `--confirm github.com` clause is preserved.
@@ -44,20 +46,21 @@ behavior:
 Updated and added entries:
 
 - `Auth required` — pick `Auth` in the sidebar and choose `/auth login`;
-  first Enter fills the prompt, second Enter starts the device flow. The
   one-shot form `kestrel auth login` remains for non-interactive use.
-- `Not sure whether you are connected` — preserved verbatim (one-shot
-  `kestrel auth status` spelling retained).
 - `Auth status unavailable` in the shell — startup status can be slow,
-  blocked, or offline; the session still mounts and local mission,
-  progress, journey, and preference commands stay available. Run
-  `/auth status` again to retry.
+  blocked, or offline; the session still mounts and local progress,
+  journey, and preference commands stay available. Mission actions
+  remain disabled until GitHub is verified. Run `/auth status` again
+  to retry.
+
 - `Ctrl+C while /auth login waits for device authorization` — Ctrl+C
   cancels only the in-flight login child. The session stays mounted, no
   credential is stored, and other local commands remain available.
 - `Restart during /auth login` — closing the session or restarting Kestrel
   while a device flow is in flight discards the in-flight authorization,
-  because authorization state is transient. Start a new explicit
+  because only the in-flight device authorization cannot resume. A
+  completed login credential, once stored by the configured Git
+  credential helper, is reused on the next session. Start a new explicit
   `/auth login` (or `kestrel auth login` from the one-shot CLI) to
   authenticate again. There is no automatic resume.
 - All unrelated entries (browser, logout confirmation, mission lock,
@@ -91,8 +94,12 @@ Per-file counts:
 | `test/docs/commands.test.ts`                | 1     |
 | **Total**                                   | **24**|
 
-No full suite, lint, typecheck, format:check, boundaries, build, or
-`check:runtime` was run for this task per the brief.
+The focused docs tests, the real-PTY smoke, and the targeted Step 3
+test runs above are complete. The repository-wide Step 5 gate
+(`npm run boundaries`, `npm run lint`, `npm run format:check`,
+`npm run typecheck`, `npm test`, `npm run build`, and `npm run
+check:runtime` if applicable) remains pending execution by the
+parent agent; this task does not waive or stand in for that gate.
 
 ## Real-PTY smoke evidence
 
