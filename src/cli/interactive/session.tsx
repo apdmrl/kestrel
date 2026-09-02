@@ -284,6 +284,23 @@ export function Session({
     onExit?.();
     exit();
   };
+  // Home is the dashboard root. Selecting Home clears the prompt,
+  // returns focus to the prompt, drops the action panel focus, and
+  // discards any pending recommendation through the reducer's
+  // HOME_SELECTED event. The reducer is the authoritative source for
+  // the recommendation / operation / input state; the local React
+  // transient state mirrors it so the dashboard re-renders the Home
+  // selection immediately. Both the sidebar Home Enter path and the
+  // raw Home escape sequence (`\x1b[H`, `\x1bOH`, `\x1b[1~`) share
+  // this single transition so they cannot drift apart.
+  const selectHome = (): void => {
+    dispatch({ type: "HOME_SELECTED" });
+    setInput("");
+    setSelectedCategoryIndex(0);
+    setSelectedActionIndex(0);
+    setFocus("prompt");
+    setActionFocused(false);
+  };
   const submit = async (commandOverride?: string): Promise<void> => {
     const hasCommandOverride = commandOverride !== undefined;
     const commandText = (commandOverride ?? input).trim();
@@ -574,6 +591,17 @@ export function Session({
           // user reads it from the sidebar without ever calling a handler.
           return;
         }
+        // Home has zero contextual actions, so the generic
+        // sidebar-Enter branch above would fall through to `submit()`
+        // and either no-op an empty prompt or submit a typed command
+        // — neither is what Home means. Handle Home explicitly: the
+        // dashboard root must select Home, return focus to the prompt,
+        // and dispatch HOME_SELECTED so a stale recommendation is
+        // cleared through the reducer.
+        if (focus === "sidebar" && activeSectionId === "home") {
+          selectHome();
+          return;
+        }
         if (focus === "sidebar" && contextActions.length > 0) {
           setFocus("actions");
           setActionFocused(true);
@@ -596,11 +624,12 @@ export function Session({
     (character) => {
       const typed = typeof character === "string" ? character : "";
       if (typed === "\u001b[H" || typed === "\u001bOH" || typed === "\u001b[1~") {
-        setInput("");
-        setSelectedCategoryIndex(0);
-        setSelectedActionIndex(0);
-        setFocus("prompt");
-        setActionFocused(false);
+        // Share the same Home-selection transition as the sidebar Home
+        // Enter path so a single source of truth governs the dashboard
+        // root state. The reducer's HOME_SELECTED event clears the
+        // pending recommendation, the operation, and the prompt buffer
+        // atomically with the local focus / category / action reset.
+        selectHome();
       }
     },
     { isActive: true },

@@ -478,6 +478,169 @@ describe("persistent session — keyboard navigation", () => {
       harness.unmount();
     }
   });
+  it("does not submit the prompt when Enter is pressed with sidebar focused on Home (empty prompt)", async () => {
+    // Regression test for Finding 4: pressing Enter while the sidebar is
+    // focused on Home must NOT fall through to `submit()`. Home exposes
+    // zero contextual actions, so the generic sidebar-Enter branch is
+    // skipped and the current code falls through to `void submit()`. With
+    // an empty prompt `submit()` is a no-op (it returns before any handler
+    // runs) so the only observable failure is that the sidebar keeps focus
+    // on Home instead of returning it to the prompt.
+    const commandHandlers = handlers();
+    const harness = mountInteractive({
+      handlers: commandHandlers,
+      signal: new AbortController().signal,
+    });
+    try {
+      await settle();
+      // Move focus from the prompt into the sidebar (Home is index 0 by
+      // default). The sidebar must show the focused marker on Home before
+      // we press Enter — otherwise the scaffolding missed the focus
+      // transition and the test would silently assert on the wrong state.
+      harness.stdin.send(upArrow());
+      await settle();
+
+      const beforeFrame = harness.lastFrame();
+      expect(beforeFrame).toMatch(HOME_FOCUSED);
+      // Press Enter with sidebar focused on Home. No command handler is
+      // invoked and the prompt stays empty.
+      const beforeCalls = vi.mocked(commandHandlers.progress).mock.calls.length;
+      harness.stdin.send(enterKey());
+      await settle();
+      const afterCalls = vi.mocked(commandHandlers.progress).mock.calls.length;
+      expect(afterCalls).toBe(beforeCalls);
+      const afterFrame = harness.lastFrame();
+      // Focus must move back to the prompt: the sidebar Home row no longer
+      // carries the `>` focus marker. It still shows `*-` because Home is
+      // the selected category.
+      expect(afterFrame).not.toMatch(HOME_FOCUSED);
+      expect(afterFrame).toMatch(HOME_SELECTED);
+      // No transcript command entry appeared.
+      expect(afterFrame).not.toContain("› /");
+    } finally {
+      harness.unmount();
+    }
+  });
+  it("does not submit the prompt when Enter is pressed with sidebar focused on Home (nonempty prompt)", async () => {
+    // Companion to the empty-prompt case above. With a typed command
+    // pre-filled in the prompt the current fallthrough dispatches it
+    // through `submit()`, calling the matching handler. The fix must
+    // short-circuit the Home sidebar Enter BEFORE `submit()` runs, so a
+    // typed `/progress` never reaches the controller. The prompt is
+    // cleared through the reducer's HOME_SELECTED event so a stale
+    // `/progress` is not re-submitted by the next Enter.
+    const commandHandlers = handlers();
+    const harness = mountInteractive({
+      handlers: commandHandlers,
+      signal: new AbortController().signal,
+      initialInput: "/progress",
+    });
+    try {
+      await settle();
+      // Move focus to sidebar (Home).
+      harness.stdin.send(upArrow());
+      await settle();
+      const beforeFrame = harness.lastFrame();
+      expect(beforeFrame).toMatch(HOME_FOCUSED);
+      expect(beforeFrame).toContain("/progress");
+      // Press Enter: no command handler should run.
+      const beforeCalls = vi.mocked(commandHandlers.progress).mock.calls.length;
+      harness.stdin.send(enterKey());
+      await settle();
+      const afterCalls = vi.mocked(commandHandlers.progress).mock.calls.length;
+      expect(afterCalls).toBe(beforeCalls);
+      const afterFrame = harness.lastFrame();
+      // Focus returned to the prompt: the focused sidebar marker on
+      // Home is gone.
+      expect(afterFrame).not.toMatch(HOME_FOCUSED);
+      // The typed command was cleared through the reducer's
+      // HOME_SELECTED event, so a stray `/progress` is not echoed in
+      // the prompt or transcript.
+      expect(afterFrame).not.toContain("/progress");
+    } finally {
+      harness.unmount();
+    }
+  });
+  it("clears the latest recommendation when Enter is pressed with sidebar focused on Home", async () => {
+    // Companion to the two Home-Enter cases above. A loaded
+    // recommendation surfaces `/mission accept --id rec-42` in the
+    // Find action panel. Pressing Home Enter while focus is on the
+    // sidebar dispatches HOME_SELECTED, which clears
+    // `latestRecommendation` through the reducer — so the contextual
+    // action panel stops surfacing the stale accept command.
+    const commandHandlers = handlers();
+    vi.mocked(commandHandlers.authStatus).mockResolvedValue({
+      kind: "auth-status",
+      connected: true,
+      login: "octocat",
+      detail: "CONNECTED",
+    });
+    vi.mocked(commandHandlers.find).mockResolvedValue({
+      kind: "recommendation",
+      recommendationId: "rec-42",
+      challengeId: "chal-1",
+      title: "Fix something",
+      mood: "focused",
+      confidence: 0.9,
+      reasons: ["match"],
+    });
+    const harness = mountInteractive({
+      handlers: commandHandlers,
+      signal: new AbortController().signal,
+    });
+    try {
+      await settle();
+      // Connect and capture a recommendation so the Find action panel
+      // surfaces the exact accept command.
+      harness.stdin.send("/auth status\r");
+      await settle();
+      harness.stdin.send("/find\r");
+      await settle();
+      // Navigate to Find to confirm the recommendation.accept action is
+      // rendered before pressing Home Enter — otherwise the scaffolding
+      // missed the capture and we cannot trust the post-clear assertion.
+      harness.stdin.send(upArrow());
+      await settle();
+      harness.stdin.send(downArrow());
+      await settle();
+      const findFrame = harness.lastFrame();
+      expect(findFrame).toContain("/mission accept --id rec-42");
+      // Step back to Home (Up from Find index 1 → Home index 0) before
+      // pressing Home Enter. The Home sidebar Enter is the event under
+      // test, not the Find sidebar Enter (which already routes into
+      // the action panel).
+      harness.stdin.send(upArrow());
+      await settle();
+      const homeFrame = harness.lastFrame();
+      expect(homeFrame).toMatch(HOME_FOCUSED);
+      // Press Enter: no command handler runs and the reducer clears
+      // `latestRecommendation`.
+      const beforeCalls = vi.mocked(commandHandlers.missionAccept).mock.calls.length;
+      harness.stdin.send(enterKey());
+      await settle();
+      const afterCalls = vi.mocked(commandHandlers.missionAccept).mock.calls.length;
+      // Home Enter must return focus to the prompt. Navigate back into
+      // the sidebar to inspect the Find panel and prove the reducer
+      // cleared `latestRecommendation` — not just that focus left Home.
+      // Step 1: Down from prompt focuses Home (sidebar index 0).
+      harness.stdin.send(downArrow());
+      await settle();
+      const homeFrameAfter = harness.lastFrame();
+      expect(homeFrameAfter).toMatch(HOME_FOCUSED);
+      // Step 2: Down again moves the sidebar focus to Find (index 1).
+      // The Find action panel must NOT surface the exact accept command
+      // any more — a correct HOME_SELECTED cleared it through the
+      // reducer, so the contextual action panel reads from a null
+      // recommendation.
+      harness.stdin.send(downArrow());
+      await settle();
+      const findFrameAfter = harness.lastFrame();
+      expect(findFrameAfter).toMatch(FIND_FOCUSED);
+      expect(findFrameAfter).not.toContain("/mission accept --id rec-42");
+    } finally {
+      harness.unmount();
+    }
+  });
 });
 
 describe("persistent session — auth state propagation", () => {
@@ -681,6 +844,18 @@ const FIND_RECOVERY_AUTH_STATUS =
   /GitHub authentication is not verified[\s\S]{0,400}\/auth\s+status/u;
 const FIND_RECOVERY_AUTH_LOGIN =
   /GitHub authentication is not verified[\s\S]{0,400}\/auth[\s\S]{0,10}login/u;
+// Regexes that match the rendered Home row of the sidebar. The Home row
+// sits at section index 0 with the `⌂` icon, so the marker is followed
+// by the icon glyph and at least one whitespace before the label.
+// `HOME_FOCUSED`  → sidebar focus + selection + enabled on Home
+//                    (`>*-⌂  Home`).
+// `HOME_SELECTED` → selection + enabled on Home without focus
+//                    (`*-⌂  Home`).
+const HOME_FOCUSED = />\*-\S+\s+Home/u;
+// `FIND_FOCUSED` → sidebar focus + selection on the Find row
+//                  (`>*-⌕  Find`).
+const FIND_FOCUSED = />\*-\S+\s+Find/u;
+const HOME_SELECTED = /\*-\S+\s+Home/u;
 
 describe("Session — auth failure routing (reducer-driven)", () => {
   afterEach(() => cleanup());
