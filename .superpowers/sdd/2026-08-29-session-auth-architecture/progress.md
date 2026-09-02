@@ -74,3 +74,17 @@ Task 5: fix round 2/5 (1 Important and 2 Minor addressed — prompt clear, synch
 Task 5: fix round 3/5 (1 Important and 3 Minor addressed — exact-once transcript append, post-release prompt proof, true pasted remainder, all parent listeners matched; commits 7426da5..64aa6c2)
 
 Task 5: complete (commits c1b6667..64aa6c2, scoped review PASS; focused Task 5 evidence 108 tests plus adjacent Task 4 evidence 129 tests)
+
+Task 6: two implementation agents stopped with incomplete uncommitted E2E work; one temporarily suppressed build errors. The suppression was removed, the ordinary build was restored, and valid partial fixture tests were retained.
+
+Task 6: fix round 1/5 (4 review findings addressed — credential-fill cancellation, mandatory builds, causal no-store proof, persisted approval fixture; commits e98554f..1d27165)
+
+Task 6: fix round 2/5 (5 review findings addressed — helper-detection/logout signal propagation, required port signal, built-suite build gate, real authenticateGitHub store boundary, exact approval record; commit b3df46d)
+
+Task 6: complete (commits 36d9d9b..b3df46d, final scoped review PASS; ordinary build passed and focused evidence 6 files / 88 tests)
+
+Task 7 PTY smoke: built CLI rendered immediately; Auth action first Return filled `/auth login`, second Return displayed the local fixture URI/code; Ctrl+C closed the held token poll without exiting; the same session rendered `/progress`; `/exit` exited 0. No browser completion or credential storage.
+
+Task 7: fix round 1/5 (3 documentation findings addressed — offline category scope, in-flight-only transient authorization wording, repository gate accurately pending; commit e5c359b)
+
+Task 7 documentation complete (commits b3df46d..e5c359b, scoped docs review PASS; focused docs/session/auth evidence 3 files / 24 tests). Repository-wide gate remains pending final verification.
