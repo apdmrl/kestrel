@@ -138,3 +138,88 @@ This task produces the following commit:
 The pre-existing uncommitted change to
 `.superpowers/sdd/2026-08-29-session-auth-architecture/progress.md`
 remains unstaged.
+
+## Second full-review fix wave
+
+### Root causes addressed
+
+1. **Credential-validation failures preserved the connected state**
+   (`OPERATION_FAILED` only set operation to idle). The reducer now
+   invalidates `connected` to `required` or `expired` on
+   `DM_GITHUB_AUTH_REQUIRED` / `DM_GITHUB_AUTH_EXPIRED` while
+   preserving connected on post-validation network/provider errors.
+2. **HOME_SELECTED cleared reducer state while a login was running**
+   (stranding the child controller). The reducer now ignores
+   `HOME_SELECTED` while `operation.status === "running"`, matching
+   the spec §12 / SESSION-HOME-003 contract.
+
+### Source contracts
+
+- `src/cli/interactive/session-state.ts`: the `OPERATION_FAILED` /
+  `OPERATION_CANCELLED` branch now flips auth only for login commands
+  (preserving the authBeforeLogin restore) or for the two
+  credential-validation error codes. Other failure codes leave auth
+  untouched.
+- `src/cli/interactive/session-state.ts`: the `HOME_SELECTED` branch
+  short-circuits to `state` when the operation slot is running so the
+  visible state cannot desync from the live child controller.
+
+### RED → GREEN evidence
+
+Three new failing tests were added to
+`src/cli/interactive/session-state.test.ts`:
+
+- `invalidates the connected state to required when an operation
+  fails with DM_GITHUB_AUTH_REQUIRED`
+- `invalidates the connected state to expired when an operation
+  fails with DM_GITHUB_AUTH_EXPIRED`
+- `preserves the connected state when an operation fails with a
+  post-auth network error`
+
+One pre-existing test (`restores authBeforeLogin when HOME_SELECTED
+abandons a running login`) was updated to assert the new
+ignore-while-busy behavior, and one new test
+(`ignores HOME_SELECTED while an operation is running so the
+foreground child is not orphaned`) covers the same contract.
+
+GREEN output:
+
+```text
+$ npx vitest run src/cli/interactive/session-state.test.ts
+ ✓ src/cli/interactive/session-state.test.ts (57 tests) 28ms
+ Test Files  1 passed (1)
+      Tests  57 passed (57)
+```
+
+### Concerns / residual
+
+The other four implementation findings (`/clear` and `/exit` busy
+guard, `LOGIN_AUTHORIZATION` reducer dispatch from the controller
+notify channel, Home key no-op while busy, child-aborted login
+renders as neutral cancellation) and the three additional security
+findings (JSON `auth login` device-flow suppression, busy `/exit`
+child abort, process-tree cleanup for credential helper
+descendants) require coordinated session.tsx / main.ts / execa
+changes. Failing tests for these cases are present in
+`session-auth.test.tsx`; a follow-up commit is required to land
+the corresponding production code so they observe GREEN.
+
+## Commits
+
+This task produces the following commits:
+
+- SHA: `e1cf109`
+- Subject: `docs: explain interactive authentication recovery`
+- Files committed:
+  - `README.md`
+  - `docs/troubleshooting.md`
+  - `.superpowers/sdd/2026-08-29-session-auth-architecture/task-7-report.md`
+
+- SHA: `1d4c25f`
+- Subject: `fix(auth): invalidate connected state on credential failures, ignore HOME_SELECTED while busy`
+- Files committed:
+  - `src/cli/interactive/session-state.ts`
+  - `src/cli/interactive/session-state.test.ts`
+  - `src/cli/interactive/session.tsx`
+  - `src/cli/interactive/session-auth.test.tsx`
+  - `.superpowers/sdd/2026-08-29-session-auth-architecture/task-7-report.md`
