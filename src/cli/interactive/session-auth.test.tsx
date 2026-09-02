@@ -242,7 +242,9 @@ describe("session auth interaction — startup auth deadline", () => {
       await vi.advanceTimersByTimeAsync(100);
       expect(commandHandlers.progress).toHaveBeenCalled();
       // The startup auth check observed the deadline and aborted its child.
-      expect(harness.lastFrame()).toContain("Ready");
+      // The status bar reflects the unknown auth state with the failure
+      // reason (spec §9.3) so the user can see what happened.
+      expect(harness.lastFrame()).toContain("Auth status unavailable (STARTUP_AUTH_TIMEOUT)");
     } finally {
       harness.unmount();
     }
