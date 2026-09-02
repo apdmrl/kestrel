@@ -1,7 +1,6 @@
 import { Box, Text, useApp, useInput, useStdout } from "ink";
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { useEffect, useMemo, useReducer, useRef, useState } from "react";
 import type { CommandHandlers } from "../command-handlers.js";
-import type { RecommendationViewModel } from "../presentation/view-models.js";
 import { createSessionController } from "./session-controller.js";
 import {
   DashboardShell,
@@ -71,13 +70,6 @@ export interface SessionProps {
    * on `home` and the reducer transitions it from there.
    */
   readonly initialCategory?: string;
-  /**
-   * Pre-loaded recommendation. Lets tests drive the contextual action
-   * panel with the exact `RecommendationViewModel` that produced the
-   * accept command — mirroring what the controller's notify channel
-   * captures from a successful `/find`.
-   */
-  readonly latestRecommendation?: RecommendationViewModel | null;
 }
 
 export interface SessionInputKey {
@@ -182,7 +174,6 @@ export function Session({
   capabilities: capabilitiesProp,
   initialInput = "",
   initialCategory,
-  latestRecommendation: latestRecommendationProp = null,
 }: SessionProps) {
   const { exit } = useApp();
   const { stdout } = useStdout();
@@ -239,9 +230,6 @@ export function Session({
   const [actionFocused, setActionFocused] = useState(false);
   const [reducerState, dispatch] = useReducer(sessionReducer, undefined, initialSessionState);
   const authState: SessionAuthState = reducerState.auth;
-  const reducerLatestRecommendation = reducerState.latestRecommendation;
-  const [latestRecommendation, setLatestRecommendation] =
-    useState<RecommendationViewModel | null>(latestRecommendationProp);
   const activeOperation = useRef<{ controller: AbortController; dispose: () => void } | null>(null);
   // `admissionSlot` is the synchronous admission state. The slot is a
   // pure data object so it can be reasoned about (and tested) without
@@ -270,35 +258,17 @@ export function Session({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  const latestRecommendationRef = useRef<RecommendationViewModel | null>(latestRecommendationProp);
-  // The reducer reports `latestRecommendation` via `OPERATION_SUCCEEDED`;
-  // mirror it into React state so the contextual action panel sees the
-  // latest value. The reducer remains the authoritative source.
   // `submit` bumps the matching counter, captures the value, and uses
   // it as the `operationId` / `attemptId` on the dispatched event. The
   // reducer ignores events whose IDs no longer match the running
   // operation / attempt, so supersession is implicit.
   const nextOperationId = useRef(1);
   const nextAttemptId = useRef(1);
-  useEffect(() => {
-    if (reducerLatestRecommendation !== null) {
-      if (latestRecommendationRef.current?.recommendationId !== reducerLatestRecommendation.recommendationId) {
-        latestRecommendationRef.current = reducerLatestRecommendation;
-        setLatestRecommendation(reducerLatestRecommendation);
-      }
-    }
-  }, [reducerLatestRecommendation]);
   const addEntry = (kind: TranscriptEntry["kind"], text: string): void => {
     const id = nextId.current;
     nextId.current += 1;
     setTranscript((entries) => appendEntry(entries, { id, kind, text }));
   };
-  const captureRecommendation = useCallback((view: RecommendationViewModel): void => {
-    if (latestRecommendationRef.current?.recommendationId === view.recommendationId) return;
-    latestRecommendationRef.current = view;
-    setLatestRecommendation(view);
-  }, []);
-
   // Interim guidance (device-flow instructions) must land in the transcript.
   // A raw stderr write would tear the Ink frame it renders inside. The
   // controller delivers a `ViewModel`; route it through `renderSessionView` so
@@ -459,9 +429,6 @@ export function Session({
         } else {
           dispatch({ type: "OPERATION_SUCCEEDED", operationId: capturedOperationId, view: result.view });
         }
-        if (result.view.kind === "recommendation") {
-          captureRecommendation(result.view);
-        }
       }
     } catch (error) {
       addEntry("error", formatError(error));
@@ -511,11 +478,9 @@ export function Session({
   const activeSection = NAVIGATION_SECTIONS[selectedCategoryIndex] ?? NAVIGATION_SECTIONS[0];
   const activeSectionId = activeSection?.id ?? "home";
   const contextActions = useMemo(
-    () => actionsForSection(activeSectionId, authState, latestRecommendation),
-    [activeSectionId, authState, latestRecommendation],
+    () => actionsForSection(activeSectionId, authState, reducerState.latestRecommendation),
+    [activeSectionId, authState, reducerState.latestRecommendation],
   );
-
-  // Clamp the action cursor so it never goes out of range after auth changes.
   const clampedActionIndex =
     contextActions.length === 0
       ? -1

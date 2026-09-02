@@ -374,6 +374,110 @@ describe("persistent session — keyboard navigation", () => {
       harness.unmount();
     }
   });
+  it("drops the recommendation accept action after a successful mission accept", async () => {
+    // Behavioral test for Finding 3: after `/mission accept --id <id>`
+    // returns a mission view, the reducer clears `latestRecommendation`
+    // (session-state.ts OPERATION_SUCCEEDED mission branch), and the
+    // contextual action panel must surface that change. The exact
+    // `/mission accept --id rec-42` action must disappear from the
+    // Find panel once the mission is accepted. The session must also
+    // surface the exact accept action BEFORE acceptance so we are not
+    // asserting on a permanent removal — only on removal AFTER the
+    // mission accept succeeds.
+    const commandHandlers = handlers();
+    vi.mocked(commandHandlers.authStatus).mockResolvedValue({
+      kind: "auth-status",
+      connected: true,
+      login: "octocat",
+      detail: "CONNECTED",
+    });
+    vi.mocked(commandHandlers.find).mockResolvedValue({
+      kind: "recommendation",
+      recommendationId: "rec-42",
+      challengeId: "chal-1",
+      title: "Fix something",
+      mood: "focused",
+      confidence: 0.9,
+      reasons: ["match"],
+    });
+    let missionAcceptCalls = 0;
+    let capturedRecommendationId: string | undefined;
+    vi.mocked(commandHandlers.missionAccept).mockImplementation(
+      async ({ recommendationId }) => {
+        missionAcceptCalls += 1;
+        capturedRecommendationId = recommendationId;
+        return {
+          kind: "mission",
+          id: "mission-42",
+          status: "ACCEPTED",
+          title: "Fix something",
+        };
+      },
+    );
+    const harness = mountInteractive({
+      handlers: commandHandlers,
+      signal: new AbortController().signal,
+    });
+    try {
+      await settle();
+      // Connect and load a recommendation so the Find action panel
+      // gains the exact recommendation.accept row.
+      harness.stdin.send("/auth status\r");
+      await settle();
+      harness.stdin.send("/find\r");
+      await settle();
+      // Focus sidebar (Up from prompt), step to Find (Down from Home),
+      // Enter the action panel (Enter on sidebar), then Down arms the
+      // recommendation.accept row.
+      harness.stdin.send(upArrow());
+      await settle();
+      harness.stdin.send(downArrow());
+      await settle();
+      // Sanity: BEFORE acceptance, the exact accept action is rendered
+      // on the Find panel. If this fails, the test scaffolding is wrong
+      // (the recommendation did not survive into the panel) and we
+      // cannot trust the post-acceptance assertion.
+      const beforeFrame = harness.lastFrame();
+      expect(beforeFrame).toContain("/mission accept --id rec-42");
+      harness.stdin.send(enterKey());
+      await settle();
+      harness.stdin.send(downArrow());
+      await settle();
+      // First Enter on the focused recommendation.accept action fills
+      // the prompt with the exact command; missionAccept is not called
+      // yet.
+      harness.stdin.send(enterKey());
+      await settle();
+      expect(missionAcceptCalls).toBe(0);
+      // Second Enter submits the filled prompt — missionAccept runs
+      // once with the exact recommendation id bound to the action.
+      harness.stdin.send(enterKey());
+      await settle();
+      expect(missionAcceptCalls).toBe(1);
+      expect(capturedRecommendationId).toBe("rec-42");
+      // The session is back at the prompt (the action-panel return
+      // handler focused the prompt when the first Enter filled the
+      // typed command, and the second Enter submitted it). The
+      // contextual action panel still renders the still-selected
+      // Find category, so it directly reflects whatever
+      // `latestRecommendation` the panel was last fed. The reducer
+      // cleared `latestRecommendation` on the OPERATION_SUCCEEDED
+      // mission branch; the panel must reflect that and stop
+      // rendering the stale exact `/mission accept --id rec-42`
+      // row. The submitted command is already echoed in the
+      // immutable transcript, so a correct reducer-driven panel
+      // would surface the string exactly once. A stale local mirror
+      // would surface it twice (transcript echo + action-panel
+      // row), which is the RED signal.
+      const afterFrame = harness.lastFrame();
+      const occurrenceCount = (
+        afterFrame.match(/\/mission\s+accept\s+--id\s+rec-42/gu) ?? []
+      ).length;
+      expect(occurrenceCount).toBe(1);
+    } finally {
+      harness.unmount();
+    }
+  });
 });
 
 describe("persistent session — auth state propagation", () => {
