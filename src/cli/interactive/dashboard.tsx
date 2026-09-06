@@ -531,8 +531,7 @@ export interface TranscriptChrome {
  *  - Quick commands card: only at `full` tier, contributes 2 chrome.
  *  - Context actions: 1 label + 1 border (when actions are present) +
  *    1 row per action.
- *  - Footer: 2 rows (status + commands). `full` tier only.
- *  - Prompt: 1 row.
+ *  - Prompt: 1 top border + 1 truncated content row.
  */
 export function availableTranscriptRows(
   caps: TerminalCapabilities,
@@ -1088,7 +1087,7 @@ export function PromptLine({ input, busy, placeholder }: PromptLineProps) {
         ›{" "}
       </Text>
       {input.length > 0 ? (
-        <Text color={COLORS.text}>{input}</Text>
+        <Text color={COLORS.text} wrap="truncate-middle">{input}</Text>
       ) : (
         <Text color={COLORS.muted}>{placeholder}</Text>
       )}

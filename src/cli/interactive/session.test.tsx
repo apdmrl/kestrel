@@ -220,7 +220,7 @@ const settle = (ms = 60): Promise<void> => new Promise((resolve) => setTimeout(r
 describe("persistent session — Ink frame height", () => {
   afterEach(() => cleanup());
 
-  it("keeps every typed prompt update strictly below the fake TTY height", async () => {
+  it("keeps the exact cumulative prompt input visible after each keystroke", async () => {
     const harness = mountInteractive({
       handlers: handlers(),
       signal: new AbortController().signal,
@@ -228,16 +228,34 @@ describe("persistent session — Ink frame height", () => {
     });
     try {
       await settle();
-      for (const character of "/mission accept --id rec-42") {
+      let expectedInput = "";
+      for (const character of "/help") {
+        expectedInput += character;
         harness.stdin.send(character);
         await settle();
-        const frame = harness.lastFrame();
-        expect(frame).toContain(character);
-        expect(
-          frame.split("\n").length,
-          `expected <19 rows after typing ${JSON.stringify(character)}, got ${frame.split("\n").length}`,
-        ).toBeLessThan(19);
+        expect(harness.lastFrame().replace(/\s/g, "")).toContain(expectedInput);
       }
+    } finally {
+      harness.unmount();
+    }
+  });
+
+  it("keeps every wrapped prompt update strictly below the fake TTY height", async () => {
+    const harness = mountInteractive({
+      handlers: handlers(),
+      signal: new AbortController().signal,
+      capabilities: { columns: 80, rows: 19, color: true },
+      initialInput: "/mission accept --id " + "r".repeat(700),
+    });
+    try {
+      await settle();
+      harness.stdin.send("x");
+      await settle();
+      const frame = harness.lastFrame();
+      expect(
+        frame.split("\n").length,
+        `expected <19 rows after typing "x", got ${frame.split("\n").length}`,
+      ).toBeLessThan(19);
     } finally {
       harness.unmount();
     }
