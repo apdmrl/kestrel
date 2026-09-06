@@ -229,7 +229,7 @@ describe("persistent session — Ink frame height", () => {
     try {
       await settle();
       let expectedInput = "";
-      for (const character of "/help") {
+      for (const character of "/typed-input-7f3a") {
         expectedInput += character;
         harness.stdin.send(character);
         await settle();
