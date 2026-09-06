@@ -511,56 +511,61 @@ export interface TranscriptChrome {
    * row. The section also contributes its label and a top border.
    */
   readonly contextActionRows: number;
+  /**
+   * Dashboard chrome rows that remain rendered. Omitting lower-priority
+   * dashboard chrome under action pressure passes zero so the transcript
+   * budget reflects the frame Ink actually paints.
+   */
+  readonly dashboardChromeRows?: number;
+}
+
+/** Rows contributed by the optional dashboard card at each compactness tier. */
+function dashboardChromeRowsForTier(tier: CompactnessTier): number {
+  const missionCardRows =
+    tier === "full"
+      ? 8
+      : tier === "standard" || tier === "compact"
+        ? 4
+        : 0;
+  const quickCommandsRows = tier === "full" ? 2 : 0;
+  return missionCardRows + quickCommandsRows;
+}
+
+function fixedChromeRows(caps: TerminalCapabilities, chrome: TranscriptChrome): number {
+  const tier = compactnessTier(caps);
+  const sidebarRows = isWideTerminal(caps) ? 0 : 1;
+  const dashboardChromeRows = chrome.dashboardChromeRows ?? dashboardChromeRowsForTier(tier);
+  const footerRows = tier === "full" ? 2 : 0;
+  return 2 + sidebarRows + dashboardChromeRows + footerRows + chrome.contextActionRows + 2;
 }
 
 /**
- * Compute the actual row budget for transcript entries after reserving
- * chrome for the sections currently rendered. The caller passes the
- * dynamic chrome (e.g. the rendered ContextActions row count) so the
- * total frame remains strictly shorter than `caps.rows`; Ink clears the
- * terminal when the rendered height reaches that threshold. The returned
- * value is the maximum row count the transcript pane can consume; the shell
- * windows entries against this value.
- *
- * Chrome breakdown:
- *  - Header: 2 rows (status row + bottom border)
- *  - Sidebar: 1 row of header + N category rows + 2 hint rows
- *    (N = NAVIGATION_SECTIONS.length). Compact horizontal mode is 1 row.
- *  - Mission card: 1 border + content rows + 1 border. `full`/standard
- *    = 6, `compact` (standard tier in wide mode) = 4, `minimal` = 0.
- *  - Quick commands card: only at `full` tier, contributes 2 chrome.
- *  - Context actions: 1 label + 1 border (when actions are present) +
- *    1 row per action.
- *  - Prompt: 1 top border + 1 truncated content row.
+ * Preserve the action panel, selected navigation state, and prompt before
+ * optional dashboard chrome. This decision uses the real contextual-action
+ * row count; otherwise a long action list can overflow before transcript
+ * windowing has any effect.
+ */
+export function shouldOmitDashboardChrome(
+  caps: TerminalCapabilities,
+  contextActionRows: number,
+): boolean {
+  return (
+    compactnessTier(caps) === "minimal" ||
+    fixedChromeRows(caps, { contextActionRows }) >= caps.rows
+  );
+}
+
+/**
+ * Compute the transcript budget after reserving the chrome that remains in
+ * the rendered shell. The result always leaves one terminal row unused.
  */
 export function availableTranscriptRows(
   caps: TerminalCapabilities,
   chrome: TranscriptChrome = { contextActionRows: 0 },
 ): number {
-  const tier = compactnessTier(caps);
-  const wide = isWideTerminal(caps);
-  const sidebarRows = wide ? 0 : 1;
-  const missionCardRows =
-    tier === "full"
-      ? 8
-      : tier === "standard"
-        ? 4
-        : tier === "compact"
-          ? 4
-          : 0;
-  const quickCommandsRows = tier === "full" ? 2 : 0;
-  const footerRows = tier === "full" ? 2 : 0;
-  const fixed =
-    2 +
-    sidebarRows +
-    missionCardRows +
-    quickCommandsRows +
-    footerRows +
-    chrome.contextActionRows +
-    2;
   // Keep one terminal row unused: Ink clears the terminal whenever a
   // rendered frame reaches `stdout.rows`.
-  return Math.max(0, caps.rows - fixed - 1);
+  return Math.max(0, caps.rows - fixedChromeRows(caps, chrome) - 1);
 }
 
 const SECTION_ICONS: Readonly<Record<string, { readonly icon: string; readonly accent: Accent }>> = {
@@ -1215,7 +1220,6 @@ export function DashboardShell({
   const wide = isWideTerminal(capabilities);
   const tier = compactnessTier(capabilities);
   const compact = tier !== "full";
-  const omitDashboardChrome = tier === "minimal";
   const showFooter = tier === "full";
   const showQuickCommands = tier === "full" || tier === "standard";
   const sidebarCompact = tier === "compact" || tier === "minimal";
@@ -1232,8 +1236,12 @@ export function DashboardShell({
     contextActions !== undefined
       ? contextActionsRowCount(contextActions, paneWidth, compact)
       : 0;
+  // Action rows are dynamic. When their fixed chrome would reach the terminal
+  // threshold, keep the actionable panel and omit only the dashboard card.
+  const omitDashboardChrome = shouldOmitDashboardChrome(capabilities, contextActionRows);
   const transcriptBudget = availableTranscriptRows(capabilities, {
     contextActionRows,
+    ...(omitDashboardChrome ? { dashboardChromeRows: 0 } : {}),
   });
   const structuredEntries = entries !== undefined
     ? windowTranscriptEntries(entries, transcriptBudget, paneWidth)

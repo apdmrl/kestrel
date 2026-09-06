@@ -260,6 +260,40 @@ describe("persistent session — Ink frame height", () => {
       harness.unmount();
     }
   });
+  it("keeps the six Mission actions, selected action, and typed prompt below 19 rows", async () => {
+    const harness = mountInteractive({
+      handlers: handlers(),
+      signal: new AbortController().signal,
+      capabilities: { columns: 80, rows: 19, color: true },
+    });
+    try {
+      await settle();
+      harness.stdin.send(upArrow());
+      await settle();
+      harness.stdin.send(downArrow());
+      await settle();
+      harness.stdin.send(downArrow());
+      await settle();
+      harness.stdin.send(enterKey());
+      await settle();
+      harness.stdin.send(downArrow());
+      await settle();
+      harness.stdin.send(downArrow());
+      await settle();
+      harness.stdin.send("x");
+      await settle();
+      const frame = harness.lastFrame();
+      expect(
+        frame.split("\n").length,
+        `expected <19 rows with six Mission actions after typing "x", got ${frame.split("\n").length}`,
+      ).toBeLessThan(19);
+      expect(frame).toContain(">*- Prepare mission");
+      expect(frame).toContain("/mission prepare");
+      expect(frame).toContain("› x");
+    } finally {
+      harness.unmount();
+    }
+  });
 });
 
 function upArrow(): string {
