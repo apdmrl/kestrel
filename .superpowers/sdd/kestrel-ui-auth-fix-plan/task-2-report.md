@@ -93,3 +93,37 @@ Tests  1 passed | 29 skipped (30)
 ## Commit
 
 Committed as `fix: default GitHub OAuth client ID`.
+
+## Review follow-up: notice redaction shape
+
+The composition regression now captures the complete
+`device-authorization` notice and compares it to the exact safe object:
+`kind`, `verificationUri`, and `userCode`. An unexpected `deviceCode`, access
+token, or other extra field makes the test fail instead of being discarded by
+the test harness.
+
+Targeted command:
+
+```sh
+npm test -- src/bootstrap/index.test.ts -t "composes default and explicit OAuth IDs"
+```
+
+Observed clean result (exit 0):
+
+```text
+Test Files  1 passed (1)
+Tests  1 passed | 29 skipped (30)
+```
+
+Focused auth command:
+
+```sh
+npm test -- src/bootstrap/index.test.ts src/cli/create-program.test.ts src/cli/interactive/session-auth.test.tsx
+```
+
+Observed clean result (exit 0):
+
+```text
+Test Files  3 passed (3)
+Tests  81 passed (81)
+```

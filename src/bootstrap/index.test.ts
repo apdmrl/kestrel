@@ -92,7 +92,7 @@ describe("bootstrap", () => {
 
   it("composes default and explicit OAuth IDs into device authentication", async () => {
     composedDeviceAuth.clientIds.length = 0;
-    const notices: string[] = [];
+    const deviceAuthorizationNotices: unknown[] = [];
     const events: string[] = [];
     const launches: string[] = [];
     const browserLauncher: BrowserLauncher = {
@@ -113,7 +113,7 @@ describe("bootstrap", () => {
         onNotice: (view) => {
           if (view.kind === "device-authorization") {
             events.push("guidance");
-            notices.push(view.verificationUri, view.userCode);
+            deviceAuthorizationNotices.push(view);
           } else if (view.kind === "verification") {
             events.push("verification");
           }
@@ -122,11 +122,15 @@ describe("bootstrap", () => {
     );
 
     expect(composedDeviceAuth.clientIds).toEqual(["Ov23lizdZtG8goMx2GZC"]);
-    expect(notices).toEqual(["https://github.com/login/device", "COMPOSED-1234"]);
+    expect(deviceAuthorizationNotices).toEqual([
+      {
+        kind: "device-authorization",
+        verificationUri: "https://github.com/login/device",
+        userCode: "COMPOSED-1234",
+      },
+    ]);
     expect(launches).toEqual(["https://github.com/login/device"]);
     expect(events).toEqual(["guidance", "launch", "verification"]);
-    expect(notices.join(" ")).not.toContain("composition-device-code");
-    expect(notices.join(" ")).not.toContain("composition-token");
 
     const overrideHandlers = await bootstrap(
       createConfig({ KESTREL_HOME: dir, GITHUB_CLIENT_ID: "override-client-id" }),
