@@ -21,6 +21,46 @@ import type {
 } from "../ports/github-gateway.js";
 import { bootstrap, createConfig } from "./index.js";
 
+const composedDeviceAuth = vi.hoisted(() => ({ clientIds: [] as string[] }));
+
+vi.mock("@octokit/auth-oauth-device", () => ({
+  createOAuthDeviceAuth: (options: {
+    clientId: string;
+    onVerification: (verification: {
+      device_code: string;
+      user_code: string;
+      verification_uri: string;
+      expires_in: number;
+      interval: number;
+    }) => void;
+  }) => {
+    composedDeviceAuth.clientIds.push(options.clientId);
+    options.onVerification({
+      device_code: "composition-device-code",
+      user_code: "COMPOSED-1234",
+      verification_uri: "https://github.com/login/device",
+      expires_in: 900,
+      interval: 5,
+    });
+    return async () => ({ token: "composition-token" });
+  },
+}));
+
+vi.mock("octokit", () => ({
+  Octokit: class {
+    async request(route: string): Promise<{
+      status: number;
+      data: unknown;
+      headers: Record<string, string>;
+    }> {
+      if (route === "GET /user") {
+        return { status: 200, data: { login: "octocat", id: 1 }, headers: {} };
+      }
+      throw new Error("unexpected route " + route);
+    }
+  },
+}));
+
 let dir: string;
 
 beforeEach(async () => {
@@ -41,6 +81,63 @@ describe("bootstrap", () => {
     expect(config.home).toBe("/tmp/home");
     expect(config.workspaceRoot).toBe("/tmp/ws");
     expect(config.githubClientId).toBe("client-id");
+  });
+
+  it("uses Kestrel's public OAuth client ID unless the environment overrides it", () => {
+    expect(createConfig({}).githubClientId).toBe("Ov23lizdZtG8goMx2GZC");
+    expect(createConfig({ GITHUB_CLIENT_ID: "test-client-id" }).githubClientId).toBe(
+      "test-client-id",
+    );
+  });
+
+  it("composes default and explicit OAuth IDs into device authentication", async () => {
+    composedDeviceAuth.clientIds.length = 0;
+    const notices: string[] = [];
+    const events: string[] = [];
+    const launches: string[] = [];
+    const browserLauncher: BrowserLauncher = {
+      async open(url: string): Promise<boolean> {
+        launches.push(url);
+        events.push("launch");
+        return true;
+      },
+    };
+    const defaultHandlers = await bootstrap(createConfig({ KESTREL_HOME: dir }), {
+      credentialStore: new FakeCredentialStore(),
+      browserLauncher,
+      openBrowser: true,
+    });
+    await defaultHandlers.authLogin(
+      {},
+      {
+        onNotice: (view) => {
+          if (view.kind === "device-authorization") {
+            events.push("guidance");
+            notices.push(view.verificationUri, view.userCode);
+          } else if (view.kind === "verification") {
+            events.push("verification");
+          }
+        },
+      },
+    );
+
+    expect(composedDeviceAuth.clientIds).toEqual(["Ov23lizdZtG8goMx2GZC"]);
+    expect(notices).toEqual(["https://github.com/login/device", "COMPOSED-1234"]);
+    expect(launches).toEqual(["https://github.com/login/device"]);
+    expect(events).toEqual(["guidance", "launch", "verification"]);
+    expect(notices.join(" ")).not.toContain("composition-device-code");
+    expect(notices.join(" ")).not.toContain("composition-token");
+
+    const overrideHandlers = await bootstrap(
+      createConfig({ KESTREL_HOME: dir, GITHUB_CLIENT_ID: "override-client-id" }),
+      { credentialStore: new FakeCredentialStore(), openBrowser: false },
+    );
+    await overrideHandlers.authLogin({}, {});
+
+    expect(composedDeviceAuth.clientIds).toEqual([
+      "Ov23lizdZtG8goMx2GZC",
+      "override-client-id",
+    ]);
   });
 
   it("returns an empty journey without credentials", async () => {

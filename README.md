@@ -38,6 +38,9 @@ Kestrel renders the interactive session immediately and checks GitHub status for
 
 One-shot forms (`kestrel auth login`, `kestrel auth status`) are unchanged.
 
+Login works out of the box with Kestrel's registered public GitHub OAuth App. Set
+`GITHUB_CLIENT_ID` only when you need to use a different OAuth App.
+
 In the interactive shell:
 
 1. Pick a category from the sidebar (for example `Auth`).
