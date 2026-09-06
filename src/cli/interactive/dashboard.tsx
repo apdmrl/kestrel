@@ -517,9 +517,10 @@ export interface TranscriptChrome {
  * Compute the actual row budget for transcript entries after reserving
  * chrome for the sections currently rendered. The caller passes the
  * dynamic chrome (e.g. the rendered ContextActions row count) so the
- * total frame always fits `caps.rows`. The returned value is the
- * maximum row count the transcript pane can consume; the shell windows
- * entries against this value.
+ * total frame remains strictly shorter than `caps.rows`; Ink clears the
+ * terminal when the rendered height reaches that threshold. The returned
+ * value is the maximum row count the transcript pane can consume; the shell
+ * windows entries against this value.
  *
  * Chrome breakdown:
  *  - Header: 2 rows (status row + bottom border)
@@ -558,7 +559,9 @@ export function availableTranscriptRows(
     footerRows +
     chrome.contextActionRows +
     2;
-  return Math.max(0, caps.rows - fixed);
+  // Keep one terminal row unused: Ink clears the terminal whenever a
+  // rendered frame reaches `stdout.rows`.
+  return Math.max(0, caps.rows - fixed - 1);
 }
 
 const SECTION_ICONS: Readonly<Record<string, { readonly icon: string; readonly accent: Accent }>> = {

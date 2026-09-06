@@ -344,7 +344,7 @@ describe("DashboardShell responsive split", () => {
     // quick commands card) is dropped so the row budget fits.
     expect(frame).toContain("No active mission");
     expect(frame).toContain("TRANSCRIPT_PLACEHOLDER");
-    expect(frame.split("\n").length).toBeLessThanOrEqual(wide.rows);
+    expect(frame.split("\n").length).toBeLessThan(wide.rows);
   });
 
   it("keeps the shell renderable at 59x24 (below 60)", () => {
@@ -461,7 +461,7 @@ describe("DashboardShell row budget", () => {
       );
       const frame = lastFrame() ?? "";
       const actualRows = frame.split("\n").length;
-      expect(actualRows, `expected ≤${capabilities.rows} rows at ${label}, got ${actualRows}`).toBeLessThanOrEqual(
+      expect(actualRows, `expected <${capabilities.rows} rows at ${label}, got ${actualRows}`).toBeLessThan(
         capabilities.rows,
       );
     });
@@ -612,7 +612,7 @@ describe("DashboardShell row budget", () => {
     expect(frame).toContain("https://github.com/login/device");
     expect(frame).toContain("ABCD-1234");
     expect(frame).toContain("Recommendation ID: rec-42");
-    expect(frame.split("\n").length).toBeLessThanOrEqual(narrowCombo.rows);
+    expect(frame.split("\n").length).toBeLessThan(narrowCombo.rows);
   });
 
   it("windows oversized transcript to stay within the row budget at 80x24", () => {
@@ -647,7 +647,7 @@ describe("DashboardShell row budget", () => {
       </DashboardShell>,
     );
     const frame = lastFrame() ?? "";
-    expect(frame.split("\n").length).toBeLessThanOrEqual(wide.rows);
+    expect(frame.split("\n").length).toBeLessThan(wide.rows);
     expect(frame).toContain("https://github.com/login/device");
     expect(frame).toContain("ABCD-1234");
     expect(frame).toContain("rec-42");
@@ -693,7 +693,7 @@ describe("DashboardShell row budget", () => {
       );
       const frame = lastFrame() ?? "";
       const actualRows = frame.split("\n").length;
-      expect(actualRows, `expected ≤${capabilities.rows} rows at ${label}, got ${actualRows}`).toBeLessThanOrEqual(
+      expect(actualRows, `expected <${capabilities.rows} rows at ${label}, got ${actualRows}`).toBeLessThan(
         capabilities.rows,
       );
       expect(frame).toContain("https://github.com/login/device");
@@ -834,7 +834,7 @@ describe("DashboardShell entries row budget (criticality-preserving)", () => {
     // accommodate it alongside the auth device payload and the
     // recommendation ID.
     const frame = lastFrame() ?? "";
-    expect(frame.split("\n").length).toBeLessThanOrEqual(wide.rows);
+    expect(frame.split("\n").length).toBeLessThan(wide.rows);
     expect(frame).toContain("ABCD-1234");
     expect(frame).toContain("rec-42");
     expect(frame).toContain("/mission accept --id rec-42");
@@ -909,8 +909,8 @@ describe("DashboardShell entries row budget (criticality-preserving)", () => {
       const actualRows = frame.split("\n").length;
       expect(
         actualRows,
-        `expected ≤${capabilities.rows} rows at ${label}, got ${actualRows}`,
-      ).toBeLessThanOrEqual(capabilities.rows);
+        `expected <${capabilities.rows} rows at ${label}, got ${actualRows}`,
+      ).toBeLessThan(capabilities.rows);
       // Critical substrings (URI user code, rec id, accept command) are retained.
       expect(frame).toContain("ABCD-1234");
       expect(frame).toContain("rec-42");
@@ -1189,8 +1189,8 @@ describe("DashboardShell wide-pane + production ContextActions", () => {
     const actualRows = frame.split("\n").length;
     expect(
       actualRows,
-      `expected ≤24 rows at 80x24 with 6 ContextActions, got ${actualRows}`,
-    ).toBeLessThanOrEqual(24);
+      `expected <24 rows at 80x24 with 6 ContextActions, got ${actualRows}`,
+    ).toBeLessThan(24);
   });
 
   it("ContextActions with 6 actions renders more total rows than with 2 actions", () => {
@@ -1611,7 +1611,7 @@ describe("DashboardShell wide-mode 57–80 cell row cap (live pane width)", () =
       />,
     );
     const frame = lastFrame() ?? "";
-    expect(frame.split("\n").length).toBeLessThanOrEqual(wideCaps.rows);
+    expect(frame.split("\n").length).toBeLessThan(wideCaps.rows);
   });
 });
 

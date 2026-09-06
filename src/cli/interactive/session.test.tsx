@@ -149,7 +149,7 @@ describe("persistent session — navigation", () => {
       <Session handlers={handlers()} signal={new AbortController().signal} />,
     );
     const frame = lastFrame() ?? "";
-    expect(frame.split("\n").length).toBeLessThanOrEqual(24);
+    expect(frame.split("\n").length).toBeLessThan(24);
     expect(frame).toContain("Ready");
     expect(frame).toContain("KESTREL");
   });
@@ -216,6 +216,33 @@ function mountInteractive(props: {
 }
 
 const settle = (ms = 60): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+describe("persistent session — Ink frame height", () => {
+  afterEach(() => cleanup());
+
+  it("keeps every typed prompt update strictly below the fake TTY height", async () => {
+    const harness = mountInteractive({
+      handlers: handlers(),
+      signal: new AbortController().signal,
+      capabilities: { columns: 80, rows: 19, color: true },
+    });
+    try {
+      await settle();
+      for (const character of "/mission accept --id rec-42") {
+        harness.stdin.send(character);
+        await settle();
+        const frame = harness.lastFrame();
+        expect(frame).toContain(character);
+        expect(
+          frame.split("\n").length,
+          `expected <19 rows after typing ${JSON.stringify(character)}, got ${frame.split("\n").length}`,
+        ).toBeLessThan(19);
+      }
+    } finally {
+      harness.unmount();
+    }
+  });
+});
 
 function upArrow(): string {
   return "\u001b[A";
@@ -784,7 +811,7 @@ describe("persistent session — live stdout capabilities", () => {
       expect(frame).toContain("Ready");
       expect(frame).toContain("Type a command…");
       // The frame never overflows the stdout's row budget.
-      expect(frame.split("\n").length).toBeLessThanOrEqual(24);
+      expect(frame.split("\n").length).toBeLessThan(24);
     } finally {
       instance.unmount();
     }
@@ -1024,8 +1051,8 @@ describe("DashboardShell — wide pane with production ContextActions", () => {
     const actualRows = frame.split("\n").length;
     expect(
       actualRows,
-      `expected ≤24 rows at 80x24 with 6 ContextActions, got ${actualRows}`,
-    ).toBeLessThanOrEqual(24);
+      `expected <24 rows at 80x24 with 6 ContextActions, got ${actualRows}`,
+    ).toBeLessThan(24);
   });
 });
 
@@ -1134,7 +1161,7 @@ describe("Session — typed device-authorization propagation (metadata)", () => 
       expect(frame).toContain(verificationUri);
       expect(frame).toContain(userCode);
       // Frame stays within the row budget.
-      expect(frame.split("\n").length).toBeLessThanOrEqual(24);
+      expect(frame.split("\n").length).toBeLessThan(24);
     } finally {
       // If the test fails before the abort listener fires, settle
       // the pending promise so React/Vitest can shut down cleanly.
