@@ -280,15 +280,19 @@ export function sessionReducer(state: SessionState, event: SessionEvent): Sessio
       return { ...state, focus: event.focus };
     }
     case "HOME_SELECTED": {
-      // A running foreground command owns the admission slot; the
-      // component is responsible for aborting and releasing the
-      // child before issuing HOME_SELECTED. The reducer cannot
-      // cancel a child signal on its own, so it must ignore
-      // HOME_SELECTED while an operation is running. This
-      // prevents a Home keypress from clearing reducer state and
-      // stranding the controller where late events can no longer
-      // match the running operation id.
-      if (state.operation.status === "running") return state;
+      // Home must not release or reset a live operation, because its late
+      // completion still needs the matching operation id. Navigation itself
+      // remains safe to reset: it is presentation state and does not affect
+      // admission, cancellation, auth recovery, or the pending result.
+      if (state.operation.status === "running") {
+        return {
+          ...state,
+          selectedActionIndex: 0,
+          selectedSectionIndex: 0,
+          focus: "prompt",
+          activeSectionId: INITIAL_AUTH_SECTION_ID,
+        };
+      }
       return {
         ...state,
         auth: state.auth,

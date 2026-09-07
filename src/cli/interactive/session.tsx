@@ -1,4 +1,4 @@
-import { Box, Text, useApp, useInput, useStdout } from "ink";
+import { Box, Text, useApp, useInput, useStdin, useStdout } from "ink";
 import { useEffect, useMemo, useReducer, useRef, useState } from "react";
 import type { CommandHandlers } from "../command-handlers.js";
 import { createSessionController } from "./session-controller.js";
@@ -169,6 +169,7 @@ export function Session({
   initialCategory,
 }: SessionProps) {
   const { exit } = useApp();
+  const { stdin } = useStdin();
   const { stdout } = useStdout();
   // Derive the runtime capabilities from Ink's stdout so a real TUI
   // session respects the actual terminal dimensions. The explicit
@@ -344,6 +345,24 @@ export function Session({
     dispatch({ type: "HOME_SELECTED" });
     setInput("");
   };
+  // Ink recognizes Home internally but does not expose it through useInput's
+  // key flags. Intercept only its raw sequence before Ink consumes that
+  // chunk; all other keys continue through the primary useInput route.
+  useEffect(() => {
+    const originalRead = stdin.read;
+    stdin.read = ((size?: number) => {
+      const chunk = originalRead.call(stdin, size);
+      const raw = typeof chunk === "string" ? chunk : Buffer.isBuffer(chunk) ? chunk.toString() : "";
+      if (raw === "\u001b[H" || raw === "\u001bOH" || raw === "\u001b[1~") {
+        selectHome();
+        return null;
+      }
+      return chunk;
+    }) as typeof stdin.read;
+    return () => {
+      stdin.read = originalRead;
+    };
+  }, [stdin, selectHome]);
   const submit = async (commandOverride?: string): Promise<void> => {
     const hasCommandOverride = commandOverride !== undefined;
     const commandText = (commandOverride ?? input).trim();

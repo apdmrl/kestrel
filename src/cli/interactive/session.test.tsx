@@ -291,6 +291,7 @@ describe("persistent session — keyboard navigation", () => {
       harness.stdin.send(downArrow());
       await settle();
       expect(harness.lastFrame()).toMatch(/>\*-\s+Home/u);
+      expect(harness.lastFrame()).toContain("↑↓ move");
     } finally {
       harness.unmount();
     }
@@ -322,6 +323,52 @@ describe("persistent session — keyboard navigation", () => {
       expect(new Set(promptRows).size).toBe(1);
       expect(frames.at(-1)).toContain("Create handoff");
       expect(frames.at(-1)).toContain("› /progress");
+    } finally {
+      harness.unmount();
+    }
+  });
+
+  it("returns navigation home without cancelling a running operation", async () => {
+    const commandHandlers = handlers();
+    let complete: ((result: ViewModel) => void) | undefined;
+    let operationSignal: AbortSignal | undefined;
+    vi.mocked(commandHandlers.progress).mockImplementation((_args, context) => {
+      operationSignal = context.signal;
+      return new Promise<ViewModel>((resolve) => {
+        complete = resolve;
+      });
+    });
+    const harness = mountInteractive({
+      handlers: commandHandlers,
+      signal: new AbortController().signal,
+      capabilities: { columns: 80, rows: 24, color: true },
+    });
+    try {
+      await settle();
+      harness.stdin.send("/progress\r");
+      await settle();
+      expect(harness.lastFrame()).toContain("Working…");
+      expect(operationSignal?.aborted).toBe(false);
+
+      harness.stdin.send(downArrow());
+      await settle();
+      harness.stdin.send(downArrow());
+      await settle();
+      expect(harness.lastFrame()).toMatch(/>\*-\s+Find/u);
+
+      harness.stdin.send("\u001b[H");
+      await settle();
+      const homeFrame = harness.lastFrame();
+      expect(homeFrame).toMatch(/\s\*-\s+Home/u);
+      expect(homeFrame).not.toMatch(/>\*-\s+Home/u);
+      expect(homeFrame).toContain("Working…");
+      expect(operationSignal?.aborted).toBe(false);
+      expect(commandHandlers.progress).toHaveBeenCalledTimes(1);
+
+      if (complete === undefined) throw new Error("progress operation did not start");
+      complete(view);
+      await settle();
+      expect(harness.lastFrame()).not.toContain("Working…");
     } finally {
       harness.unmount();
     }

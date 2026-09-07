@@ -673,11 +673,7 @@ describe("session reducer", () => {
     });
   });
 
-  it("ignores HOME_SELECTED while a login is running so the foreground child is not orphaned", () => {
-    // The reducer must reject HOME_SELECTED while a login owns the
-    // admission slot; otherwise the visible auth state would desync
-    // from the still-running controller and a late device flow could
-    // store a credential after the user already abandoned the login.
+  it("keeps a running login while returning navigation home", () => {
     const expired = sessionReducer(initialSessionState(), {
       type: "AUTH_RESOLVED",
       attemptId: 1,
@@ -690,20 +686,20 @@ describe("session reducer", () => {
       command: "/auth login",
       cancellable: true,
     });
-    expect(started.auth).toEqual({ status: "logging-in", phase: "starting" });
-    const home = sessionReducer(started, { type: "HOME_SELECTED" });
-    expect(home).toBe(started);
+    const home = sessionReducer(
+      { ...started, activeSectionId: "find", selectedSectionIndex: 1, selectedActionIndex: 2, focus: "actions" },
+      { type: "HOME_SELECTED" },
+    );
     expect(home.auth).toEqual({ status: "logging-in", phase: "starting" });
     expect(home.operation).toMatchObject({ status: "running", operationId: 4 });
+    expect(home.activeSectionId).toBe("home");
+    expect(home.selectedSectionIndex).toBe(0);
+    expect(home.selectedActionIndex).toBe(0);
+    expect(home.focus).toBe("prompt");
   });
 
 
-  it("ignores HOME_SELECTED while an operation is running so the foreground child is not orphaned", () => {
-    // Finding: Home should not abandon a live foreground operation by
-    // clearing reducer state independently. While a command owns the
-    // admission slot, the reducer must reject HOME_SELECTED so the
-    // component either aborts the child through the controller or
-    // makes Home a no-op.
+  it("keeps a running operation while returning navigation home", () => {
     const connected = sessionReducer(initialSessionState(), {
       type: "AUTH_RESOLVED",
       attemptId: 1,
@@ -716,8 +712,16 @@ describe("session reducer", () => {
       command: "/find",
       cancellable: true,
     });
-    const homeWhileBusy = sessionReducer(started, { type: "HOME_SELECTED" });
-    expect(homeWhileBusy).toBe(started);
+    const homeWhileBusy = sessionReducer(
+      { ...started, activeSectionId: "find", selectedSectionIndex: 1, selectedActionIndex: 2, focus: "actions" },
+      { type: "HOME_SELECTED" },
+    );
+    expect(homeWhileBusy.auth).toEqual({ status: "connected", login: "octocat" });
+    expect(homeWhileBusy.operation).toMatchObject({ status: "running", operationId: 4 });
+    expect(homeWhileBusy.activeSectionId).toBe("home");
+    expect(homeWhileBusy.selectedSectionIndex).toBe(0);
+    expect(homeWhileBusy.selectedActionIndex).toBe(0);
+    expect(homeWhileBusy.focus).toBe("prompt");
   });
 
   it("preserves auth on OPERATION_CANCELLED for a non-login operation", () => {

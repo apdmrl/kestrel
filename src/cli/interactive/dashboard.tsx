@@ -898,6 +898,10 @@ export function Sidebar({
           accent={selector.meta.accent}
           colorize={capabilities.color}
         />
+        <Text>{"  "}</Text>
+        <Text color={COLORS.muted}>
+          <Text color={COLORS.text}>↑↓</Text> move
+        </Text>
       </Box>
     );
   }
