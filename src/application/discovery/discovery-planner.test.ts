@@ -68,6 +68,11 @@ describe("planDiscovery", () => {
     expect(plan.enrichmentBudget).toBe(3);
   });
 
+  it("keeps the enrichment budget at provider collection capacity", () => {
+    const plan = planDiscovery(intent({ pageBudget: 1 }));
+    expect(plan.enrichmentBudget).toBe(3);
+  });
+
   it("carries excluded prior candidates", () => {
     const plan = planDiscovery(intent({ exclusions: ["c1", "c2"] }));
     expect(plan.excludedIds).toEqual(["c1", "c2"]);

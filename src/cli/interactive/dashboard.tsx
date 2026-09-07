@@ -230,42 +230,77 @@ export function classifyTranscriptEntry(
  * `paneWidth` is the transcript pane width (see `transcriptPaneWidth`).
  * `compact` mirrors the production `compactnessTier` flag.
  */
+function contextActionWidths(
+  paneWidth: number,
+  compact: boolean,
+): { readonly content: number; readonly indented: number } {
+  const content = Math.max(1, paneWidth - 4 - (compact ? 0 : 2));
+  return { content, indented: Math.max(1, content - 4) };
+}
+
+function actionRowCount(action: SessionAction, paneWidth: number, compact: boolean): number {
+  const widths = contextActionWidths(paneWidth, compact);
+  const labelRows = wrapLineToWidth(`--- ${action.label}`, widths.content);
+  const commandRows = wrapLineToWidth(action.command, widths.indented);
+  if (action.availability.status === "disabled") {
+    const reasonRows = wrapLineToWidth(action.availability.reason, widths.indented);
+    const recoveryRows =
+      action.availability.recoveryCommand === undefined
+        ? 0
+        : wrapLineToWidth(action.availability.recoveryCommand, widths.indented);
+    return labelRows + commandRows + reasonRows + recoveryRows;
+  }
+  return labelRows + commandRows;
+}
+
+function actionWindow(
+  actions: readonly SessionAction[],
+  selectedIndex: number,
+  paneWidth: number,
+  compact: boolean,
+  viewportRows: number | undefined,
+): readonly SessionAction[] {
+  if (viewportRows === undefined || actions.length === 0) return actions;
+  const selected = Math.max(0, Math.min(selectedIndex, actions.length - 1));
+  let start = selected;
+  let end = selected;
+  let rows = actionRowCount(actions[selected]!, paneWidth, compact);
+  while (true) {
+    const before = start > 0 ? actionRowCount(actions[start - 1]!, paneWidth, compact) : Infinity;
+    const after = end < actions.length - 1 ? actionRowCount(actions[end + 1]!, paneWidth, compact) : Infinity;
+    if (before === Infinity && after === Infinity) return actions.slice(start, end + 1);
+    if (before <= after && rows + before <= viewportRows) {
+      start -= 1;
+      rows += before;
+      continue;
+    }
+    if (rows + after <= viewportRows) {
+      end += 1;
+      rows += after;
+      continue;
+    }
+    return actions.slice(start, end + 1);
+  }
+}
+
 export function contextActionsRowCount(
   actions: readonly SessionAction[],
   paneWidth: number,
   compact: boolean,
+  viewportRows?: number,
 ): number {
   const wrapperMargin = compact ? 0 : 1;
   const outerMargin = compact ? 0 : 1;
   const sectionLabel = 1;
-  if (actions.length === 0) {
+  if (actions.length === 0 && viewportRows === undefined) {
     return wrapperMargin + outerMargin + sectionLabel + 1;
   }
   const innerMargin = compact ? 0 : 1;
   const borders = compact ? 0 : 2;
-  const borderedContentWidth = Math.max(1, paneWidth - 4 - (compact ? 0 : 2));
-  const indentedWidth = Math.max(1, borderedContentWidth - 4);
-  const bodyRows = actions.reduce((sum, action) => {
-    const labelRows = wrapLineToWidth(`--- ${action.label}`, borderedContentWidth);
-    const commandRows = wrapLineToWidth(action.command, indentedWidth);
-    if (action.availability.status === "disabled") {
-      const reasonText =
-        action.availability.reason +
-        (action.availability.recoveryCommand !== undefined
-          ? ` · ${action.availability.recoveryCommand}`
-          : "");
-      return sum + labelRows + commandRows + wrapLineToWidth(reasonText, indentedWidth);
-    }
-    return sum + labelRows + commandRows;
-  }, 0);
-  return (
-    wrapperMargin +
-    outerMargin +
-    sectionLabel +
-    innerMargin +
-    borders +
-    bodyRows
-  );
+  const bodyRows =
+    viewportRows ??
+    actions.reduce((sum, action) => sum + actionRowCount(action, paneWidth, compact), 0);
+  return wrapperMargin + outerMargin + sectionLabel + innerMargin + borders + bodyRows;
 }
 
 /**
@@ -488,6 +523,13 @@ export function isWideTerminal(caps: TerminalCapabilities): boolean {
  */
 export type CompactnessTier = "full" | "standard" | "compact" | "minimal";
 
+const ACTION_VIEWPORT_ROWS: Readonly<Record<CompactnessTier, number>> = {
+  full: 6,
+  standard: 5,
+  compact: 6,
+  minimal: 6,
+};
+
 export function compactnessTier(caps: TerminalCapabilities): CompactnessTier {
   if (caps.rows < 18 || caps.columns < 50) return "minimal";
   const wide = isWideTerminal(caps);
@@ -639,11 +681,12 @@ export function NavItem({
   return (
     <Box>
       <Text {...inkColorProp(colorize, markerColor)}>{markers}</Text>
-      <Text {...inkColorProp(colorize, COLORS[accent])}>{icon}</Text>
-      <Text>{"  "}</Text>
+      <Text>{" "}</Text>
       <Text {...inkColorProp(colorize, labelColor)} bold={focused}>
         {label}
       </Text>
+      <Text>{" "}</Text>
+      <Text {...inkColorProp(colorize, COLORS[accent])}>{icon}</Text>
     </Box>
   );
 }
@@ -679,6 +722,8 @@ export interface ContextActionsProps {
   readonly focused?: boolean;
   readonly colorize?: boolean;
   readonly compact?: boolean;
+  readonly paneWidth?: number;
+  readonly viewportRows?: number;
 }
 
 export function ContextActions({
@@ -687,8 +732,10 @@ export function ContextActions({
   focused = false,
   colorize = true,
   compact = false,
+  paneWidth = 80,
+  viewportRows,
 }: ContextActionsProps) {
-  if (actions.length === 0) {
+  if (actions.length === 0 && viewportRows === undefined) {
     return (
       <Box flexDirection="column" marginTop={compact ? 0 : 1}>
         <SectionLabel label="Actions" />
@@ -696,9 +743,12 @@ export function ContextActions({
       </Box>
     );
   }
+  const selected = actions.length === 0 ? -1 : Math.max(0, Math.min(selectedIndex, actions.length - 1));
+  const visibleActions = actionWindow(actions, selected, paneWidth, compact, viewportRows);
+  const position = visibleActions.length < actions.length ? ` ${selected + 1}/${actions.length}` : "";
   return (
     <Box flexDirection="column" marginTop={compact ? 0 : 1}>
-      <SectionLabel label="Actions" />
+      <SectionLabel label={`Actions${position}`} />
       <Box
         borderStyle={compact ? undefined : "round"}
         borderColor={COLORS.borderSoft}
@@ -706,46 +756,59 @@ export function ContextActions({
         paddingX={1}
         paddingY={0}
         marginTop={compact ? 0 : 1}
+        height={viewportRows === undefined ? undefined : viewportRows + (compact ? 0 : 2)}
+        overflowY={viewportRows === undefined ? undefined : "hidden"}
       >
-        {actions.map((action, index) => {
-          const row: NavigationRowState = {
-            focused: focused && selectedIndex === index,
-            selected: selectedIndex === index,
-            availability:
-              action.availability.status === "enabled" ? "enabled" : "disabled",
-          };
-          const markers = navigationRowMarkers(row);
-          const isDisabled = action.availability.status === "disabled";
-          const commandColor = isDisabled ? COLORS.muted : COLORS.cyan;
-          return (
-            <Box key={action.id} flexDirection="column">
-              <Box>
-                <Text
-                  {...inkColorProp(colorize, isDisabled ? COLORS.red : COLORS.text)}
-                >
-                  {markers}
-                </Text>
-                <Text>{" "}</Text>
-                <Text {...inkColorProp(colorize, COLORS.muted)} bold={row.focused}>
-                  {action.label}
-                </Text>
-              </Box>
-              <Box marginLeft={4}>
-                <Text {...inkColorProp(colorize, commandColor)}>{action.command}</Text>
-              </Box>
-              {isDisabled ? (
-                <Box marginLeft={4}>
-                  <Text {...inkColorProp(colorize, COLORS.muted)}>
-                    {action.availability.reason}
-                    {action.availability.recoveryCommand !== undefined
-                        ? ` · ${action.availability.recoveryCommand}`
-                        : ""}
+        {visibleActions.length === 0 ? (
+          <Text color={COLORS.muted}>No actions available.</Text>
+        ) : (
+          visibleActions.map((action) => {
+            const index = actions.indexOf(action);
+            const row: NavigationRowState = {
+              focused: focused && selected === index,
+              selected: selected === index,
+              availability:
+                action.availability.status === "enabled" ? "enabled" : "disabled",
+            };
+            const markers = navigationRowMarkers(row);
+            const isDisabled = action.availability.status === "disabled";
+            const commandColor = isDisabled ? COLORS.muted : COLORS.cyan;
+            return (
+              <Box key={action.id} flexDirection="column">
+                <Box>
+                  <Text
+                    {...inkColorProp(colorize, isDisabled ? COLORS.red : COLORS.text)}
+                  >
+                    {markers}
+                  </Text>
+                  <Text>{" "}</Text>
+                  <Text {...inkColorProp(colorize, COLORS.muted)} bold={row.focused}>
+                    {action.label}
                   </Text>
                 </Box>
-              ) : null}
-            </Box>
-          );
-        })}
+                <Box marginLeft={4}>
+                  <Text {...inkColorProp(colorize, commandColor)}>{action.command}</Text>
+                </Box>
+                {isDisabled ? (
+                  <>
+                    <Box marginLeft={4}>
+                      <Text {...inkColorProp(colorize, COLORS.muted)}>
+                        {action.availability.reason}
+                      </Text>
+                    </Box>
+                    {action.availability.recoveryCommand === undefined ? null : (
+                      <Box marginLeft={4}>
+                        <Text {...inkColorProp(colorize, COLORS.muted)}>
+                          {action.availability.recoveryCommand}
+                        </Text>
+                      </Box>
+                    )}
+                  </>
+                ) : null}
+              </Box>
+            );
+          })
+        )}
       </Box>
     </Box>
   );
@@ -811,8 +874,9 @@ export function Sidebar({
     return { section, meta, state };
   });
   if (compact) {
-    // Compact tier: a single horizontal row of marker+icon indicators so
-    // the user can still scan the active category without losing a column.
+    const selector = items[selectedIndex] ?? items[0];
+    if (selector === undefined) return null;
+    const position = items.indexOf(selector) + 1;
     return (
       <Box
         width="100%"
@@ -823,20 +887,21 @@ export function Sidebar({
         borderLeft={false}
         borderRight={false}
         borderColor={COLORS.borderSoft}
-        flexDirection="row"
-        flexWrap="wrap"
-        gap={1}
         paddingX={1}
-        paddingTop={0}
       >
-        {items.map(({ section, meta, state }) => (
-          <Box key={section.id}>
-            <Text {...inkColorProp(capabilities.color, COLORS[meta.accent])}>{meta.icon}</Text>
-            <Text {...inkColorProp(capabilities.color, state.selected ? COLORS.green : COLORS.muted)}>
-              {state.selected ? "●" : "○"}
-            </Text>
-          </Box>
-        ))}
+        <NavItem
+          icon={selector.meta.icon}
+          label={`${selector.section.label} ${position}/${items.length}`}
+          focused={selector.state.focused}
+          selected={selector.state.selected}
+          availability={selector.state.availability}
+          accent={selector.meta.accent}
+          colorize={capabilities.color}
+        />
+        <Text>{"  "}</Text>
+        <Text color={COLORS.muted}>
+          <Text color={COLORS.text}>↑↓</Text> move
+        </Text>
       </Box>
     );
   }
@@ -1230,19 +1295,16 @@ export function DashboardShell({
   const showFooter = tier === "full";
   const showQuickCommands = tier === "full" || tier === "standard";
   const sidebarCompact = tier === "compact" || tier === "minimal";
-  // Window the entries / children to honor the actual terminal row budget.
-  // Critical entries (verification URI, user code, recommendation ID, accept
-  // command, typed input) are always retained; older noncritical content is
-  // dropped first so the bounded frame fits `capabilities.rows`.
-  // The ContextActions section is variable: every enabled action is one
-  // row, every disabled action adds a reason / recovery row. The shell
-  // passes the actual rendered row count so the budget reflects what
-  // the user sees, not a constant 2-row reservation.
+  // The action pane reserves a tier-specific number of body rows regardless
+  // of the active category. ContextActions windows around the selected row,
+  // so changing categories cannot move the prompt or discard the selected
+  // action's disabled recovery guidance.
   const paneWidth = transcriptPaneWidth(capabilities);
+  const actionViewportRows = ACTION_VIEWPORT_ROWS[tier];
   const contextActionRows =
-    contextActions !== undefined
-      ? contextActionsRowCount(contextActions, paneWidth, compact)
-      : 0;
+    contextActions === undefined
+      ? 0
+      : contextActionsRowCount(contextActions, paneWidth, compact, actionViewportRows);
   const transcriptBudget = availableTranscriptRows(capabilities, {
     contextActionRows,
   });
@@ -1294,6 +1356,8 @@ export function DashboardShell({
                 focused={actionFocused}
                 colorize={capabilities.color}
                 compact={compact}
+                paneWidth={paneWidth}
+                viewportRows={actionViewportRows}
               />
             </Box>
           ) : null}
