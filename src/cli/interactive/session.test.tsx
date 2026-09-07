@@ -297,6 +297,39 @@ describe("persistent session — keyboard navigation", () => {
     }
   });
 
+  it("keeps unauthenticated Find recovery visible and the prompt stable at 50 columns", async () => {
+    const commandHandlers = handlers();
+    vi.mocked(commandHandlers.authStatus).mockResolvedValue({
+      kind: "auth-status",
+      connected: false,
+      login: null,
+      detail: "NOT_CONNECTED",
+    });
+    const harness = mountInteractive({
+      handlers: commandHandlers,
+      signal: new AbortController().signal,
+      capabilities: { columns: 50, rows: 24, color: true },
+    });
+    try {
+      await settle();
+      harness.stdin.send(downArrow());
+      await settle();
+      const homeFrame = harness.lastFrame();
+      harness.stdin.send(downArrow());
+      await settle();
+      const findFrame = harness.lastFrame();
+      expect(findFrame).toMatch(
+        /GitHub authentication is not verified[\s\S]{0,200}\/auth\s+login/u,
+      );
+      expect(findFrame.split("\n").length).toBeLessThanOrEqual(24);
+      expect(
+        findFrame.split("\n").findIndex((line) => line.includes("Type a command…")),
+      ).toBe(homeFrame.split("\n").findIndex((line) => line.includes("Type a command…")));
+    } finally {
+      harness.unmount();
+    }
+  });
+
   it("keeps the prompt row stable while moving through action sections", async () => {
     const harness = mountInteractive({
       handlers: handlers(),

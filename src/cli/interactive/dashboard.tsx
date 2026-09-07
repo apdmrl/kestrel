@@ -526,7 +526,7 @@ export type CompactnessTier = "full" | "standard" | "compact" | "minimal";
 const ACTION_VIEWPORT_ROWS: Readonly<Record<CompactnessTier, number>> = {
   full: 6,
   standard: 5,
-  compact: 5,
+  compact: 6,
   minimal: 6,
 };
 
