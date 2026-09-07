@@ -78,6 +78,7 @@ export type SessionEvent =
       readonly operationId: number;
       readonly view: ViewModel;
     }
+  | { readonly type: "FIND_COMPLETED_EMPTY"; readonly operationId: number }
   | { readonly type: "OPERATION_FAILED"; readonly operationId: number; readonly errorCode: string }
   | { readonly type: "OPERATION_CANCELLED"; readonly operationId: number }
   | { readonly type: "INPUT_CHANGED"; readonly input: string }
@@ -184,6 +185,11 @@ export function sessionReducer(state: SessionState, event: SessionEvent): Sessio
           authorization: event.authorization,
         },
       };
+    }
+    case "FIND_COMPLETED_EMPTY": {
+      const running = state.operation;
+      if (running.status !== "running" || running.operationId !== event.operationId) return state;
+      return { ...state, operation: { status: "idle" }, latestRecommendation: null };
     }
     case "OPERATION_SUCCEEDED": {
       const running = state.operation;

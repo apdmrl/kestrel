@@ -535,7 +535,11 @@ export function Session({
             }
           }
         } else {
-          dispatch({ type: "OPERATION_SUCCEEDED", operationId: capturedOperationId, view: result.view });
+          if (commandKind === "find" && result.view.kind === "verification") {
+            dispatch({ type: "FIND_COMPLETED_EMPTY", operationId: capturedOperationId });
+          } else {
+            dispatch({ type: "OPERATION_SUCCEEDED", operationId: capturedOperationId, view: result.view });
+          }
         }
       }
     } catch (error) {

@@ -240,6 +240,38 @@ describe("session reducer", () => {
     expect(succeeded.latestRecommendation).toEqual(recommendationView());
     expect(succeeded.operation).toEqual({ status: "idle" });
   });
+  it("clears a recommendation after an empty Find", () => {
+    const recommendationResult = sessionReducer(
+      sessionReducer(initialSessionState(), {
+        type: "OPERATION_STARTED",
+        operationId: 1,
+        command: "/find",
+        cancellable: true,
+      }),
+      {
+        type: "OPERATION_SUCCEEDED",
+        operationId: 1,
+        view: recommendationView(),
+      },
+    );
+    const laterFind = sessionReducer(recommendationResult, {
+      type: "OPERATION_STARTED",
+      operationId: 2,
+      command: "/find",
+      cancellable: true,
+    });
+    const stale = sessionReducer(laterFind, {
+      type: "FIND_COMPLETED_EMPTY",
+      operationId: 1,
+    });
+    expect(stale).toBe(laterFind);
+    const emptied = sessionReducer(laterFind, {
+      type: "FIND_COMPLETED_EMPTY",
+      operationId: 2,
+    });
+    expect(emptied.operation).toEqual({ status: "idle" });
+    expect(emptied.latestRecommendation).toBeNull();
+  });
 
   it("clears latestRecommendation on a successful mission view", () => {
     const withRecommendation = sessionReducer(

@@ -421,6 +421,54 @@ describe("persistent session — keyboard navigation", () => {
       harness.unmount();
     }
   });
+  it("removes stale accept action after empty Find", async () => {
+    const commandHandlers = handlers();
+    vi.mocked(commandHandlers.authStatus).mockResolvedValue({
+      kind: "auth-status",
+      connected: true,
+      login: "octocat",
+      detail: "CONNECTED",
+    });
+    vi.mocked(commandHandlers.find)
+      .mockResolvedValueOnce({
+        kind: "recommendation",
+        recommendationId: "rec-42",
+        challengeId: "chal-1",
+        title: "Fix something",
+        mood: "focused",
+        confidence: 0.9,
+        reasons: ["match"],
+      })
+      .mockResolvedValueOnce({ kind: "verification", text: "No challenge found" });
+    const harness = mountInteractive({
+      handlers: commandHandlers,
+      signal: new AbortController().signal,
+      capabilities: { columns: 100, rows: 60, color: true },
+    });
+    try {
+      await settle();
+      harness.stdin.send("/auth status\r");
+      await settle();
+      harness.stdin.send("/find\r");
+      await settle();
+      harness.stdin.send(upArrow());
+      await settle();
+      harness.stdin.send(downArrow());
+      await settle();
+      expect(harness.lastFrame()).toContain("/mission accept --id rec-42");
+      harness.stdin.send(enterKey());
+      await settle();
+      harness.stdin.send(enterKey());
+      await settle();
+      harness.stdin.send(enterKey());
+      await settle();
+      const afterFrame = harness.lastFrame();
+      expect(afterFrame).toContain("No challenge found");
+      expect(afterFrame).not.toContain("/mission accept --id rec-42");
+    } finally {
+      harness.unmount();
+    }
+  });
 
   it("routes Return through focused-action handling before generic prompt execution", async () => {
     const commandHandlers = handlers();
