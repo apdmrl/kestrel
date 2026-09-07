@@ -18,6 +18,12 @@
   full-screen clears on each keystroke. Batched Enter input clears the prompt correctly, and
   authentication configuration failures retain their actual setup action instead of collapsing
   to a circular `Run /auth login` message.
+- Persistent-shell navigation has one visible focus owner as movement shifts between
+  the prompt, sidebar, and contextual actions; the terminal-aware layout keeps frame
+  and prompt geometry stable while navigating.
+- GitHub Find sends its alternative labels as a GitHub OR label query and fetches only
+  the configured bounded page budget.
+- An empty Find result clears any prior recommendation, including its stale accept action.
 - `auth status` validates the stored token against GitHub and never mutates credentials;
   `auth logout` refuses without an explicit confirmation because it clears the shared
   `github.com` credential that `git` and `gh` also read.
