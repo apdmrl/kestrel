@@ -159,14 +159,6 @@ export function TranscriptLine({ entry }: { readonly entry: TranscriptEntry }) {
   );
 }
 
-/**
- * Local focus model for the interactive session. Until Task 5 replaces
- * this with the reducer-driven state machine, the Session owns its own
- * minimal transient state: which category is selected, whether the
- * sidebar / action panel / prompt has focus, and which contextual action
- * is currently armed.
- */
-type SessionFocus = "prompt" | "sidebar" | "actions";
 
 export function Session({
   handlers,
@@ -221,15 +213,18 @@ export function Session({
   const commandQueue = useRef<string[]>([]);
   const drainingQueue = useRef(false);
 
-  // Transient navigation state. Task 5 replaces this with `sessionReducer`.
-  const initialCategoryIndex = initialCategory !== undefined
-    ? Math.max(0, NAVIGATION_SECTIONS.findIndex((section) => section.id === initialCategory))
-    : 0;
-  const [selectedCategoryIndex, setSelectedCategoryIndex] = useState(initialCategoryIndex);
-  const [focus, setFocus] = useState<SessionFocus>("prompt");
-  const [selectedActionIndex, setSelectedActionIndex] = useState(0);
-  const [actionFocused, setActionFocused] = useState(false);
-  const [reducerState, dispatch] = useReducer(sessionReducer, undefined, initialSessionState);
+  const initialCategoryIndex = initialCategory === undefined
+    ? 0
+    : Math.max(0, NAVIGATION_SECTIONS.findIndex((section) => section.id === initialCategory));
+  const initialSection = NAVIGATION_SECTIONS[initialCategoryIndex] ?? NAVIGATION_SECTIONS[0];
+  const [reducerState, dispatch] = useReducer(
+    sessionReducer,
+    { sectionId: initialSection?.id ?? "home", index: initialCategoryIndex },
+    initialSessionState,
+  );
+  const selectedCategoryIndex = reducerState.selectedSectionIndex;
+  const focus = reducerState.focus;
+  const selectedActionIndex = reducerState.selectedActionIndex;
   const authState: SessionAuthState = reducerState.auth;
   const activeOperation = useRef<{ controller: AbortController; dispose: () => void } | null>(null);
   // `admissionSlot` is the synchronous admission state. The slot is a
@@ -342,22 +337,12 @@ export function Session({
     onExit?.();
     exit();
   };
-  // Home is the dashboard root. Selecting Home clears the prompt,
-  // returns focus to the prompt, drops the action panel focus, and
-  // discards any pending recommendation through the reducer's
-  // HOME_SELECTED event. The reducer is the authoritative source for
-  // the recommendation / operation / input state; the local React
-  // transient state mirrors it so the dashboard re-renders the Home
-  // selection immediately. Both the sidebar Home Enter path and the
-  // raw Home escape sequence (`\x1b[H`, `\x1bOH`, `\x1b[1~`) share
-  // this single transition so they cannot drift apart.
+  // Home is the dashboard root. Both the sidebar and raw Home-key paths
+  // share the reducer event so navigation, pending recommendations, and
+  // prompt focus cannot drift.
   const selectHome = (): void => {
     dispatch({ type: "HOME_SELECTED" });
     setInput("");
-    setSelectedCategoryIndex(0);
-    setSelectedActionIndex(0);
-    setFocus("prompt");
-    setActionFocused(false);
   };
   const submit = async (commandOverride?: string): Promise<void> => {
     const hasCommandOverride = commandOverride !== undefined;
@@ -628,53 +613,52 @@ export function Session({
     (character, key) => {
       const typed = typeof character === "string" ? character : "";
       const keyFlags = key ?? {};
-      // Navigation keys (↑/↓) move focus into the sidebar from the prompt,
-      // cycle categories while the sidebar has focus, and cycle actions while
-      // the action panel has focus. No second key convention is introduced.
+      if (typed === "\u001b[H" || typed === "\u001bOH" || typed === "\u001b[1~") {
+        selectHome();
+        return;
+      }
       if (keyFlags.upArrow) {
         if (focus === "actions") {
-          setSelectedActionIndex((i) =>
+          const index =
             contextActions.length === 0
               ? 0
-              : (i - 1 + contextActions.length) % contextActions.length,
-          );
+              : (clampedActionIndex - 1 + contextActions.length) % contextActions.length;
+          dispatch({ type: "ACTION_SELECTED", index });
           return;
         }
         if (focus === "prompt") {
-          setFocus("sidebar");
-          setActionFocused(true);
+          dispatch({ type: "FOCUS_CHANGED", focus: "sidebar" });
           return;
         }
-        setSelectedCategoryIndex((i) => (i - 1 + NAVIGATION_SECTIONS.length) % NAVIGATION_SECTIONS.length);
-        setSelectedActionIndex(0);
+        const index =
+          (selectedCategoryIndex - 1 + NAVIGATION_SECTIONS.length) % NAVIGATION_SECTIONS.length;
+        const section = NAVIGATION_SECTIONS[index];
+        if (section !== undefined) {
+          dispatch({ type: "SECTION_SELECTED", sectionId: section.id, index });
+        }
         return;
       }
       if (keyFlags.downArrow) {
         if (focus === "actions") {
-          setSelectedActionIndex((i) =>
+          const index =
             contextActions.length === 0
               ? 0
-              : (i + 1) % contextActions.length,
-          );
+              : (clampedActionIndex + 1) % contextActions.length;
+          dispatch({ type: "ACTION_SELECTED", index });
           return;
         }
         if (focus === "prompt") {
-          setFocus("sidebar");
-          setActionFocused(true);
+          dispatch({ type: "FOCUS_CHANGED", focus: "sidebar" });
           return;
         }
-        setSelectedCategoryIndex((i) => (i + 1) % NAVIGATION_SECTIONS.length);
-        setSelectedActionIndex(0);
+        const index = (selectedCategoryIndex + 1) % NAVIGATION_SECTIONS.length;
+        const section = NAVIGATION_SECTIONS[index];
+        if (section !== undefined) {
+          dispatch({ type: "SECTION_SELECTED", sectionId: section.id, index });
+        }
         return;
       }
-      // Route Ink Return (`\r`, `\n`, key.return) through focus/action
-      // handling BEFORE generic prompt execution. When focus is sidebar or
-      // actions the user expects Enter to fill an action, not submit the
-      // (empty) prompt buffer.
-      const isReturnKey =
-        typed === "\r" ||
-        typed === "\n" ||
-        keyFlags.return === true;
+      const isReturnKey = typed === "\r" || typed === "\n" || keyFlags.return === true;
       if (!isReturnKey) {
         const lineBreak = typed.search(/[\r\n]/u);
         if (lineBreak >= 0) {
@@ -691,68 +675,33 @@ export function Session({
       }
       const transition = sessionInputTransition(input, typed, keyFlags, busy);
       if (transition.cancel) {
-        // Busy Ctrl+C aborts only the foreground child operation; the
-        // session remains active so the user can run another command.
-        // Idle Ctrl+C clears the prompt buffer.
         if (admissionSlot.current.running && activeOperation.current !== null) {
           activeOperation.current.controller.abort();
         }
         return;
       }
       if (transition.submit) {
-        // Enter semantics depend on the active focus.
         if (focus === "actions") {
           const action = contextActions[clampedActionIndex];
           if (action !== undefined && action.availability.status === "enabled") {
             setInput(action.command);
-            setFocus("prompt");
-            setActionFocused(false);
+            dispatch({ type: "FOCUS_CHANGED", focus: "prompt" });
           }
-          // Disabled actions: leave the prompt untouched. The reason /
-          // recovery text is rendered through the ContextActions panel; the
-          // user reads it from the sidebar without ever calling a handler.
           return;
         }
-        // Home has zero contextual actions, so the generic
-        // sidebar-Enter branch above would fall through to `submit()`
-        // and either no-op an empty prompt or submit a typed command
-        // — neither is what Home means. Handle Home explicitly: the
-        // dashboard root must select Home, return focus to the prompt,
-        // and dispatch HOME_SELECTED so a stale recommendation is
-        // cleared through the reducer.
         if (focus === "sidebar" && activeSectionId === "home") {
           selectHome();
           return;
         }
         if (focus === "sidebar" && contextActions.length > 0) {
-          setFocus("actions");
-          setActionFocused(true);
-          setSelectedActionIndex(0);
+          dispatch({ type: "ACTION_SELECTED", index: 0 });
+          dispatch({ type: "FOCUS_CHANGED", focus: "actions" });
           return;
         }
         void submit();
         return;
       }
       setInput(transition.nextInput);
-    },
-    { isActive: true },
-  );
-
-  // Home key is delivered by Ink as the raw escape sequence `\x1b[H` /
-  // `\x1bOH`. Listen through a second hook so the brief's "Home clears the
-  // prompt and restores the dashboard" contract is honored without adding
-  // a second key convention.
-  useInput(
-    (character) => {
-      const typed = typeof character === "string" ? character : "";
-      if (typed === "\u001b[H" || typed === "\u001bOH" || typed === "\u001b[1~") {
-        // Share the same Home-selection transition as the sidebar Home
-        // Enter path so a single source of truth governs the dashboard
-        // root state. The reducer's HOME_SELECTED event clears the
-        // pending recommendation, the operation, and the prompt buffer
-        // atomically with the local focus / category / action reset.
-        selectHome();
-      }
     },
     { isActive: true },
   );
@@ -827,7 +776,7 @@ export function Session({
       capabilities={capabilities}
       contextActions={contextActions}
       selectedActionIndex={clampedActionIndex}
-      actionFocused={actionFocused}
+      actionFocused={focus === "actions"}
       entries={renderableEntries}
     />
   );

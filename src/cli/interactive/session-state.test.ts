@@ -884,4 +884,12 @@ describe("initialSessionState", () => {
     expect(state.selectedSectionIndex).toBe(0);
     expect(state.selectedActionIndex).toBe(0);
   });
+
+  it("seeds navigation selection without depending on terminal navigation definitions", () => {
+    const state = initialSessionState({ sectionId: "find", index: 1 });
+    expect(state.activeSectionId).toBe("find");
+    expect(state.selectedSectionIndex).toBe(1);
+    expect(state.selectedActionIndex).toBe(0);
+    expect(state.focus).toBe("prompt");
+  });
 });

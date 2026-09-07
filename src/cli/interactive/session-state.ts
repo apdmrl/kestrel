@@ -92,16 +92,21 @@ export function isLoginCommand(command: string): boolean {
   const trimmed = command.trim();
   return trimmed === "/auth login" || trimmed.startsWith("/auth login ");
 }
-export function initialSessionState(): SessionState {
+export function initialSessionState(
+  initialNavigation: { readonly sectionId: string; readonly index: number } = {
+    sectionId: INITIAL_AUTH_SECTION_ID,
+    index: 0,
+  },
+): SessionState {
   return {
     auth: { status: "checking", attemptId: INITIAL_ATTEMPT_ID },
     operation: { status: "idle" },
     latestRecommendation: null,
     input: "",
     transcript: [],
-    activeSectionId: INITIAL_AUTH_SECTION_ID,
+    activeSectionId: initialNavigation.sectionId,
     focus: "prompt",
-    selectedSectionIndex: 0,
+    selectedSectionIndex: initialNavigation.index,
     selectedActionIndex: 0,
   };
 }

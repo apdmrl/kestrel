@@ -1156,6 +1156,72 @@ describe("DashboardShell wide-pane + production ContextActions", () => {
     ).toBeLessThanOrEqual(24);
   });
 
+  it("keeps a stable prompt row while windowing the selected action", () => {
+    const props = {
+      status: "Ready",
+      title: "Mission Control",
+      subtitle: "Welcome back",
+      sessionStatus: "active",
+      mission: {
+        title: "No active mission",
+        description: "Discover a challenge or resume your current engineering work.",
+        suggestions: DEFAULT_MISSION_SUGGESTIONS,
+      },
+      stats: [],
+      quickCommands: DEFAULT_QUICK_COMMANDS,
+      input: "",
+      busy: false,
+      placeholder: "Type a command…",
+      capabilities: wide,
+    };
+    const home = render(<DashboardShell {...props} contextActions={[]} />);
+    const homeFrame = home.lastFrame() ?? "";
+    home.unmount();
+    const actions = render(
+      <DashboardShell
+        {...props}
+        contextActions={buildContextActions(6, true)}
+        selectedActionIndex={5}
+        actionFocused
+      />,
+    );
+    const actionsFrame = actions.lastFrame() ?? "";
+    expect(actionsFrame).toContain("ACTIONS 6/6");
+    expect(actionsFrame).toContain("Action 5");
+    expect(actionsFrame.split("\n").length).toBe(homeFrame.split("\n").length);
+    expect(
+      actionsFrame.split("\n").findIndex((line) => line.includes("Type a command…")),
+    ).toBe(homeFrame.split("\n").findIndex((line) => line.includes("Type a command…")));
+  });
+
+  it("keeps disabled recovery text visible in a compact action viewport", () => {
+    const { lastFrame } = render(
+      <DashboardShell
+        status="Ready"
+        title="Mission Control"
+        subtitle="Welcome back"
+        sessionStatus="active"
+        mission={{
+          title: "No active mission",
+          description: "Discover a challenge or resume your current engineering work.",
+          suggestions: DEFAULT_MISSION_SUGGESTIONS,
+        }}
+        stats={[]}
+        quickCommands={DEFAULT_QUICK_COMMANDS}
+        input=""
+        busy={false}
+        placeholder="Type a command…"
+        capabilities={narrowWidth}
+        contextActions={buildContextActions(6, true)}
+        selectedActionIndex={0}
+        actionFocused
+      />,
+    );
+    const frame = lastFrame() ?? "";
+    expect(frame).toContain("GitHub auth is required");
+    expect(frame).toContain("/auth login");
+  });
+
   it("ContextActions with 6 actions renders more total rows than with 2 actions", () => {
     const a = render(
       <Box width={80}>

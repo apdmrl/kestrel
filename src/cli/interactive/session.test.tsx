@@ -249,6 +249,84 @@ describe("persistent session — keyboard navigation", () => {
     }
   });
 
+  it("keeps exactly one visible focus owner", async () => {
+    const harness = mountInteractive({
+      handlers: handlers(),
+      signal: new AbortController().signal,
+      capabilities: { columns: 80, rows: 24, color: true },
+    });
+    try {
+      await settle();
+      harness.stdin.send(downArrow());
+      await settle();
+      harness.stdin.send(downArrow());
+      await settle();
+      const sidebarFrame = harness.lastFrame();
+      expect((sidebarFrame.match(/>/gu) ?? [])).toHaveLength(1);
+      expect(sidebarFrame).toMatch(/>\*-\s+Find/u);
+      expect(sidebarFrame).not.toMatch(/>\*-\s+Find a challenge/u);
+
+      harness.stdin.send(enterKey());
+      await settle();
+      const actionsFrame = harness.lastFrame();
+      expect((actionsFrame.match(/>/gu) ?? [])).toHaveLength(1);
+      expect(actionsFrame).toMatch(/>\*x\s+Find a challenge/u);
+      expect(actionsFrame).not.toMatch(/>\*-\S+\s+Find/u);
+    } finally {
+      harness.unmount();
+    }
+  });
+
+  it.each([
+    { columns: 59, rows: 24 },
+    { columns: 80, rows: 19 },
+  ])("compact navigation shows the focused section at $columns×$rows", async ({ columns, rows }) => {
+    const harness = mountInteractive({
+      handlers: handlers(),
+      signal: new AbortController().signal,
+      capabilities: { columns, rows, color: true },
+    });
+    try {
+      await settle();
+      harness.stdin.send(downArrow());
+      await settle();
+      expect(harness.lastFrame()).toMatch(/>\*-\s+Home/u);
+    } finally {
+      harness.unmount();
+    }
+  });
+
+  it("keeps the prompt row stable while moving through action sections", async () => {
+    const harness = mountInteractive({
+      handlers: handlers(),
+      signal: new AbortController().signal,
+      capabilities: { columns: 80, rows: 24, color: true },
+    });
+    try {
+      await settle();
+      harness.stdin.send("/progress\r");
+      await settle();
+      harness.stdin.send(downArrow());
+      await settle();
+      const frames = [harness.lastFrame()];
+      for (let index = 0; index < 3; index += 1) {
+        harness.stdin.send(downArrow());
+        await settle();
+        frames.push(harness.lastFrame());
+      }
+      const heights = frames.map((frame) => frame.split("\n").length);
+      const promptRows = frames.map((frame) =>
+        frame.split("\n").findIndex((line) => line.includes("Type a command…")),
+      );
+      expect(new Set(heights).size).toBe(1);
+      expect(new Set(promptRows).size).toBe(1);
+      expect(frames.at(-1)).toContain("Create handoff");
+      expect(frames.at(-1)).toContain("› /progress");
+    } finally {
+      harness.unmount();
+    }
+  });
+
   it("keeps the recommendation ID actionable after connected auth", async () => {
     const recommendation: ViewModel = {
       kind: "recommendation",
@@ -855,18 +933,12 @@ const FIND_RECOVERY_AUTH_STATUS =
   /GitHub authentication is not verified[\s\S]{0,400}\/auth\s+status/u;
 const FIND_RECOVERY_AUTH_LOGIN =
   /GitHub authentication is not verified[\s\S]{0,400}\/auth[\s\S]{0,10}login/u;
-// Regexes that match the rendered Home row of the sidebar. The Home row
-// sits at section index 0 with the `⌂` icon, so the marker is followed
-// by the icon glyph and at least one whitespace before the label.
-// `HOME_FOCUSED`  → sidebar focus + selection + enabled on Home
-//                    (`>*-⌂  Home`).
-// `HOME_SELECTED` → selection + enabled on Home without focus
-//                    (`*-⌂  Home`).
-const HOME_FOCUSED = />\*-\S+\s+Home/u;
-// `FIND_FOCUSED` → sidebar focus + selection on the Find row
-//                  (`>*-⌕  Find`).
-const FIND_FOCUSED = />\*-\S+\s+Find/u;
-const HOME_SELECTED = /\*-\S+\s+Home/u;
+// Regexes for the visible sidebar focus and selection markers. The label
+// immediately follows its marker in compact and full layouts; the icon
+// remains a trailing visual cue.
+const HOME_FOCUSED = />\*-\s+Home/u;
+const FIND_FOCUSED = />\*-\s+Find/u;
+const HOME_SELECTED = /\*-\s+Home/u;
 
 describe("Session — auth failure routing (reducer-driven)", () => {
   afterEach(() => cleanup());
