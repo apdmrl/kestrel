@@ -461,9 +461,10 @@ describe("DashboardShell row budget", () => {
       );
       const frame = lastFrame() ?? "";
       const actualRows = frame.split("\n").length;
-      expect(actualRows, `expected ≤${capabilities.rows} rows at ${label}, got ${actualRows}`).toBeLessThanOrEqual(
-        capabilities.rows,
-      );
+      expect(
+        actualRows,
+        `expected <${capabilities.rows} rows at ${label}, got ${actualRows}`,
+      ).toBeLessThan(capabilities.rows);
     });
   }
 
@@ -834,7 +835,7 @@ describe("DashboardShell entries row budget (criticality-preserving)", () => {
     // accommodate it alongside the auth device payload and the
     // recommendation ID.
     const frame = lastFrame() ?? "";
-    expect(frame.split("\n").length).toBeLessThanOrEqual(wide.rows);
+    expect(frame.split("\n").length).toBeLessThan(wide.rows);
     expect(frame).toContain("ABCD-1234");
     expect(frame).toContain("rec-42");
     expect(frame).toContain("/mission accept --id rec-42");
@@ -909,8 +910,8 @@ describe("DashboardShell entries row budget (criticality-preserving)", () => {
       const actualRows = frame.split("\n").length;
       expect(
         actualRows,
-        `expected ≤${capabilities.rows} rows at ${label}, got ${actualRows}`,
-      ).toBeLessThanOrEqual(capabilities.rows);
+        `expected <${capabilities.rows} rows at ${label}, got ${actualRows}`,
+      ).toBeLessThan(capabilities.rows);
       // Critical substrings (URI user code, rec id, accept command) are retained.
       expect(frame).toContain("ABCD-1234");
       expect(frame).toContain("rec-42");
@@ -979,44 +980,6 @@ describe("DashboardShell entries row budget (criticality-preserving)", () => {
     expect(frame).toContain("/mission accept --id rec-42");
     // Older fillers must be dropped; the first one is far above the budget.
     expect(frame).not.toContain("filler line 0");
-  });
-  it("never lets the critical entry's text exceed a single bounded row inside the frame", () => {
-    // The bounded critical representation always fits in 1 row even
-    // when the original entry is multiline. This guarantees the total
-    // frame never exceeds the row budget because of an oversized
-    // critical entry.
-    const full = "Error [DM_NETWORK_UNAVAILABLE]: GitHub is unreachable\n" +
-      "- Retry once you have network connectivity\n" +
-      "- Run /auth status to continue.";
-    const input: RenderableTranscriptEntry[] = [];
-    input.push({
-      id: 1,
-      text: full,
-      kind: "error",
-      criticality: "critical",
-      rows: estimateEntryRows(full, "error", 80),
-    });
-    for (let i = 0; i < 5; i += 1) {
-      input.push({
-        id: 100 + i,
-        text: `tail line ${i}`,
-        kind: "output",
-        criticality: "noncritical",
-        rows: estimateEntryRows(`tail line ${i}`, "output", 80),
-      });
-    }
-    const visible = windowTranscriptEntries(
-      input,
-      availableTranscriptRows({ columns: 80, rows: 24, color: true }),
-    );
-    const criticalSurvived = visible.find((entry) => entry.id === 1);
-    expect(criticalSurvived).toBeDefined();
-    // The bounded critical text always fits in a single visual row
-    // (no embedded newlines in `renderBoundedCritical`). The entry's
-    // `rows` counter reflects the 2 actual rendered rows (margin-top
-    // + bounded text) so the windowing helper leaves enough slack.
-    expect(criticalSurvived?.text).not.toContain("\n");
-    expect(criticalSurvived?.text).toMatch(/Run\s+\/auth/u);
   });
 });
 
@@ -1384,6 +1347,20 @@ describe("windowTranscriptEntries (bounded critical retention)", () => {
     }
   });
 
+  it("keeps a complete actionable error when the row budget can render it", () => {
+    const text = [
+      "Error [DM_GITHUB_AUTH_REQUIRED]: GitHub authentication is not configured",
+      "- Set GITHUB_CLIENT_ID and run the command again",
+      "Run /auth login to continue.",
+    ].join("\n");
+    const list = [entry(1, text, "critical", "error", estimateEntryRows(text, "error", 80))];
+
+    const visible = windowTranscriptEntries(list, 20, 80);
+
+    expect(visible).toHaveLength(1);
+    expect(visible[0]?.text).toBe(text);
+  });
+
   it("renders a bounded critical representation when the critical entry itself exceeds the budget", () => {
     const text =
       "Open https://github.com/login/device and enter ABCDE-12345 to authenticate your session";
@@ -1729,7 +1706,7 @@ describe("windowTranscriptEntries — typed device-authorization metadata", () =
     const verificationUri = "https://github.enterprise.example.com/login/device";
     const userCode = "WXYZ-9876";
     const list: RenderableTranscriptEntry[] = [deviceEntry(1, verificationUri, userCode, 10)];
-    const visible = windowTranscriptEntries(list, 3);
+    const visible = windowTranscriptEntries(list, 3, 36);
     expect(visible).toHaveLength(1);
     const bounded = visible[0];
     expect(bounded?.text).toContain(verificationUri);

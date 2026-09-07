@@ -303,12 +303,16 @@ export function windowTranscriptEntries(
         /Recommendation ID:\s*\S+/u.test(entry.text) ||
         /\/mission\s+accept\s+--id\s+\S+/u.test(entry.text),
     );
+  const latestError = [...entries].reverse().find((entry) => entry.kind === "error");
   const latestRecovery = [...entries]
     .reverse()
     .find((entry) => /Run\s+\/auth\s+(login|status)\s+to\s+continue/u.test(entry.text));
-  const criticalEntries = [latestAuthDevice, latestRecommendation, latestRecovery].filter(
-    (entry): entry is RenderableTranscriptEntry => entry !== undefined,
-  );
+  const criticalEntries: RenderableTranscriptEntry[] = [];
+  for (const entry of [latestAuthDevice, latestRecommendation, latestError, latestRecovery]) {
+    if (entry !== undefined && !criticalEntries.some((candidate) => candidate.id === entry.id)) {
+      criticalEntries.push(entry);
+    }
+  }
   return finalizeWindowedEntries(entries, criticalEntries, rowBudget, paneWidth);
 }
 
@@ -321,15 +325,20 @@ function finalizeWindowedEntries(
   let remaining = rowBudget;
   const criticalBounded = new Map<number, RenderableTranscriptEntry>();
   for (const entry of criticalEntries) {
+    const measured = {
+      ...entry,
+      rows: estimateEntryRows(entry.text, entry.kind, paneWidth),
+    };
     const text = renderBoundedCritical(entry);
     const bounded = {
       ...entry,
       text,
       rows: estimateEntryRows(text, entry.kind, paneWidth),
     };
-    if (bounded.rows <= remaining) {
-      criticalBounded.set(entry.id, bounded);
-      remaining -= bounded.rows;
+    const selected = measured.rows <= remaining ? measured : bounded;
+    if (selected.rows <= remaining) {
+      criticalBounded.set(entry.id, selected);
+      remaining -= selected.rows;
     }
   }
 
@@ -362,10 +371,9 @@ function finalizeWindowedEntries(
   return result;
 }
 function renderBoundedCritical(entry: RenderableTranscriptEntry): string {
-  // Always render a single-line bounded representation. The original
-  // entry may be many rows; the bounded slot is always 1 row of chrome
-  // so the total frame stays within the row budget. The bounded text
-  // preserves the required URI / user code or exact recommendation ID.
+  // Preserve the most useful single-line representation when an entry cannot
+  // fit in full. Errors lead with their diagnostic instead of a generic
+  // recovery command that may only repeat the command which just failed.
   const lines = entry.text.split("\n");
   // Prefer a real bounded form that keeps the user-actionable
   // information: the verification URI + user code, the recommendation
@@ -378,6 +386,9 @@ function renderBoundedCritical(entry: RenderableTranscriptEntry): string {
   // metadata.
   if (entry.metadata?.kind === "device-authorization") {
     return `${entry.metadata.verificationUri} (code ${entry.metadata.userCode})`;
+  }
+  if (entry.kind === "error") {
+    return lines.find((line) => line.trim().length > 0) ?? entry.text;
   }
   if (/Recommendation ID:\s*\S+/u.test(entry.text)) {
     const id = entry.text.match(/Recommendation ID:\s*(\S+)/u);
@@ -558,7 +569,9 @@ export function availableTranscriptRows(
     footerRows +
     chrome.contextActionRows +
     2;
-  return Math.max(0, caps.rows - fixed);
+  // Ink clears the entire terminal when output height is equal to the viewport.
+  // Keep one safety row so keystroke updates stay on its in-place render path.
+  return Math.max(0, caps.rows - fixed - 1);
 }
 
 const SECTION_ICONS: Readonly<Record<string, { readonly icon: string; readonly accent: Accent }>> = {

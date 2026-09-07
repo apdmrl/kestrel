@@ -80,9 +80,16 @@ function authStatusText(view: Extract<ViewModel, { kind: "auth-status" }>): Sess
   }
 }
 
-function authErrorToRecovery(code: string): string | undefined {
-  switch (code) {
+function authErrorToRecovery(
+  view: Extract<ViewModel, { kind: "error" }>,
+): string | undefined {
+  switch (view.code) {
     case "DM_GITHUB_AUTH_REQUIRED":
+      return view.suggestedActions.some((action) =>
+        translateShellAuthCommand(action).includes(AUTH_LOGIN),
+      )
+        ? AUTH_LOGIN
+        : undefined;
     case "DM_GITHUB_AUTH_EXPIRED":
       return AUTH_LOGIN;
     case "DM_GITHUB_AUTH_CANCELLED":
@@ -101,7 +108,7 @@ function renderSessionError(view: Extract<ViewModel, { kind: "error" }>): Sessio
   if (view.code === "DM_GITHUB_AUTH_CANCELLED") {
     return { kind: "output", text: view.userMessage };
   }
-  const recovery = authErrorToRecovery(view.code);
+  const recovery = authErrorToRecovery(view);
   const header = `Error [${view.code}]: ${view.userMessage}`;
   const lines: string[] = [header];
   // Track canonical lines (without a leading bullet) for each rendered

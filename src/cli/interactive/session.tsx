@@ -682,7 +682,7 @@ export function Session({
           const first = input + (lines.shift() ?? "");
           const remainder = lines.pop() ?? "";
           const commands = [first, ...lines];
-          if (remainder.length > 0) setInput(remainder);
+          setInput(remainder);
           queueMicrotask(() => {
             void drainQueue(commands);
           });

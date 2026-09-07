@@ -464,6 +464,26 @@ describe("session auth interaction — prompt clearing on synchronous admission"
     }
   });
 
+  it("clears an existing prompt prefix when the final input chunk includes Enter", async () => {
+    const commandHandlers = handlers();
+    const harness = mount({
+      handlers: commandHandlers,
+      signal: new AbortController().signal,
+    });
+    try {
+      await settle();
+      harness.stdin.send("/auth ");
+      await settle();
+      harness.stdin.send("login\r");
+      await settle(120);
+
+      expect(commandHandlers.authLogin).toHaveBeenCalledTimes(1);
+      expect(harness.lastFrame()).toContain("Type a command");
+    } finally {
+      harness.unmount();
+    }
+  });
+
   it("preserves the queued CR-chunk remainder in the prompt until the next Enter", async () => {
     // When the user pastes multi-line input, the Enter (CR) splits the
     // chunk into the first command and a separately queued remainder.

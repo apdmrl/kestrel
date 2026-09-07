@@ -91,6 +91,25 @@ describe("renderSessionView — error", () => {
     });
   });
 
+  it("does not turn a missing GitHub client configuration into a circular login recovery", () => {
+    const configurationError = createKestrelError({
+      code: "DM_GITHUB_AUTH_REQUIRED",
+      category: "USER_ACTION_REQUIRED",
+      userMessage: "GitHub authentication is not configured",
+      suggestedActions: ["Set GITHUB_CLIENT_ID and run the command again"],
+      retryability: "NO_RETRY",
+      recoveryStrategy: "USER_ACTION",
+      severity: "ERROR",
+    });
+
+    const rendered = renderSessionView(errorViewModel(configurationError));
+
+    expect(rendered.text).toContain("GitHub authentication is not configured");
+    expect(rendered.text).toContain("Set GITHUB_CLIENT_ID and run the command again");
+    expect(rendered.text).not.toContain("Run /auth login to continue.");
+    expect(rendered.recoveryCommand).toBeUndefined();
+  });
+
   it("maps DM_GITHUB_AUTH_EXPIRED to /auth login recovery", () => {
     expect(renderSessionView(errorViewModel(AUTH_EXPIRED_ERROR))).toMatchObject({
       text: expect.not.stringContaining("kestrel auth login"),

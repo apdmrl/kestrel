@@ -14,6 +14,10 @@
   `data:`, or a `https://github.com@evil.example/` impersonation.
 - Device-flow guidance is now a view model delivered through a callback rather than a raw
   stderr write, so the Ink session renders it in the transcript instead of tearing the frame.
+- The persistent shell now keeps every frame shorter than the terminal viewport, avoiding
+  full-screen clears on each keystroke. Batched Enter input clears the prompt correctly, and
+  authentication configuration failures retain their actual setup action instead of collapsing
+  to a circular `Run /auth login` message.
 - `auth status` validates the stored token against GitHub and never mutates credentials;
   `auth logout` refuses without an explicit confirmation because it clears the shared
   `github.com` credential that `git` and `gh` also read.
