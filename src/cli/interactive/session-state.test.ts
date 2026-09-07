@@ -719,7 +719,13 @@ describe("session reducer", () => {
       cancellable: true,
     });
     const home = sessionReducer(
-      { ...started, activeSectionId: "find", selectedSectionIndex: 1, selectedActionIndex: 2, focus: "actions" },
+      {
+        ...started,
+        activeSectionId: "find",
+        selectedSectionIndex: 1,
+        selectedActionIndex: 2,
+        focus: "actions",
+      },
       { type: "HOME_SELECTED" },
     );
     expect(home.auth).toEqual({ status: "logging-in", phase: "starting" });
@@ -745,7 +751,13 @@ describe("session reducer", () => {
       cancellable: true,
     });
     const homeWhileBusy = sessionReducer(
-      { ...started, activeSectionId: "find", selectedSectionIndex: 1, selectedActionIndex: 2, focus: "actions" },
+      {
+        ...started,
+        activeSectionId: "find",
+        selectedSectionIndex: 1,
+        selectedActionIndex: 2,
+        focus: "actions",
+      },
       { type: "HOME_SELECTED" },
     );
     expect(homeWhileBusy.auth).toEqual({ status: "connected", login: "octocat" });

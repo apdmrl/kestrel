@@ -352,7 +352,12 @@ export function Session({
     const originalRead = stdin.read;
     stdin.read = ((size?: number) => {
       const chunk = originalRead.call(stdin, size);
-      const raw = typeof chunk === "string" ? chunk : Buffer.isBuffer(chunk) ? chunk.toString() : "";
+      const raw =
+        typeof chunk === "string"
+          ? chunk
+          : Buffer.isBuffer(chunk)
+            ? chunk.toString()
+            : "";
       if (raw === "\u001b[H" || raw === "\u001bOH" || raw === "\u001b[1~") {
         selectHome();
         return null;
