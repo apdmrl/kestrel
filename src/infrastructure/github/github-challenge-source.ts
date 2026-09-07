@@ -6,7 +6,10 @@ import type { SearchIntent } from "../../domain/discovery/search-intent.js";
 import type { Clock } from "../../ports/clock.js";
 import type { IdGenerator } from "../../ports/id-generator.js";
 import type { ChallengeSource } from "../../ports/challenge-source.js";
-import { planDiscovery } from "../../application/discovery/discovery-planner.js";
+import {
+  MAX_ENRICHMENT_BUDGET,
+  planDiscovery,
+} from "../../application/discovery/discovery-planner.js";
 import { normalizeIssue } from "./github-normalizer.js";
 import { mapGitHubError } from "./github-error-mapper.js";
 import type { OctokitLike } from "./octokit-gateway.js";
@@ -21,11 +24,12 @@ function buildQuery(query: {
   if (query.language !== undefined) {
     parts.push("language:" + query.language);
   }
-  for (const label of query.labels) {
-    parts.push("label:" + label);
-  }
-  for (const topic of query.topics) {
-    parts.push("topic:" + topic);
+  const alternatives = query.labels.length > 0 ? query.labels : query.topics;
+  if (alternatives.length > 0) {
+    parts.push(
+      (query.labels.length > 0 ? "label:" : "topic:") +
+        alternatives.map((value) => '"' + value.replace(/["\\]/gu, "\\$&") + '"').join(","),
+    );
   }
   return parts.join(" ");
 }
@@ -51,43 +55,69 @@ export class GithubChallengeSource implements ChallengeSource {
       return [];
     }
     const q = buildQuery(batch.query);
-    let response;
-    try {
-      response = await this.octokit.request("GET /search/issues", {
-        q,
-        per_page: batch.pageBudget,
-        page: 1,
-        ...(signal !== undefined ? { request: { signal } } : {}),
-      });
-    } catch (error) {
-      throw mapGitHubError(error, signal);
-    }
-    const data = response.data as { items?: Array<Record<string, unknown>> };
     const challenges: Challenge[] = [];
-    for (const raw of data.items ?? []) {
-      const repository = this.repositoryFromRaw(raw);
-      if (repository === undefined) {
-        continue;
+    const seen = new Set<string>();
+    for (
+      let page = 1;
+      page <= batch.pageBudget && challenges.length < MAX_ENRICHMENT_BUDGET;
+      page += 1
+    ) {
+      let response;
+      try {
+        response = await this.octokit.request("GET /search/issues", {
+          q,
+          per_page: MAX_ENRICHMENT_BUDGET,
+          page,
+          ...(signal !== undefined ? { request: { signal } } : {}),
+        });
+      } catch (error) {
+        throw mapGitHubError(error, signal);
       }
-      const issue = raw as {
-        id: number;
-        number: number;
-        title: string;
-        state: string;
-        labels?: { name?: string }[];
-        pull_request?: unknown;
-        html_url?: string;
-        body?: string | null;
-        created_at: string;
-        updated_at: string;
-      };
-      const normalized = normalizeIssue({
-        issue,
-        repository,
-        issueId: this.idGenerator.newChallengeId(),
-      });
-      if (normalized.kind === "challenge") {
+      const data = response.data as { items?: Array<Record<string, unknown>> };
+      const items = data.items ?? [];
+      for (const raw of items) {
+        const repository = this.repositoryFromRaw(raw);
+        if (repository === undefined) {
+          continue;
+        }
+        const issue = raw as {
+          id: number;
+          number: number;
+          title: string;
+          state: string;
+          labels?: { name?: string }[];
+          pull_request?: unknown;
+          html_url?: string;
+          body?: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        const providerIdentity = "github:" + issue.id;
+        if (seen.has(providerIdentity)) {
+          continue;
+        }
+        const normalized = normalizeIssue({
+          issue,
+          repository,
+          issueId: this.idGenerator.newChallengeId(),
+        });
+        if (normalized.kind !== "challenge") {
+          continue;
+        }
+        const canonicalUrl = normalized.challenge.source.canonicalUrl;
+        if (seen.has(canonicalUrl)) {
+          seen.add(providerIdentity);
+          continue;
+        }
+        seen.add(providerIdentity);
+        seen.add(canonicalUrl);
         challenges.push(normalized.challenge);
+        if (challenges.length === MAX_ENRICHMENT_BUDGET) {
+          break;
+        }
+      }
+      if (items.length < MAX_ENRICHMENT_BUDGET) {
+        break;
       }
     }
     return challenges;

@@ -56,7 +56,7 @@ export function planDiscovery(intent: SearchIntent): DiscoveryPlan {
   return {
     missionType,
     batches: [{ query, pageBudget }],
-    enrichmentBudget: Math.min(pageBudget, MAX_ENRICHMENT_BUDGET),
+    enrichmentBudget: MAX_ENRICHMENT_BUDGET,
     excludedIds: [...intent.exclusions],
   };
 }

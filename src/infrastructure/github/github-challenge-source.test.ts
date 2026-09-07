@@ -31,13 +31,32 @@ function intent(): SearchIntent {
   return result.value;
 }
 
+function openIssue(id: number): Record<string, unknown> {
+  return {
+    id,
+    number: id,
+    title: "Issue " + id,
+    state: "open",
+    labels: [{ name: "bug" }],
+    html_url: "https://github.com/octocat/hello-world/issues/" + id,
+    repository_url: "https://api.github.com/repos/octocat/hello-world",
+    created_at: "2026-08-01T00:00:00Z",
+    updated_at: "2026-08-02T00:00:00Z",
+  };
+}
+
 class FakeOctokit implements OctokitLike {
   searchItems: Array<Record<string, unknown>> = [];
+  searchItemsByPage: Record<number, Array<Record<string, unknown>>> = {};
   repo: Record<string, unknown> = {};
+  requests: Array<{ route: string; options: Record<string, unknown> | undefined }> = [];
 
-  async request(route: string, _options?: Record<string, unknown>) {
+  async request(route: string, options?: Record<string, unknown>) {
+    this.requests.push({ route, options });
     if (route === "GET /search/issues") {
-      return { status: 200, data: { items: this.searchItems }, headers: {} };
+      const page = options?.page;
+      const pageItems = typeof page === "number" ? this.searchItemsByPage[page] : undefined;
+      return { status: 200, data: { items: pageItems ?? this.searchItems }, headers: {} };
     }
     if (route.startsWith("GET /repos/")) {
       return { status: 200, data: this.repo, headers: {} };
@@ -77,6 +96,79 @@ describe("GithubChallengeSource", () => {
     const challenges = await source.search(intent());
     expect(challenges).toHaveLength(1);
     expect(challenges[0]?.title).toBe("Fix crash");
+  });
+
+  it("treats policy labels as alternatives", async () => {
+    const preferences = createExplicitPreferences({ preferredLanguages: ["typescript"] });
+    if (!preferences.ok) throw new Error("expected preferences");
+    const searchIntent = createSearchIntent({
+      mood: "QUICK_WIN",
+      explicitPreferences: preferences.value,
+      pageBudget: 5,
+    });
+    if (!searchIntent.ok) throw new Error("expected intent");
+
+    const octokit = new FakeOctokit();
+    const source = new GithubChallengeSource(octokit, clock, idGenerator);
+    await source.search(searchIntent.value);
+
+    expect(octokit.requests[0]?.options).toMatchObject({
+      q: 'is:issue state:open language:typescript label:"bug","bug-fix","good first issue"',
+    });
+  });
+
+  it("uses page budget with a fixed provider batch size", async () => {
+    const octokit = new FakeOctokit();
+    octokit.searchItemsByPage[1] = [
+      openIssue(1001),
+      openIssue(1002),
+      { ...openIssue(1003), pull_request: { url: "x" } },
+    ];
+    octokit.searchItemsByPage[2] = [openIssue(1004)];
+    const source = new GithubChallengeSource(octokit, clock, idGenerator);
+
+    const challenges = await source.search(intent());
+
+    expect(challenges).toHaveLength(3);
+    const searchRequests = octokit.requests.filter(
+      (request) => request.route === "GET /search/issues",
+    );
+    expect(searchRequests.map((request) => request.options?.page)).toEqual([1, 2]);
+    expect(searchRequests.map((request) => request.options?.per_page)).toEqual([3, 3]);
+  });
+
+  it("deduplicates normalized candidates across pages", async () => {
+    const octokit = new FakeOctokit();
+    octokit.searchItemsByPage[1] = [openIssue(1001), openIssue(1001), openIssue(1002)];
+    octokit.searchItemsByPage[2] = [openIssue(1002), openIssue(1002), openIssue(1003)];
+    const source = new GithubChallengeSource(octokit, clock, idGenerator);
+
+    const challenges = await source.search(intent());
+
+    expect(challenges.map((challenge) => challenge.source.externalId)).toEqual([
+      "1001",
+      "1002",
+      "1003",
+    ]);
+  });
+
+  it("forwards the same signal on every discovery request", async () => {
+    const octokit = new FakeOctokit();
+    octokit.searchItemsByPage[1] = [openIssue(1001), openIssue(1001), openIssue(1002)];
+    octokit.searchItemsByPage[2] = [openIssue(1002), openIssue(1002), openIssue(1003)];
+    const controller = new AbortController();
+    const source = new GithubChallengeSource(octokit, clock, idGenerator);
+
+    await source.search(intent(), controller.signal);
+
+    const searchRequests = octokit.requests.filter(
+      (request) => request.route === "GET /search/issues",
+    );
+    expect(searchRequests).toHaveLength(2);
+    expect(searchRequests.map((request) => request.options?.request)).toEqual([
+      { signal: controller.signal },
+      { signal: controller.signal },
+    ]);
   });
 
   it("enriches a challenge with live repository observations", async () => {
