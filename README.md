@@ -36,6 +36,8 @@ kestrel --no-browser auth login   # authenticate without opening a browser
 
 Kestrel renders the interactive session immediately and checks GitHub status for up to five seconds. It never starts login automatically. If GitHub is required, select Auth, choose `/auth login`, then press Enter again to start the device flow. Local Mission, Agent, progress, journey, and preference commands remain available while disconnected or offline; Find and Verify require an authenticated GitHub session and stay disabled until you sign in.
 
+GitHub login works without configuration: Kestrel uses its production OAuth client ID by default. To use your own GitHub OAuth app, set `GITHUB_CLIENT_ID` to a non-empty value; leading and trailing whitespace is ignored, and an empty value uses Kestrel's default.
+
 One-shot forms (`kestrel auth login`, `kestrel auth status`) are unchanged.
 
 In the interactive shell:

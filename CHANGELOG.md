@@ -6,6 +6,9 @@
   `kestrel auth logout --confirm github.com`, plus `/auth login`, `/auth status`, and
   `/auth logout` in the persistent shell. Authentication is now a deliberate action instead
   of a side effect of the first command that needs GitHub.
+- GitHub device-flow login now uses Kestrel's production OAuth client ID by default. Set a
+  non-empty `GITHUB_CLIENT_ID` to use a custom OAuth app; empty or whitespace-only values use
+  the production default.
 - The device-flow verification URI is opened in the user's browser automatically. The URI and
   user code are still printed first, so a failed or slow launch never blocks authentication.
   Suppress the launch with `--no-browser`, `KESTREL_NO_BROWSER`, or `--json`.
