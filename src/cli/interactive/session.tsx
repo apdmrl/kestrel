@@ -7,7 +7,8 @@ import {
   DEFAULT_MISSION_SUGGESTIONS,
   DEFAULT_QUICK_COMMANDS,
   estimateEntryRows,
-  classifyTranscriptEntry,
+  moveTranscriptPageOffset,
+  transcriptViewport,
   type RenderableTranscriptEntry,
   type TerminalCapabilities,
 } from "./dashboard.js";
@@ -28,13 +29,11 @@ import {
   isLoginCommand,
   sessionReducer,
   type SessionAuthState,
-  type SessionEvent,
 } from "./session-state.js";
 import type { TranscriptEntry } from "./session-view-models.js";
 
 const MAX_TRANSCRIPT_ENTRIES = 200;
 const HELP_TEXT = "Try /help for commands · /find to discover a challenge";
-const FALLBACK_CAPABILITIES: TerminalCapabilities = { columns: 80, rows: 24, color: true };
 const PROMPT_PLACEHOLDER = "Type a command…";
 const DEFAULT_STDOUT_COLUMNS = 80;
 const DEFAULT_STDOUT_ROWS = 24;
@@ -159,7 +158,6 @@ export function TranscriptLine({ entry }: { readonly entry: TranscriptEntry }) {
   );
 }
 
-
 export function Session({
   handlers,
   signal,
@@ -181,9 +179,7 @@ export function Session({
       : DEFAULT_STDOUT_COLUMNS,
   );
   const [liveRows, setLiveRows] = useState<number>(() =>
-    typeof stdout.rows === "number" && stdout.rows > 0
-      ? stdout.rows
-      : DEFAULT_STDOUT_ROWS,
+    typeof stdout.rows === "number" && stdout.rows > 0 ? stdout.rows : DEFAULT_STDOUT_ROWS,
   );
   useEffect(() => {
     const handleResize = (): void => {
@@ -211,12 +207,17 @@ export function Session({
   const [transcript, setTranscript] = useState<readonly TranscriptEntry[]>([
     { id: 1, kind: "system", text: "✓ Welcome back\n  Type /help to see commands." },
   ]);
+  const [transcriptOffsetEntries, setTranscriptOffsetEntries] = useState(0);
   const commandQueue = useRef<string[]>([]);
   const drainingQueue = useRef(false);
 
-  const initialCategoryIndex = initialCategory === undefined
+  const initialCategoryIndex =
+    initialCategory === undefined
     ? 0
-    : Math.max(0, NAVIGATION_SECTIONS.findIndex((section) => section.id === initialCategory));
+      : Math.max(
+          0,
+          NAVIGATION_SECTIONS.findIndex((section) => section.id === initialCategory),
+        );
   const initialSection = NAVIGATION_SECTIONS[initialCategoryIndex] ?? NAVIGATION_SECTIONS[0];
   const [reducerState, dispatch] = useReducer(
     sessionReducer,
@@ -227,6 +228,7 @@ export function Session({
   const focus = reducerState.focus;
   const selectedActionIndex = reducerState.selectedActionIndex;
   const authState: SessionAuthState = reducerState.auth;
+  const currentMission = reducerState.currentMission;
   const activeOperation = useRef<{ controller: AbortController; dispose: () => void } | null>(null);
   // `admissionSlot` is the synchronous admission state. The slot is a
   // pure data object so it can be reasoned about (and tested) without
@@ -253,7 +255,6 @@ export function Session({
     return () => {
       startup.dispose();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   // `submit` bumps the matching counter, captures the value, and uses
   // it as the `operationId` / `attemptId` on the dispatched event. The
@@ -261,36 +262,39 @@ export function Session({
   // operation / attempt, so supersession is implicit.
   const nextOperationId = useRef(1);
   const nextAttemptId = useRef(1);
-  const addEntry = (
-    kind: TranscriptEntry["kind"],
-    text: string,
-    metadata?: TranscriptEntry["metadata"],
-  ): void => {
+  const addEntry = (kind: TranscriptEntry["kind"], text: string): void => {
     const id = nextId.current;
     nextId.current += 1;
-    setTranscript((entries) =>
-      appendEntry(entries, metadata === undefined ? { id, kind, text } : { id, kind, text, metadata }),
-    );
+    setTranscript((entries) => appendEntry(entries, { id, kind, text }));
+    setTranscriptOffsetEntries(0);
   };
+  useEffect(() => {
+    if (signal.aborted) return;
+    let disposed = false;
+    void handlers
+      .missionCurrent({}, { signal })
+      .then((view) => {
+        if (disposed || signal.aborted) return;
+        dispatch({
+          type: "CURRENT_MISSION_RESOLVED",
+          mission: view.kind === "mission" ? view : null,
+        });
+      })
+      .catch((error: unknown) => {
+        if (disposed || signal.aborted) return;
+        addEntry("error", formatError(error));
+      });
+    return () => {
+      disposed = true;
+  };
+    // The durable mission is hydrated once. Later mission command results
+    // update the reducer directly and cannot be overwritten by this read.
+  }, []);
   // Interim guidance (device-flow instructions) must land in the transcript.
   // A raw stderr write would tear the Ink frame it renders inside. The
-  // controller delivers a `ViewModel`; route it through `renderSessionView` so
-  // auth/error/device paths use interactive slash-command recovery. The
-  // device-authorization view's typed metadata is carried through
-  // `renderSessionView` so the bounded window can keep the exact
-  // verification URI + user code without falling back to a host-specific
-  // text regex. The plain / JSON renderers are unchanged and never read
-  // this field.
-  // The notify callback is created once during the initial render.
-  // The active-operation ref tracks the operation that was
-  // admitted synchronously in `submit()` so the first
-  // onAuthorization call (which fires inside the same call frame
-  // as the OPERATION_STARTED dispatch) sees the active operation
-  // even before React re-renders. A sibling child-controller ref
-  // tracks the abort state so a late device-authorization notice
-  // (one that arrives after the user has already Ctrl+C'd) can
-  // be dropped instead of leaking the URI/code into the bounded
-  // frame.
+  // controller delivers a `ViewModel`; route it through `renderSessionView`
+  // so auth, error, and device paths use interactive slash-command recovery.
+  // The operation refs reject notices that arrive after cancellation.
   const activeOperationForNotice = useRef<{
     readonly operationId: number;
     readonly command: string;
@@ -300,12 +304,16 @@ export function Session({
     if (received.kind === "device-authorization") {
       const op = activeOperationForNotice.current;
       const childSignal = childForNotice.current?.signal;
-      if (op === null || !isLoginCommand(op.command) || (childSignal !== undefined && childSignal.aborted)) {
+      if (
+        op === null ||
+        !isLoginCommand(op.command) ||
+        (childSignal !== undefined && childSignal.aborted)
+      ) {
         return;
       }
     }
     const rendered = renderSessionView(received);
-    addEntry(rendered.kind, rendered.text, rendered.metadata);
+    addEntry(rendered.kind, rendered.text);
     if (received.kind === "device-authorization") {
       const op = activeOperationForNotice.current;
       if (op !== null && isLoginCommand(op.command)) {
@@ -353,13 +361,13 @@ export function Session({
     stdin.read = ((size?: number) => {
       const chunk = originalRead.call(stdin, size);
       const raw =
-        typeof chunk === "string"
-          ? chunk
-          : Buffer.isBuffer(chunk)
-            ? chunk.toString()
-            : "";
+        typeof chunk === "string" ? chunk : Buffer.isBuffer(chunk) ? chunk.toString() : "";
       if (raw === "\u001b[H" || raw === "\u001bOH" || raw === "\u001b[1~") {
         selectHome();
+        return null;
+      }
+      if (raw === "\u001b[F" || raw === "\u001bOF" || raw === "\u001b[4~") {
+        setTranscriptOffsetEntries(0);
         return null;
       }
       return chunk;
@@ -397,6 +405,7 @@ export function Session({
     if (parsed.kind === "clear") {
       addEntry("input", commandText);
       setTranscript([]);
+      setTranscriptOffsetEntries(0);
       if (!hasCommandOverride) setInput("");
       return;
     }
@@ -430,6 +439,7 @@ export function Session({
     // The exact recommendation accept command must remain in the typed
     // command line of the transcript — `commandText` is already the trimmed
     // raw input the user typed, so we pass it through verbatim.
+    setTranscriptOffsetEntries(0);
     addEntry("input", commandText);
     // Restore prompt clearing for ordinary interactive submit: the user
     // typed a command and pressed Enter, the synchronous guard passed,
@@ -469,9 +479,7 @@ export function Session({
     // Install the notice-channel refs synchronously so the
     // controller's first onAuthorization call sees the active
     // operation AND its child signal even before React re-renders.
-    activeOperationForNotice.current = isAuthStatus
-      ? null
-      : { operationId, command: commandText };
+    activeOperationForNotice.current = isAuthStatus ? null : { operationId, command: commandText };
     childForNotice.current = child.controller;
     const capturedOperationId = operationId;
     const capturedAttemptId = attemptId;
@@ -522,7 +530,12 @@ export function Session({
                 login: view.login,
               });
             } else if (view.detail === "EXPIRED") {
-              dispatch({ type: "AUTH_RESOLVED", attemptId: capturedAttemptId, detail: "EXPIRED", login: null });
+              dispatch({
+                type: "AUTH_RESOLVED",
+                attemptId: capturedAttemptId,
+                detail: "EXPIRED",
+                login: null,
+              });
             } else if (view.detail === "NOT_CONNECTED") {
               dispatch({
                 type: "AUTH_RESOLVED",
@@ -543,7 +556,11 @@ export function Session({
           if (commandKind === "find" && result.view.kind === "verification") {
             dispatch({ type: "FIND_COMPLETED_EMPTY", operationId: capturedOperationId });
           } else {
-            dispatch({ type: "OPERATION_SUCCEEDED", operationId: capturedOperationId, view: result.view });
+            dispatch({
+              type: "OPERATION_SUCCEEDED",
+              operationId: capturedOperationId,
+              view: result.view,
+            });
           }
         }
       }
@@ -552,7 +569,11 @@ export function Session({
       if (isAuthStatus) {
         dispatch({ type: "AUTH_FAILED", attemptId: capturedAttemptId, errorCode: "UNKNOWN" });
       } else {
-        dispatch({ type: "OPERATION_FAILED", operationId: capturedOperationId, errorCode: "UNKNOWN" });
+        dispatch({
+          type: "OPERATION_FAILED",
+          operationId: capturedOperationId,
+          errorCode: "UNKNOWN",
+        });
       }
     } finally {
       // Release the admission slot only when the token still matches the
@@ -624,9 +645,6 @@ export function Session({
     }
   };
 
-
-
-
   const activeSection = NAVIGATION_SECTIONS[selectedCategoryIndex] ?? NAVIGATION_SECTIONS[0];
   const activeSectionId = activeSection?.id ?? "home";
   const contextActions = useMemo(
@@ -634,13 +652,43 @@ export function Session({
     [activeSectionId, authState, reducerState.latestRecommendation],
   );
   const clampedActionIndex =
-    contextActions.length === 0
-      ? -1
-      : Math.min(selectedActionIndex, contextActions.length - 1);
+    contextActions.length === 0 ? -1 : Math.min(selectedActionIndex, contextActions.length - 1);
+  const viewport = transcriptViewport(capabilities, contextActions);
+  const transcriptPageRows = Math.max(1, viewport.rowBudget - 1);
+  const renderableEntries = useMemo<readonly RenderableTranscriptEntry[]>(() => {
+    const width = viewport.paneWidth;
+    const base: RenderableTranscriptEntry[] = transcript.map((entry) => ({
+      id: entry.id,
+      text: entry.text,
+      kind: entry.kind,
+      rows: estimateEntryRows(entry.text, entry.kind, width),
+    }));
+    if (transcript.length === 1 && transcript[0]?.kind === "system") {
+      base.push({
+        id: -1,
+        text: HELP_TEXT,
+        kind: "output",
+        rows: estimateEntryRows(HELP_TEXT, "output", width),
+      });
+    }
+    return base;
+  }, [transcript, viewport.paneWidth]);
   useInput(
     (character, key) => {
       const typed = typeof character === "string" ? character : "";
       const keyFlags = key ?? {};
+      if (keyFlags.pageUp) {
+        setTranscriptOffsetEntries((offset) =>
+          moveTranscriptPageOffset(renderableEntries, transcriptPageRows, offset, "older"),
+        );
+        return;
+      }
+      if (keyFlags.pageDown) {
+        setTranscriptOffsetEntries((offset) =>
+          moveTranscriptPageOffset(renderableEntries, transcriptPageRows, offset, "newer"),
+        );
+        return;
+      }
       if (typed === "\u001b[H" || typed === "\u001bOH" || typed === "\u001b[1~") {
         selectHome();
         return;
@@ -669,9 +717,7 @@ export function Session({
       if (keyFlags.downArrow) {
         if (focus === "actions") {
           const index =
-            contextActions.length === 0
-              ? 0
-              : (clampedActionIndex + 1) % contextActions.length;
+            contextActions.length === 0 ? 0 : (clampedActionIndex + 1) % contextActions.length;
           dispatch({ type: "ACTION_SELECTED", index });
           return;
         }
@@ -747,53 +793,27 @@ export function Session({
     return "Ready";
   })();
   const sessionStatus = "active";
-  // long transcript never blows past `capabilities.rows` and critical
-  // entries (verification URI, recommendation ID, typed command, auth
-  // recovery line) survive older noncritical fillers.
-  const renderableEntries = useMemo<readonly RenderableTranscriptEntry[]>(() => {
-    const width = capabilities.columns;
-    const base: RenderableTranscriptEntry[] = transcript.map((entry) => {
-      // `classifyTranscriptEntry` consults the entry's typed
-      // metadata (so a device-authorization entry is always
-      // critical, even when the verification URI is on a
-      // non-github.com host) and falls through to the
-      // text-regex path for recommendation / recovery / typed
-      // input echoes.
-      const criticality = classifyTranscriptEntry(entry, input);
-      return {
-        id: entry.id,
-        text: entry.text,
-        kind: entry.kind,
-        criticality,
-        rows: estimateEntryRows(entry.text, entry.kind, width),
-        ...(entry.metadata === undefined ? {} : { metadata: entry.metadata }),
-      };
-    });
-    // Mirror the original Session fallback: when the transcript is just
-    // the welcome-back system entry, surface the `Try /help` hint as a
-    // noncritical filler so the calm status bar still nudges the user.
-    if (transcript.length === 1 && transcript[0]?.kind === "system") {
-      base.push({
-        id: -1,
-        text: HELP_TEXT,
-        kind: "output",
-        criticality: "noncritical",
-        rows: estimateEntryRows(HELP_TEXT, "output", width),
-      });
-    }
-    return base;
-  }, [transcript, capabilities.columns, input]);
   return (
     <DashboardShell
       status={status}
       title="Mission Control"
       subtitle="Welcome back"
       sessionStatus={sessionStatus}
-      mission={{
-        title: "No active mission",
-        description: "Discover a challenge or resume your current engineering work.",
-        suggestions: DEFAULT_MISSION_SUGGESTIONS,
-      }}
+      mission={
+        currentMission === null
+          ? {
+              title: "No active mission",
+              description: "Discover a challenge or resume your current engineering work.",
+              suggestions: DEFAULT_MISSION_SUGGESTIONS,
+            }
+          : {
+              title: currentMission.title,
+              description: [currentMission.status, currentMission.repository, currentMission.branch]
+                .filter((part): part is string => part !== undefined)
+                .join(" · "),
+              suggestions: DEFAULT_MISSION_SUGGESTIONS,
+            }
+      }
       stats={[]}
       quickCommands={DEFAULT_QUICK_COMMANDS}
       selectedNavigationIndex={selectedCategoryIndex}
@@ -805,6 +825,7 @@ export function Session({
       contextActions={contextActions}
       selectedActionIndex={clampedActionIndex}
       actionFocused={focus === "actions"}
+      transcriptOffsetEntries={transcriptOffsetEntries}
       entries={renderableEntries}
     />
   );

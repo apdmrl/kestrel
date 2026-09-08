@@ -11,6 +11,12 @@ function recommendationView(
     recommendationId: "rec-1",
     challengeId: "ch-1",
     title: "Refactor the auth gateway",
+    description: "Issue details",
+    repository: "octocat/hello-world",
+    issueNumber: 42,
+    issueUrl: "https://github.com/octocat/hello-world/issues/42",
+    challengeType: "BUG_FIX",
+    language: "TypeScript",
     mood: "QUICK_WIN",
     confidence: 0.9,
     reasons: ["matches your recent merges"],
@@ -123,11 +129,7 @@ describe("actionsForSection — auth", () => {
    }
 
   it("surfaces logging-in cancellation as a disabled, non-routable instruction", () => {
-    const actions = actionsForSection(
-      "auth",
-      { status: "logging-in", phase: "starting" },
-      null,
-    );
+    const actions = actionsForSection("auth", { status: "logging-in", phase: "starting" }, null);
     const cancel = actions.find((action) => action.id === "auth.cancel-instruction");
     expect(cancel, "expected logging-in cancel instruction").toBeDefined();
     // The slash command must not be routable while the device flow is in flight.
@@ -190,9 +192,7 @@ describe("actionsForSection — Find availability", () => {
     expect(recovery, "expected recovery action for verify").toBeDefined();
     expect(recovery?.command).toBe("/auth status");
     // Every Verify base action is disabled with /auth status recovery.
-    const disabledActions = actions.filter(
-      (action) => action.availability.status === "disabled",
-    );
+    const disabledActions = actions.filter((action) => action.availability.status === "disabled");
     expect(disabledActions.length, "expected disabled actions for verify").toBeGreaterThan(0);
     for (const action of disabledActions) {
       if (action.availability.status !== "disabled") continue;
@@ -291,9 +291,7 @@ describe("actionsForSection — local Mission and Agent availability", () => {
       const find = actions.find((entry) => entry.id === "find.run");
       expect(find?.availability).toMatchObject({ status: "disabled" });
       const recoveryId =
-        state.status === "checking" || state.status === "unknown"
-          ? "auth.status"
-          : "auth.login";
+        state.status === "checking" || state.status === "unknown" ? "auth.status" : "auth.login";
       const recovery = actions.find((entry) => entry.id === recoveryId);
       expect(recovery?.availability).toEqual({ status: "enabled" });
     }
@@ -309,9 +307,7 @@ describe("actionsForSection — local Mission and Agent availability", () => {
         });
       }
       const recoveryId =
-        state.status === "checking" || state.status === "unknown"
-          ? "auth.status"
-          : "auth.login";
+        state.status === "checking" || state.status === "unknown" ? "auth.status" : "auth.login";
       const recovery = actions.find((entry) => entry.id === recoveryId);
       expect(recovery?.availability).toEqual({ status: "enabled" });
     }

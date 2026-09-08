@@ -4,29 +4,17 @@ import { Box, Text } from "ink";
 import stringWidth from "string-width";
 import { NAVIGATION_SECTIONS } from "./session-navigation.js";
 import type { SessionAction } from "./session-navigation.js";
-import type { TranscriptMetadata } from "./session-view-models.js";
 
 /**
- * Renderable transcript entry. The shell accepts structured entries
- * (text + criticality + measured row count) so the row budget is enforced
- * against the actual lines the entries will render, not against opaque
- * React children. `rows` is a plain-text row count that already accounts
- * for embedded newlines, narrow-width wrapping, and the entry's own
- * vertical chrome (border, padding, label).
- *
- * `metadata` carries the typed semantic intent of the entry. The
- * bounded window classifier and bounded renderer key off the
- * metadata to retain the latest device-authorization payload
- * verbatim (validation URI + user code), independent of the entry's
- * text. Plain / JSON renderers ignore this field.
+ * One transcript entry with its measured terminal row count. The session
+ * retains bounded in-memory history; the dashboard selects one contiguous
+ * page without reordering entries.
  */
 export interface RenderableTranscriptEntry {
   readonly id: number;
   readonly text: string;
   readonly kind: "input" | "output" | "error" | "system";
-  readonly criticality: "critical" | "noncritical";
   readonly rows: number;
-  readonly metadata?: TranscriptMetadata;
 }
 /**
  * Wrap a single line of text to the available width, breaking on
@@ -116,101 +104,13 @@ export function estimateEntryRows(
   kind: RenderableTranscriptEntry["kind"],
   columns: number,
 ): number {
-  const chromeRows =
-    kind === "error" ? 3 + 1 : kind === "system" ? 2 + 1 : 1;
+  const chromeRows = kind === "error" ? 3 + 1 : kind === "system" ? 2 + 1 : 1;
 
-  const innerWidth = Math.max(
-    1,
-    columns - (kind === "error" ? 4 : kind === "system" ? 0 : 0),
-  );
+  const innerWidth = Math.max(1, columns - (kind === "error" ? 4 : kind === "system" ? 0 : 0));
   const lines = text.split("\n");
-  const lineRows = lines.reduce(
-    (sum, line) => sum + wrapLineToWidth(line, innerWidth),
-    0,
-  );
+  const lineRows = lines.reduce((sum, line) => sum + wrapLineToWidth(line, innerWidth), 0);
   return Math.max(1, chromeRows + lineRows);
 }
-export function toRenderableEntry(
-  entry: {
-    readonly id: number;
-    readonly kind: RenderableTranscriptEntry["kind"];
-    readonly text: string;
-  },
-  criticality: RenderableTranscriptEntry["criticality"],
-  columns: number,
-): RenderableTranscriptEntry {
-  return {
-    id: entry.id,
-    text: entry.text,
-    kind: entry.kind,
-    criticality,
-    rows: estimateEntryRows(entry.text, entry.kind, columns),
-  };
-}
-
-/**
- * Classify an entry's criticality from its text. Entries that contain
- * a recommendation ID / accept command or the explicit
- * "/auth login" / "/auth status" recovery line are critical. The
- * typed prompt is rendered separately by PromptLine and is NOT
- * promoted to critical here — typing "/" would otherwise match
- * every command echo and blow past the budget.
- *
- * Device-authorization criticality is intentionally NOT classified
- * here. The session attaches typed `metadata` to the entry on the
- * `notify` channel; the metadata is the single source of truth
- * for the bounded window so an arbitrary HTTPS URL text entry
- * (e.g. a documentation link) cannot impersonate a device payload.
- * Use `classifyTranscriptEntry` for the entry-level classifier.
- */
-export function isCriticalTranscriptText(text: string, promptInput: string): boolean {
-  const trimmed = text;
-  void promptInput; // deliberately unused: the prompt is rendered separately
-  if (/Recommendation ID:\s*\S+/u.test(trimmed)) return true;
-  if (/\/mission\s+accept\s+--id\s+\S+/u.test(trimmed)) return true;
-  if (/Run\s+\/auth\s+(login|status)\s+to\s+continue/u.test(trimmed)) return true;
-  return false;
-}
-
-/**
- * Classify a renderable entry's criticality. The metadata takes
- * precedence over the text-only path: a `device-authorization`
- * entry is always critical regardless of its rendered text. Every
- * other entry falls through to `isCriticalTranscriptText` so the
- * recommendation / recovery regexes continue to flag their
- * respective entries. The classifier is the single source of
- * truth used by the bounded window.
- */
-export function classifyTranscriptEntry(
-  entry: {
-    readonly text: string;
-    readonly metadata?: TranscriptMetadata;
-  },
-  promptInput: string,
-): "critical" | "noncritical" {
-  if (entry.metadata?.kind === "device-authorization") return "critical";
-  return isCriticalTranscriptText(entry.text, promptInput) ? "critical" : "noncritical";
-}
-/**
- * Window transcript entries to honour the row budget. Critical entries
- * are bounded: only the most recent device-flow payload (verification
- * URI / user code) and the most recent recommendation / accept
- * command are retained. Older critical entries are superseded. The
- * remaining budget is filled with the newest noncritical entries, and
- * the oldest noncritical entries are dropped first.
- *
- * When a critical entry itself cannot fit the budget, a bounded
- * representation is rendered: the latest verification URI / user code
- * is preserved verbatim for the auth device payload, and the latest
- * recommendation ID / accept command is preserved verbatim for the
- * recommendation / action. The total frame always remains ≤ rowBudget
- * (1 row for the bounded critical plus the rest of the budget for
- * noncritical fillers).
- *
- * The returned array preserves the chronological order of the
- * retained entries (oldest first, newest last). Entries are selected
- * by identity from the original array — concatenating all criticals
- * before all noncriticals would reorder interleaved history.
 /**
  * Compute the actual row count that the `ContextActions` panel will
  * render given the supplied action list. Mirrors the component's
@@ -267,7 +167,8 @@ function actionWindow(
   let rows = actionRowCount(actions[selected]!, paneWidth, compact);
   while (true) {
     const before = start > 0 ? actionRowCount(actions[start - 1]!, paneWidth, compact) : Infinity;
-    const after = end < actions.length - 1 ? actionRowCount(actions[end + 1]!, paneWidth, compact) : Infinity;
+    const after =
+      end < actions.length - 1 ? actionRowCount(actions[end + 1]!, paneWidth, compact) : Infinity;
     if (before === Infinity && after === Infinity) return actions.slice(start, end + 1);
     if (before <= after && rows + before <= viewportRows) {
       start -= 1;
@@ -303,143 +204,108 @@ export function contextActionsRowCount(
   return wrapperMargin + outerMargin + sectionLabel + innerMargin + borders + bodyRows;
 }
 
+export interface TranscriptViewport {
+  readonly paneWidth: number;
+  readonly rowBudget: number;
+}
+
+export function transcriptViewport(
+  caps: TerminalCapabilities,
+  contextActions?: readonly SessionAction[],
+): TranscriptViewport {
+  const tier = compactnessTier(caps);
+  const compact = tier !== "full";
+  const paneWidth = transcriptPaneWidth(caps);
+  const actionViewportRows = ACTION_VIEWPORT_ROWS[tier];
+  const contextActionRows =
+    contextActions === undefined
+      ? 0
+      : contextActionsRowCount(contextActions, paneWidth, compact, actionViewportRows);
+  return {
+    paneWidth,
+    rowBudget: availableTranscriptRows(caps, { contextActionRows }),
+  };
+}
+
 /**
- * Window transcript entries to fit the row budget. Older noncritical
- * entries are dropped first so the critical entries are retained and
- * the rendered frame stays within `capabilities.rows`. Critical entries
- * are bounded: only the most recent device-flow payload (verification
- * URI / user code) and the most recent recommendation / accept command
- * are retained. Older critical entries are superseded. The remaining
- * budget is filled with the newest noncritical entries, and the oldest
- * noncritical entries are dropped first.
- *
- * When `paneWidth` is supplied the helper re-measures each entry's row
- * count against the actual live pane width so the bounded critical
- * totals do not exceed the declared budget at narrow viewports.
+ * Return one chronological transcript page. `offsetEntries` is the number of
+ * newer entries hidden from the live tail. Paging moves only across complete
+ * entries, so variable-height output remains reachable without overlap or
+ * gaps.
  */
-export function windowTranscriptEntries(
+export function windowTranscriptPage(
   entries: readonly RenderableTranscriptEntry[],
   rowBudget: number,
-  paneWidth = 80,
+  offsetEntries: number,
 ): readonly RenderableTranscriptEntry[] {
   if (rowBudget <= 0 || entries.length === 0) return [];
-  // Select the latest device-authorization payload by typed metadata
-  // so any HTTPS verification URI (GitHub.com, GitHub Enterprise,
-  // etc.) is retained verbatim. The text-regex fallback was removed
-  // because arbitrary URL text cannot impersonate a device payload
-  // without the metadata the session attaches on the notify channel.
-  const latestAuthDevice = [...entries]
-    .reverse()
-    .find((entry) => entry.metadata?.kind === "device-authorization");
-  const latestRecommendation = [...entries]
-    .reverse()
-    .find(
-      (entry) =>
-        /Recommendation ID:\s*\S+/u.test(entry.text) ||
-        /\/mission\s+accept\s+--id\s+\S+/u.test(entry.text),
-    );
-  const latestError = [...entries].reverse().find((entry) => entry.kind === "error");
-  const latestRecovery = [...entries]
-    .reverse()
-    .find((entry) => /Run\s+\/auth\s+(login|status)\s+to\s+continue/u.test(entry.text));
-  const criticalEntries: RenderableTranscriptEntry[] = [];
-  for (const entry of [latestAuthDevice, latestRecommendation, latestError, latestRecovery]) {
-    if (entry !== undefined && !criticalEntries.some((candidate) => candidate.id === entry.id)) {
-      criticalEntries.push(entry);
-    }
+  const clampedOffset = Math.min(
+    Math.max(0, Math.floor(offsetEntries)),
+    entries.length - 1,
+  );
+  let cursor = entries.length - 1 - clampedOffset;
+  const selected: RenderableTranscriptEntry[] = [];
+  let selectedRows = 0;
+  while (cursor >= 0) {
+    const entry = entries[cursor];
+    if (entry === undefined) break;
+    const rows = Math.max(1, entry.rows);
+    if (selected.length > 0 && selectedRows + rows > rowBudget) break;
+    selected.push(entry);
+    selectedRows += rows;
+    cursor -= 1;
   }
-  return finalizeWindowedEntries(entries, criticalEntries, rowBudget, paneWidth);
+  selected.reverse();
+  return selected;
 }
 
-function finalizeWindowedEntries(
+export function moveTranscriptPageOffset(
   entries: readonly RenderableTranscriptEntry[],
-  criticalEntries: readonly RenderableTranscriptEntry[],
   rowBudget: number,
-  paneWidth: number,
-): readonly RenderableTranscriptEntry[] {
-  let remaining = rowBudget;
-  const criticalBounded = new Map<number, RenderableTranscriptEntry>();
-  for (const entry of criticalEntries) {
-    const measured = {
-      ...entry,
-      rows: estimateEntryRows(entry.text, entry.kind, paneWidth),
-    };
-    const text = renderBoundedCritical(entry);
-    const bounded = {
-      ...entry,
-      text,
-      rows: estimateEntryRows(text, entry.kind, paneWidth),
-    };
-    const selected = measured.rows <= remaining ? measured : bounded;
-    if (selected.rows <= remaining) {
-      criticalBounded.set(entry.id, selected);
-      remaining -= selected.rows;
-    }
+  offsetEntries: number,
+  direction: "older" | "newer",
+): number {
+  if (rowBudget <= 0 || entries.length === 0) return 0;
+  const currentOffset = Math.min(
+    Math.max(0, Math.floor(offsetEntries)),
+    entries.length - 1,
+  );
+  if (direction === "older") {
+    const visibleCount = windowTranscriptPage(entries, rowBudget, currentOffset).length;
+    return currentOffset + visibleCount < entries.length
+      ? currentOffset + visibleCount
+      : currentOffset;
   }
-
-  const selectedNoncritical = new Map<number, RenderableTranscriptEntry>();
-  for (let index = entries.length - 1; index >= 0; index -= 1) {
-    const entry = entries[index];
-    if (entry === undefined || criticalBounded.has(entry.id) || entry.criticality === "critical") {
-      continue;
-    }
-    const measured = {
-      ...entry,
-      rows: estimateEntryRows(entry.text, entry.kind, paneWidth),
-    };
-    if (measured.rows <= remaining) {
-      selectedNoncritical.set(entry.id, measured);
-      remaining -= measured.rows;
-    }
+  if (currentOffset === 0) return 0;
+  let previousOffset = 0;
+  while (previousOffset < currentOffset) {
+    const visibleCount = windowTranscriptPage(entries, rowBudget, previousOffset).length;
+    const nextOffset = previousOffset + visibleCount;
+    if (nextOffset >= currentOffset || visibleCount === 0) return previousOffset;
+    previousOffset = nextOffset;
   }
-
-  const result: RenderableTranscriptEntry[] = [];
-  for (const entry of entries) {
-    const bounded = criticalBounded.get(entry.id);
-    if (bounded !== undefined) {
-      result.push(bounded);
-      continue;
-    }
-    const noncritical = selectedNoncritical.get(entry.id);
-    if (noncritical !== undefined) result.push(noncritical);
-  }
-  return result;
-}
-function renderBoundedCritical(entry: RenderableTranscriptEntry): string {
-  // Preserve the most useful single-line representation when an entry cannot
-  // fit in full. Errors lead with their diagnostic instead of a generic
-  // recovery command that may only repeat the command which just failed.
-  const lines = entry.text.split("\n");
-  // Prefer a real bounded form that keeps the user-actionable
-  // information: the verification URI + user code, the recommendation
-  // ID, or the exact accept command.
-  // The device-authorization path is driven by typed metadata so the
-  // exact validation URI + user code survive even when the host is
-  // github.enterprise.example.com (or any other host); arbitrary
-  // URL text never reaches this branch because only entries the
-  // session tagged on the notify channel carry the device-authorization
-  // metadata.
-  if (entry.metadata?.kind === "device-authorization") {
-    return `${entry.metadata.verificationUri} (code ${entry.metadata.userCode})`;
-  }
-  if (entry.kind === "error") {
-    return lines.find((line) => line.trim().length > 0) ?? entry.text;
-  }
-  if (/Recommendation ID:\s*\S+/u.test(entry.text)) {
-    const id = entry.text.match(/Recommendation ID:\s*(\S+)/u);
-    if (id !== null) return `Recommendation ID: ${id[1]}`;
-  }
-  if (/\/mission\s+accept\s+--id\s+\S+/u.test(entry.text)) {
-    const id = entry.text.match(/\/mission\s+accept\s+--id\s+(\S+)/u);
-    if (id !== null) return `/mission accept --id ${id[1]}`;
-  }
-  if (/Run\s+\/auth\s+(login|status)\s+to\s+continue/u.test(entry.text)) {
-    return lines.find((l) => /Run\s+\/auth/u.test(l)) ?? lines[0] ?? entry.text;
-  }
-  // Fallback: first non-empty line of the original text.
-  return lines.find((l) => l.trim().length > 0) ?? entry.text;
+  return 0;
 }
 
+function transcriptPosition(
+  entries: readonly RenderableTranscriptEntry[],
+  visible: readonly RenderableTranscriptEntry[],
+): string {
+  const first = visible[0];
+  const last = visible[visible.length - 1];
+  if (first === undefined || last === undefined) return "0";
+  let start = 0;
+  let end = 0;
+  for (let index = 0; index < entries.length; index += 1) {
+    const id = entries[index]?.id;
+    if (id === first.id) start = index + 1;
+    if (id === last.id) {
+      end = index + 1;
+      break;
+  }
+  }
+  return `${start}–${end}`;
+}
 
 /**
  * Kestrel TUI — presentation shell.
@@ -499,12 +365,6 @@ export interface TerminalCapabilities {
   readonly rows: number;
   readonly color: boolean;
 }
-
-const DEFAULT_TERMINAL_CAPABILITIES: TerminalCapabilities = {
-  columns: 80,
-  rows: 24,
-  color: true,
-};
 
 export function isWideTerminal(caps: TerminalCapabilities): boolean {
   return caps.columns >= 60 && caps.rows >= 20;
@@ -594,13 +454,7 @@ export function availableTranscriptRows(
   const wide = isWideTerminal(caps);
   const sidebarRows = wide ? 0 : 1;
   const missionCardRows =
-    tier === "full"
-      ? 8
-      : tier === "standard"
-        ? 4
-        : tier === "compact"
-          ? 4
-          : 0;
+    tier === "full" ? 8 : tier === "standard" ? 4 : tier === "compact" ? 4 : 0;
   const quickCommandsRows = tier === "full" ? 2 : 0;
   const footerRows = tier === "full" ? 2 : 0;
   const fixed =
@@ -616,7 +470,8 @@ export function availableTranscriptRows(
   return Math.max(0, caps.rows - fixed - 1);
 }
 
-const SECTION_ICONS: Readonly<Record<string, { readonly icon: string; readonly accent: Accent }>> = {
+const SECTION_ICONS: Readonly<Record<string, { readonly icon: string; readonly accent: Accent }>> =
+  {
   home: { icon: "⌂", accent: "cyan" },
   find: { icon: "⌕", accent: "purple" },
   mission: { icon: "◆", accent: "yellow" },
@@ -673,19 +528,15 @@ export function NavItem({
           ? COLORS.green
           : COLORS.muted;
   const labelColor =
-    availability === "disabled"
-      ? COLORS.muted
-      : focused || selected
-        ? COLORS.text
-        : COLORS.muted;
+    availability === "disabled" ? COLORS.muted : focused || selected ? COLORS.text : COLORS.muted;
   return (
     <Box>
       <Text {...inkColorProp(colorize, markerColor)}>{markers}</Text>
-      <Text>{" "}</Text>
+      <Text> </Text>
       <Text {...inkColorProp(colorize, labelColor)} bold={focused}>
         {label}
       </Text>
-      <Text>{" "}</Text>
+      <Text> </Text>
       <Text {...inkColorProp(colorize, COLORS[accent])}>{icon}</Text>
     </Box>
   );
@@ -743,9 +594,11 @@ export function ContextActions({
       </Box>
     );
   }
-  const selected = actions.length === 0 ? -1 : Math.max(0, Math.min(selectedIndex, actions.length - 1));
+  const selected =
+    actions.length === 0 ? -1 : Math.max(0, Math.min(selectedIndex, actions.length - 1));
   const visibleActions = actionWindow(actions, selected, paneWidth, compact, viewportRows);
-  const position = visibleActions.length < actions.length ? ` ${selected + 1}/${actions.length}` : "";
+  const position =
+    visibleActions.length < actions.length ? ` ${selected + 1}/${actions.length}` : "";
   return (
     <Box flexDirection="column" marginTop={compact ? 0 : 1}>
       <SectionLabel label={`Actions${position}`} />
@@ -767,8 +620,7 @@ export function ContextActions({
             const row: NavigationRowState = {
               focused: focused && selected === index,
               selected: selected === index,
-              availability:
-                action.availability.status === "enabled" ? "enabled" : "disabled",
+              availability: action.availability.status === "enabled" ? "enabled" : "disabled",
             };
             const markers = navigationRowMarkers(row);
             const isDisabled = action.availability.status === "disabled";
@@ -776,12 +628,10 @@ export function ContextActions({
             return (
               <Box key={action.id} flexDirection="column">
                 <Box>
-                  <Text
-                    {...inkColorProp(colorize, isDisabled ? COLORS.red : COLORS.text)}
-                  >
+                  <Text {...inkColorProp(colorize, isDisabled ? COLORS.red : COLORS.text)}>
                     {markers}
                   </Text>
-                  <Text>{" "}</Text>
+                  <Text> </Text>
                   <Text {...inkColorProp(colorize, COLORS.muted)} bold={row.focused}>
                     {action.label}
                   </Text>
@@ -988,7 +838,12 @@ export interface MissionCardProps {
   readonly compact?: boolean;
 }
 
-export function MissionCard({ title, description, suggestions, compact = false }: MissionCardProps) {
+export function MissionCard({
+  title,
+  description,
+  suggestions,
+  compact = false,
+}: MissionCardProps) {
   return (
     <Box
       borderStyle={compact ? "single" : "round"}
@@ -1210,25 +1065,16 @@ export interface DashboardShellProps {
   readonly contextActions?: readonly SessionAction[];
   readonly selectedActionIndex?: number;
   readonly actionFocused?: boolean;
+  readonly transcriptOffsetEntries?: number;
   /**
-   * Renderable transcript entries with plain-text row metadata and
-   * criticality. When supplied, the shell windows these against the
-   * row budget using `windowTranscriptEntries` (keep every critical
-   * entry, fill remainder with newest noncritical). When absent, the
-   * shell falls back to the legacy `children` prop which is sliced by
-   * opaque React child count.
+   * Renderable transcript entries with plain-text row metadata. The shell
+   * displays one contiguous page selected by `transcriptOffsetEntries`;
+   * callers keep the complete bounded history and control navigation.
    */
   readonly entries?: readonly RenderableTranscriptEntry[];
   readonly children?: ReactNode;
 }
-
-function TranscriptEntryLine({
-  entry,
-  promptInput,
-}: {
-  readonly entry: RenderableTranscriptEntry;
-  readonly promptInput: string;
-}) {
+function TranscriptEntryLine({ entry }: { readonly entry: RenderableTranscriptEntry }) {
   if (entry.kind === "error") {
     return (
       <Box borderStyle="round" borderColor="red" paddingX={1} marginTop={1}>
@@ -1285,6 +1131,7 @@ export function DashboardShell({
   contextActions,
   selectedActionIndex = 0,
   actionFocused = false,
+  transcriptOffsetEntries = 0,
   entries,
   children,
 }: DashboardShellProps) {
@@ -1299,23 +1146,28 @@ export function DashboardShell({
   // of the active category. ContextActions windows around the selected row,
   // so changing categories cannot move the prompt or discard the selected
   // action's disabled recovery guidance.
-  const paneWidth = transcriptPaneWidth(capabilities);
+  const viewport = transcriptViewport(capabilities, contextActions);
+  const paneWidth = viewport.paneWidth;
   const actionViewportRows = ACTION_VIEWPORT_ROWS[tier];
-  const contextActionRows =
-    contextActions === undefined
-      ? 0
-      : contextActionsRowCount(contextActions, paneWidth, compact, actionViewportRows);
-  const transcriptBudget = availableTranscriptRows(capabilities, {
-    contextActionRows,
-  });
-  const structuredEntries = entries !== undefined
-    ? windowTranscriptEntries(entries, transcriptBudget, paneWidth)
-    : null;
-  const allChildren = structuredEntries !== null
-    ? structuredEntries.map((entry) => (
-        <TranscriptEntryLine key={entry.id} entry={entry} promptInput={input} />
-      ))
-    : Children.toArray(children);
+  const measuredEntries =
+    entries?.map((entry) => ({
+      ...entry,
+      rows: estimateEntryRows(entry.text, entry.kind, paneWidth),
+    })) ?? null;
+  const historyRows = measuredEntries !== null && measuredEntries.length > 0 ? 1 : 0;
+  const transcriptBudget = Math.max(0, viewport.rowBudget - historyRows);
+  const structuredEntries =
+    measuredEntries !== null
+      ? windowTranscriptPage(measuredEntries, transcriptBudget, transcriptOffsetEntries)
+      : null;
+  const historyPosition =
+    measuredEntries === null || structuredEntries === null
+      ? "0"
+      : transcriptPosition(measuredEntries, structuredEntries);
+  const allChildren =
+    structuredEntries !== null
+      ? structuredEntries.map((entry) => <TranscriptEntryLine key={entry.id} entry={entry} />)
+      : Children.toArray(children);
   const visibleChildren =
     structuredEntries !== null
       ? allChildren
@@ -1359,6 +1211,13 @@ export function DashboardShell({
                 paneWidth={paneWidth}
                 viewportRows={actionViewportRows}
               />
+            </Box>
+          ) : null}
+          {entries !== undefined && entries.length > 0 ? (
+            <Box paddingX={1}>
+              <Text color={COLORS.muted}>
+                History {historyPosition} / {entries.length} · PgUp/PgDn · End
+              </Text>
             </Box>
           ) : null}
           {visibleChildren}

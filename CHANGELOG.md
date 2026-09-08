@@ -21,6 +21,12 @@
 - Persistent-shell navigation has one visible focus owner as movement shifts between
   the prompt, sidebar, and contextual actions; the terminal-aware layout keeps frame
   and prompt geometry stable while navigating.
+- Recommendations now include the source repository, issue number, type, language,
+  URL, a readable issue-description summary, and Kestrel's selection reasons.
+- The persistent shell hydrates its current-mission card from durable state and
+  updates it immediately after accept, prepare, resume, complete, and abandon results.
+- Transcript history now uses contiguous pages with `PageUp`, `PageDown`, and `End`
+  navigation instead of mixing selected older output into the live command result.
 - GitHub Find sends its alternative labels as a GitHub OR label query and fetches only
   the configured bounded page budget.
 - An empty Find result clears any prior recommendation, including its stale accept action.

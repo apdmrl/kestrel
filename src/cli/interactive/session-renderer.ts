@@ -1,5 +1,4 @@
 import type { ViewModel } from "../presentation/view-models.js";
-import type { TranscriptMetadata } from "./session-view-models.js";
 import { renderPlain } from "../presentation/plain-renderer.js";
 
 /**
@@ -21,16 +20,6 @@ export interface SessionRenderedView {
   readonly kind: "output" | "error";
   readonly text: string;
   readonly recoveryCommand?: string;
-  /**
-   * Optional semantic metadata. Only set when the source view model
-   * carries typed fields the bounded transcript classifier needs
-   * (currently: a `device-authorization` view). The session
-   * propagates the metadata into the transcript entry so the
-   * bounded window keeps the exact validation URI / user code,
-   * not a host-specific text regex. The plain / JSON renderers
-   * never read this field.
-   */
-  readonly metadata?: TranscriptMetadata;
 }
 
 const AUTH_LOGIN = "/auth login";
@@ -80,9 +69,7 @@ function authStatusText(view: Extract<ViewModel, { kind: "auth-status" }>): Sess
   }
 }
 
-function authErrorToRecovery(
-  view: Extract<ViewModel, { kind: "error" }>,
-): string | undefined {
+function authErrorToRecovery(view: Extract<ViewModel, { kind: "error" }>): string | undefined {
   switch (view.code) {
     case "DM_GITHUB_AUTH_REQUIRED":
       return view.suggestedActions.some((action) =>
@@ -145,11 +132,6 @@ function renderDeviceAuthorization(
     kind: "output",
     text: `Open ${view.verificationUri} and enter ${view.userCode}`,
     recoveryCommand: AUTH_LOGIN,
-    metadata: {
-      kind: "device-authorization",
-      verificationUri: view.verificationUri,
-      userCode: view.userCode,
-    },
   };
 }
 /**

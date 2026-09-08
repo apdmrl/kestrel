@@ -5,18 +5,32 @@ import { renderJson } from "./json-renderer.js";
 const ansi = new RegExp(String.fromCharCode(27) + "\\[[0-9;]*m");
 
 describe("renderPlain", () => {
-  it("renders a recommendation without ANSI", () => {
-    const output = renderPlain({
+  it("explains the recommended issue and why Kestrel selected it", () => {
+    const recommendation = {
       kind: "recommendation",
       recommendationId: "c1",
       challengeId: "c1",
       title: "Fix crash",
+      description:
+        "The application crashes during startup.\n\nReproduce it with the sample configuration.",
+      repository: "octocat/hello-world",
+      issueNumber: 42,
+      issueUrl: "https://github.com/octocat/hello-world/issues/42",
+      challengeType: "BUG_FIX",
+      language: "TypeScript",
       mood: "QUICK_WIN",
       confidence: 0.8,
       reasons: ["matches interests"],
-    });
-    expect(output).toContain("Fix crash");
-    expect(output).toContain("c1");
+    } as const;
+
+    const output = renderPlain(recommendation);
+
+    expect(output).toContain("octocat/hello-world #42 · Bug fix · TypeScript");
+    expect(output).toContain("What needs to be done");
+    expect(output).toContain("The application crashes during startup.");
+    expect(output).toContain("Why Kestrel picked this");
+    expect(output).toContain("matches interests");
+    expect(output).toContain("https://github.com/octocat/hello-world/issues/42");
     expect(output).not.toMatch(ansi);
   });
 

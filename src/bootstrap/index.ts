@@ -247,10 +247,6 @@ export async function bootstrap(
       config.githubClientId ?? "",
       createOAuthDeviceAuth,
     );
-  // Authorization guidance is presentation, never machine output: default it
-  // to stderr so --json stdout stays a single parseable JSON document. The CLI
-  // composition root may supply an explicit presentation channel instead.
-  const writeAuth = options.writeAuth ?? ((text: string) => process.stderr.write(text));
   const interactive = options.interactive ?? true;
   const browserLauncher =
     options.browserLauncher ??
@@ -605,6 +601,15 @@ export async function bootstrap(
         recommendationId: recommendation.challenge.id,
         challengeId: recommendation.challenge.id,
         title: recommendation.challenge.title,
+        description: recommendation.challenge.description,
+        repository:
+          recommendation.challenge.repository.owner +
+          "/" +
+          recommendation.challenge.repository.name,
+        issueNumber: recommendation.challenge.source.issueNumber,
+        issueUrl: recommendation.challenge.source.canonicalUrl,
+        challengeType: recommendation.challenge.type,
+        language: recommendation.challenge.language ?? null,
         mood: recommendation.mood,
         confidence: recommendation.confidence,
         reasons: recommendation.reasons,
