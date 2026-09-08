@@ -1,10 +1,48 @@
+import { pathToFileURL } from "node:url";
 import { render } from "ink";
 import { createElement } from "react";
 import { bootstrap, createConfig } from "../bootstrap/index.js";
 import { shouldOpenBrowser } from "../application/auth/browser-launch-policy.js";
-import { Session } from "./interactive/session.js";
+import type { CommandHandlers } from "./command-handlers.js";
 import { createProgram } from "./create-program.js";
+import { Session } from "./interactive/session.js";
+import { createAtomicTerminalSession } from "./presentation/atomic-terminal-session.js";
 import { shouldStartSession } from "./session-start.js";
+
+export interface InteractiveSessionOptions {
+  readonly handlers: CommandHandlers;
+  readonly signal: AbortSignal;
+  readonly stdin?: NodeJS.ReadStream;
+  readonly stdout?: NodeJS.WriteStream;
+  readonly render?: typeof render;
+}
+
+export async function runInteractiveSession(options: InteractiveSessionOptions): Promise<void> {
+  const stdin = options.stdin ?? process.stdin;
+  const terminal = createAtomicTerminalSession({
+    stdin,
+    stdout: options.stdout ?? process.stdout,
+  });
+  let closeOnAbort: (() => void) | undefined;
+  try {
+    const app = (options.render ?? render)(
+      createElement(Session, {
+        handlers: options.handlers,
+        signal: options.signal,
+      }),
+      { exitOnCtrlC: false, stdin, stdout: terminal.stdout },
+    );
+    closeOnAbort = (): void => app.unmount();
+    options.signal.addEventListener("abort", closeOnAbort, { once: true });
+    if (options.signal.aborted) closeOnAbort();
+    await app.waitUntilExit();
+  } finally {
+    if (closeOnAbort !== undefined) {
+      options.signal.removeEventListener("abort", closeOnAbort);
+    }
+    terminal.cleanup();
+  }
+}
 
 export async function main(): Promise<void> {
   const args = process.argv.slice(2);
@@ -54,18 +92,7 @@ export async function main(): Promise<void> {
   });
   try {
     if (shouldStartSession(args)) {
-      const app = render(
-        createElement(Session, {
-          handlers,
-          signal: controller.signal,
-        }),
-        { exitOnCtrlC: false },
-      );
-      const waitForExit = app.waitUntilExit();
-      const closeOnAbort = (): void => app.unmount();
-      controller.signal.addEventListener("abort", closeOnAbort, { once: true });
-      if (controller.signal.aborted) closeOnAbort();
-      await waitForExit;
+      await runInteractiveSession({ handlers, signal: controller.signal });
     } else {
       const program = createProgram({ handlers, signal: controller.signal });
       await program.parseAsync(process.argv);
@@ -92,5 +119,6 @@ export async function main(): Promise<void> {
   }
 }
 
-// main.ts is only the process entry point, never imported by other modules.
-void main();
+if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  void main();
+}
