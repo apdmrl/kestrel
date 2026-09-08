@@ -1,4 +1,8 @@
-import type { RecommendationViewModel, ViewModel } from "../presentation/view-models.js";
+import type {
+  MissionViewModel,
+  RecommendationViewModel,
+  ViewModel,
+} from "../presentation/view-models.js";
 import type { TranscriptEntry } from "./session-view-models.js";
 
 export const MAX_TRANSCRIPT_ENTRIES = 200;
@@ -39,6 +43,8 @@ export interface SessionState {
   readonly auth: SessionAuthState;
   readonly operation: OperationState;
   readonly latestRecommendation: RecommendationViewModel | null;
+  readonly currentMission: MissionViewModel | null;
+  readonly currentMissionLoaded: boolean;
   readonly input: string;
   readonly transcript: readonly TranscriptEntry[];
   readonly activeSectionId: string;
@@ -49,14 +55,24 @@ export interface SessionState {
 
 export type SessionEvent =
   | { readonly type: "AUTH_CHECK_STARTED"; readonly attemptId: number }
-  | { readonly type: "AUTH_RESOLVED"; readonly attemptId: number; readonly detail: "CONNECTED"; readonly login: string }
+  | {
+      readonly type: "AUTH_RESOLVED";
+      readonly attemptId: number;
+      readonly detail: "CONNECTED";
+      readonly login: string;
+    }
   | {
       readonly type: "AUTH_RESOLVED";
       readonly attemptId: number;
       readonly detail: "NOT_CONNECTED";
       readonly login: null;
     }
-  | { readonly type: "AUTH_RESOLVED"; readonly attemptId: number; readonly detail: "EXPIRED"; readonly login: null }
+  | {
+      readonly type: "AUTH_RESOLVED";
+      readonly attemptId: number;
+      readonly detail: "EXPIRED";
+      readonly login: null;
+    }
   | { readonly type: "AUTH_FAILED"; readonly attemptId: number; readonly errorCode: string }
   | {
       readonly type: "OPERATION_STARTED";
@@ -78,6 +94,10 @@ export type SessionEvent =
       readonly operationId: number;
       readonly view: ViewModel;
     }
+  | {
+      readonly type: "CURRENT_MISSION_RESOLVED";
+      readonly mission: MissionViewModel | null;
+    }
   | { readonly type: "FIND_COMPLETED_EMPTY"; readonly operationId: number }
   | { readonly type: "OPERATION_FAILED"; readonly operationId: number; readonly errorCode: string }
   | { readonly type: "OPERATION_CANCELLED"; readonly operationId: number }
@@ -93,6 +113,11 @@ export function isLoginCommand(command: string): boolean {
   const trimmed = command.trim();
   return trimmed === "/auth login" || trimmed.startsWith("/auth login ");
 }
+
+function isCurrentMissionCommand(command: string): boolean {
+  const normalized = command.trim().split(/\s+/u).join(" ");
+  return normalized === "/current" || normalized === "/mission current";
+}
 export function initialSessionState(
   initialNavigation: { readonly sectionId: string; readonly index: number } = {
     sectionId: INITIAL_AUTH_SECTION_ID,
@@ -103,6 +128,8 @@ export function initialSessionState(
     auth: { status: "checking", attemptId: INITIAL_ATTEMPT_ID },
     operation: { status: "idle" },
     latestRecommendation: null,
+    currentMission: null,
+    currentMissionLoaded: false,
     input: "",
     transcript: [],
     activeSectionId: initialNavigation.sectionId,
@@ -142,7 +169,10 @@ export function sessionReducer(state: SessionState, event: SessionEvent): Sessio
       return { ...state, auth: { status: "unknown", errorCode: event.errorCode } };
     }
     case "OPERATION_STARTED": {
-      if (state.operation.status === "running" && state.operation.operationId === event.operationId) {
+      if (
+        state.operation.status === "running" &&
+        state.operation.operationId === event.operationId
+      ) {
         return state;
       }
       const supersededAuth =
@@ -191,6 +221,14 @@ export function sessionReducer(state: SessionState, event: SessionEvent): Sessio
       if (running.status !== "running" || running.operationId !== event.operationId) return state;
       return { ...state, operation: { status: "idle" }, latestRecommendation: null };
     }
+    case "CURRENT_MISSION_RESOLVED": {
+      if (state.currentMissionLoaded) return state;
+      return {
+        ...state,
+        currentMission: event.mission,
+        currentMissionLoaded: true,
+      };
+    }
     case "OPERATION_SUCCEEDED": {
       const running = state.operation;
       if (running.status !== "running" || running.operationId !== event.operationId) return state;
@@ -218,11 +256,29 @@ export function sessionReducer(state: SessionState, event: SessionEvent): Sessio
               : { status: "required" };
         return { ...state, operation: { status: "idle" }, auth };
       }
+      if (event.view.kind === "verification" && isCurrentMissionCommand(running.command)) {
+        return {
+          ...state,
+          operation: { status: "idle" },
+          currentMission: null,
+          currentMissionLoaded: true,
+        };
+      }
       if (event.view.kind === "recommendation") {
         return { ...state, operation: { status: "idle" }, latestRecommendation: event.view };
       }
       if (event.view.kind === "mission") {
-        return { ...state, operation: { status: "idle" }, latestRecommendation: null };
+        const currentMission =
+          event.view.status === "COMPLETED" || event.view.status === "ABANDONED"
+            ? null
+            : event.view;
+        return {
+          ...state,
+          operation: { status: "idle" },
+          latestRecommendation: null,
+          currentMission,
+          currentMissionLoaded: true,
+        };
       }
       return { ...state, operation: { status: "idle" } };
     }
@@ -259,7 +315,8 @@ export function sessionReducer(state: SessionState, event: SessionEvent): Sessio
       const next = [...state.transcript, event.entry];
       return {
         ...state,
-        transcript: next.length > MAX_TRANSCRIPT_ENTRIES ? next.slice(-MAX_TRANSCRIPT_ENTRIES) : next,
+        transcript:
+          next.length > MAX_TRANSCRIPT_ENTRIES ? next.slice(-MAX_TRANSCRIPT_ENTRIES) : next,
       };
     }
     case "TRANSCRIPT_CLEARED": {

@@ -113,7 +113,9 @@ describe("session auth interaction", () => {
       return view;
     });
     const notices: ViewModel[] = [];
-    const controller = createSessionController(commandHandlers, (received) => notices.push(received));
+    const controller = createSessionController(commandHandlers, (received) =>
+      notices.push(received),
+    );
     await controller({ kind: "auth-login" }, {});
     expect(notices).toHaveLength(1);
     expect(notices[0]).toEqual({
@@ -148,7 +150,9 @@ describe("session auth interaction", () => {
           // DM_GITHUB_AUTH_CANCELLED so the session can render a neutral
           // "session remains active" message. Mirror that here.
           context.signal?.addEventListener("abort", () => {
-            const err = Object.assign(new Error("Login was cancelled; the session remains active."), {
+            const err = Object.assign(
+              new Error("Login was cancelled; the session remains active."),
+              {
               code: "DM_GITHUB_AUTH_CANCELLED",
               name: "KestrelError",
               category: "USER_ACTION_REQUIRED",
@@ -157,7 +161,8 @@ describe("session auth interaction", () => {
               retryability: "manual",
               recoveryStrategy: "USER_GUIDED",
               severity: "INFO",
-            });
+              },
+            );
             reject(err);
           });
           loginReject = reject;
@@ -224,9 +229,7 @@ describe("session auth interaction — startup auth deadline", () => {
   it("lets a local command run after the startup auth check times out", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const commandHandlers = handlers({
-      authStatus: vi.fn(
-        () => new Promise<ViewModel>(() => undefined),
-      ),
+      authStatus: vi.fn(() => new Promise<ViewModel>(() => undefined)),
     });
     const harness = mount({
       handlers: commandHandlers,
@@ -588,7 +591,7 @@ describe("session auth interaction — prompt clearing on synchronous admission"
     //       called yet.
     //   (4) second Enter accepts the exact ID once: pressing Enter on
     //       the filled prompt invokes `missionAccept` exactly once
-    let commandHandlers = handlers();
+  const commandHandlers = handlers();
     // The auth subsystem under test is the REAL `authenticateGitHub`
     // application use case wired against two fakes: a `GitHubGateway`
     // whose device-flow `beginDeviceFlow` returns an authorization
@@ -632,10 +635,7 @@ describe("session auth interaction — prompt clearing on synchronous admission"
           intervalSeconds: 5,
         };
       },
-      async pollForToken(
-        _deviceCode: string,
-        signal?: AbortSignal,
-      ): Promise<GitHubToken> {
+    async pollForToken(_deviceCode: string, signal?: AbortSignal): Promise<GitHubToken> {
         pollBeginObserved = true;
         return new Promise<GitHubToken>((_resolve, reject) => {
           if (signal === undefined) {
@@ -644,9 +644,7 @@ describe("session auth interaction — prompt clearing on synchronous admission"
                 code: "DM_GITHUB_AUTH_CANCELLED",
                 category: "USER_ACTION_REQUIRED",
                 userMessage: "device flow cancelled",
-                suggestedActions: [
-                  "Run /auth login when ready to authenticate again.",
-                ],
+              suggestedActions: ["Run /auth login when ready to authenticate again."],
                 retryability: "NO_RETRY",
                 recoveryStrategy: "USER_ACTION",
                 severity: "INFO",
@@ -663,9 +661,7 @@ describe("session auth interaction — prompt clearing on synchronous admission"
                   code: "DM_GITHUB_AUTH_CANCELLED",
                   category: "USER_ACTION_REQUIRED",
                   userMessage: "device flow cancelled",
-                  suggestedActions: [
-                    "Run /auth login when ready to authenticate again.",
-                  ],
+                suggestedActions: ["Run /auth login when ready to authenticate again."],
                   retryability: "NO_RETRY",
                   recoveryStrategy: "USER_ACTION",
                   severity: "INFO",
@@ -741,6 +737,12 @@ describe("session auth interaction — prompt clearing on synchronous admission"
       recommendationId: "rec-42",
       challengeId: "chal-1",
       title: "Fix something",
+    description: "Issue details",
+    repository: "octocat/hello-world",
+    issueNumber: 42,
+    issueUrl: "https://github.com/octocat/hello-world/issues/42",
+    challengeType: "BUG_FIX",
+    language: "TypeScript",
       mood: "focused",
       confidence: 0.9,
       reasons: ["match"],
@@ -755,8 +757,7 @@ describe("session auth interaction — prompt clearing on synchronous admission"
 
     let missionAcceptCalls = 0;
     let missionAcceptId: string | undefined;
-    vi.mocked(commandHandlers.missionAccept).mockImplementation(
-      async ({ recommendationId }) => {
+  vi.mocked(commandHandlers.missionAccept).mockImplementation(async ({ recommendationId }) => {
         missionAcceptCalls += 1;
         missionAcceptId = recommendationId;
         return {
@@ -765,8 +766,7 @@ describe("session auth interaction — prompt clearing on synchronous admission"
           status: "ACCEPTED",
           title: recommendation.title,
         };
-      },
-    );
+  });
 
     const onSessionExit = vi.fn();
     const harness = mount({
@@ -876,8 +876,6 @@ describe("session auth interaction — prompt clearing on synchronous admission"
       // beginning of the cancelled login. No further authorization
       // steps run for the rest of the session.
       expect(presentedNotices).toHaveLength(1);
-
-
     } finally {
       harness.unmount();
     }
@@ -952,7 +950,6 @@ describe("session — busy /clear and /exit rejection", () => {
     }
   });
 
-
   it("rejects /clear while a foreground command is in flight", async () => {
     // /clear must not be allowed while busy; the synchronous
     // admission guard must reject it and the in-flight command must
@@ -1003,8 +1000,7 @@ describe("session — LOGIN_AUTHORIZATION reducer dispatch via notify", () => {
     let loginResolve: ((view: ViewModel) => void) | undefined;
     let loginReject: ((reason: unknown) => void) | undefined;
     let capturedSignal: AbortSignal | undefined;
-    vi.mocked(commandHandlers.authLogin).mockImplementation(
-      async (_args, context) => {
+    vi.mocked(commandHandlers.authLogin).mockImplementation(async (_args, context) => {
         capturedSignal = context.signal;
         context.onNotice?.({
           kind: "device-authorization",
@@ -1015,8 +1011,7 @@ describe("session — LOGIN_AUTHORIZATION reducer dispatch via notify", () => {
           loginResolve = resolve;
           loginReject = reject;
         });
-      },
-    );
+    });
     const harness = mount({
       handlers: commandHandlers,
       signal: new AbortController().signal,
@@ -1045,8 +1040,7 @@ describe("session — LOGIN_AUTHORIZATION reducer dispatch via notify", () => {
     const commandHandlers = handlers();
     let loginResolve: ((view: ViewModel) => void) | undefined;
     let loginReject: ((reason: unknown) => void) | undefined;
-    vi.mocked(commandHandlers.authLogin).mockImplementation(
-      async (_args, context) => {
+    vi.mocked(commandHandlers.authLogin).mockImplementation(async (_args, context) => {
         return new Promise<ViewModel>((resolve, reject) => {
           loginResolve = resolve;
           loginReject = reject;
@@ -1075,8 +1069,7 @@ describe("session — LOGIN_AUTHORIZATION reducer dispatch via notify", () => {
             );
           });
         });
-      },
-    );
+    });
     const harness = mount({
       handlers: commandHandlers,
       signal: new AbortController().signal,
@@ -1288,4 +1281,3 @@ describe("session — Home key is a no-op while an operation is running", () => 
     }
   });
 });
-

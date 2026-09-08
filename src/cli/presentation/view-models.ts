@@ -6,6 +6,12 @@ export interface RecommendationViewModel {
   readonly recommendationId: string;
   readonly challengeId: string;
   readonly title: string;
+  readonly description: string;
+  readonly repository: string;
+  readonly issueNumber: number;
+  readonly issueUrl: string;
+  readonly challengeType: "BUG_FIX" | "TESTING" | "DOCUMENTATION";
+  readonly language: string | null;
   readonly mood: string;
   readonly confidence: number;
   readonly reasons: readonly string[];

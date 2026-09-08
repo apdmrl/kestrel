@@ -14,12 +14,20 @@ const recommendation: RecommendationViewModel = {
   recommendationId: "rec-1",
   challengeId: "ch-1",
   title: "Refactor the auth gateway",
+  description: "Issue details",
+  repository: "octocat/hello-world",
+  issueNumber: 42,
+  issueUrl: "https://github.com/octocat/hello-world/issues/42",
+  challengeType: "BUG_FIX",
+  language: "TypeScript",
   mood: "QUICK_WIN",
   confidence: 0.9,
   reasons: ["matches your recent merges"],
 };
 
-function recommendationView(overrides: Partial<RecommendationViewModel> = {}): RecommendationViewModel {
+function recommendationView(
+  overrides: Partial<RecommendationViewModel> = {},
+): RecommendationViewModel {
   return { ...recommendation, ...overrides };
 }
 
@@ -41,7 +49,10 @@ describe("session reducer", () => {
   );
 
   it("ignores a late result from an expired auth attempt", () => {
-    const retrying = sessionReducer(initialSessionState(), { type: "AUTH_CHECK_STARTED", attemptId: 2 });
+    const retrying = sessionReducer(initialSessionState(), {
+      type: "AUTH_CHECK_STARTED",
+      attemptId: 2,
+    });
     const late = sessionReducer(retrying, {
       type: "AUTH_RESOLVED",
       attemptId: 1,
@@ -52,7 +63,10 @@ describe("session reducer", () => {
   });
 
   it("keeps the latest auth check active while the previous attempt is still pending", () => {
-    const first = sessionReducer(initialSessionState(), { type: "AUTH_CHECK_STARTED", attemptId: 1 });
+    const first = sessionReducer(initialSessionState(), {
+      type: "AUTH_CHECK_STARTED",
+      attemptId: 1,
+    });
     const second = sessionReducer(first, { type: "AUTH_CHECK_STARTED", attemptId: 2 });
     const firstLate = sessionReducer(second, {
       type: "AUTH_RESOLVED",
@@ -64,7 +78,10 @@ describe("session reducer", () => {
   });
 
   it("reduces AUTH_RESOLVED with the connected login exactly once", () => {
-    const started = sessionReducer(initialSessionState(), { type: "AUTH_CHECK_STARTED", attemptId: 1 });
+    const started = sessionReducer(initialSessionState(), {
+      type: "AUTH_CHECK_STARTED",
+      attemptId: 1,
+    });
     const connected = sessionReducer(started, {
       type: "AUTH_RESOLVED",
       attemptId: 1,
@@ -294,13 +311,52 @@ describe("session reducer", () => {
       command: "/mission accept --id rec-1",
       cancellable: true,
     });
+    const mission = {
+      kind: "mission",
+      id: "rec-1",
+      status: "active",
+      title: "Refactor the auth gateway",
+    } as const;
     const accepted = sessionReducer(startedAccept, {
       type: "OPERATION_SUCCEEDED",
       operationId: 2,
-      view: { kind: "mission", id: "rec-1", status: "active", title: "Refactor the auth gateway" },
+      view: mission,
     });
     expect(accepted.latestRecommendation).toBeNull();
     expect(accepted.operation).toEqual({ status: "idle" });
+    expect(accepted).toHaveProperty("currentMission", mission);
+  });
+
+  it("clears a stale mission when current reports no active mission", () => {
+    const mission = {
+      kind: "mission",
+      id: "rec-1",
+      status: "ACCEPTED",
+      title: "Refactor the auth gateway",
+    } as const;
+    const accepted = sessionReducer(
+      sessionReducer(initialSessionState(), {
+        type: "OPERATION_STARTED",
+        operationId: 1,
+        command: "/mission accept --id rec-1",
+        cancellable: true,
+      }),
+      { type: "OPERATION_SUCCEEDED", operationId: 1, view: mission },
+    );
+    const refreshing = sessionReducer(accepted, {
+      type: "OPERATION_STARTED",
+      operationId: 2,
+      command: "/mission  current",
+      cancellable: true,
+    });
+
+    const empty = sessionReducer(refreshing, {
+      type: "OPERATION_SUCCEEDED",
+      operationId: 2,
+      view: { kind: "verification", text: "No active mission" },
+    });
+
+    expect(empty.currentMission).toBeNull();
   });
 
   it("rejects a stale successful completion from a previous operation", () => {
@@ -437,7 +493,10 @@ describe("session reducer", () => {
   });
 
   it("moves focus across prompt, sidebar, and actions", () => {
-    const prompt = sessionReducer(initialSessionState(), { type: "FOCUS_CHANGED", focus: "prompt" });
+    const prompt = sessionReducer(initialSessionState(), {
+      type: "FOCUS_CHANGED",
+      focus: "prompt",
+    });
     expect(prompt.focus).toBe("prompt");
     const sidebar = sessionReducer(prompt, { type: "FOCUS_CHANGED", focus: "sidebar" });
     expect(sidebar.focus).toBe("sidebar");
@@ -505,7 +564,10 @@ describe("session reducer", () => {
   });
 
   it("exposes a connected login identical to the AUTH_RESOLVED payload", () => {
-    const checking = sessionReducer(initialSessionState(), { type: "AUTH_CHECK_STARTED", attemptId: 5 });
+    const checking = sessionReducer(initialSessionState(), {
+      type: "AUTH_CHECK_STARTED",
+      attemptId: 5,
+    });
     const connected = sessionReducer(checking, {
       type: "AUTH_RESOLVED",
       attemptId: 5,
@@ -516,7 +578,10 @@ describe("session reducer", () => {
   });
 
   it("ignores AUTH_RESOLVED CONNECTED with a null login rather than misclassifying as expired", () => {
-    const checking = sessionReducer(initialSessionState(), { type: "AUTH_CHECK_STARTED", attemptId: 1 });
+    const checking = sessionReducer(initialSessionState(), {
+      type: "AUTH_CHECK_STARTED",
+      attemptId: 1,
+    });
     const inconsistent = {
       type: "AUTH_RESOLVED",
       attemptId: 1,
@@ -528,7 +593,10 @@ describe("session reducer", () => {
   });
 
   it("ignores AUTH_RESOLVED NOT_CONNECTED with a non-null login", () => {
-    const checking = sessionReducer(initialSessionState(), { type: "AUTH_CHECK_STARTED", attemptId: 1 });
+    const checking = sessionReducer(initialSessionState(), {
+      type: "AUTH_CHECK_STARTED",
+      attemptId: 1,
+    });
     const inconsistent = {
       type: "AUTH_RESOLVED",
       attemptId: 1,
@@ -540,7 +608,10 @@ describe("session reducer", () => {
   });
 
   it("ignores AUTH_RESOLVED EXPIRED with a non-null login", () => {
-    const checking = sessionReducer(initialSessionState(), { type: "AUTH_CHECK_STARTED", attemptId: 1 });
+    const checking = sessionReducer(initialSessionState(), {
+      type: "AUTH_CHECK_STARTED",
+      attemptId: 1,
+    });
     const inconsistent = {
       type: "AUTH_RESOLVED",
       attemptId: 1,
@@ -735,7 +806,6 @@ describe("session reducer", () => {
     expect(home.selectedActionIndex).toBe(0);
     expect(home.focus).toBe("prompt");
   });
-
 
   it("keeps a running operation while returning navigation home", () => {
     const connected = sessionReducer(initialSessionState(), {

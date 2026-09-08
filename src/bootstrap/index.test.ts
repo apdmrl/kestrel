@@ -556,7 +556,8 @@ function makeChallenge(issueNumber: number, title: string): Challenge {
     issueNumber,
     canonicalUrl: "https://github.com/octocat/hello-world/issues/" + issueNumber,
     title,
-    description: "d",
+    description:
+      "The application crashes during startup.\n\nReproduce it with the sample configuration.",
     type: "BUG_FIX",
     labels: ["bug"],
     createdAt: "2026-08-01T00:00:00Z" as IsoDateTime,
@@ -627,6 +628,11 @@ describe("bootstrap recommendation binding", () => {
     if (find.kind === "recommendation") {
       expect(find.title).toBe("Fix crash on startup");
       expect(find.recommendationId).toBe("challenge-42");
+      expect(find.description).toContain("The application crashes during startup.");
+      expect(find.repository).toBe("octocat/hello-world");
+      expect(find.issueNumber).toBe(42);
+      expect(find.issueUrl).toBe("https://github.com/octocat/hello-world/issues/42");
+      expect(find.challengeType).toBe("BUG_FIX");
     }
 
     const accepted = await handlers.missionAccept({ recommendationId: "challenge-42" }, {});
@@ -685,9 +691,7 @@ describe("bootstrap recommendation binding", () => {
     ).rejects.toMatchObject({ code: "DM_RECOMMENDATION_NOT_FOUND" });
 
     // Malformed identifier (empty).
-    await expect(
-      handlers.missionAccept({ recommendationId: "  " }, {}),
-    ).rejects.toMatchObject({
+    await expect(handlers.missionAccept({ recommendationId: "  " }, {})).rejects.toMatchObject({
       code: "DM_ILLEGAL_TRANSITION",
     });
 

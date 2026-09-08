@@ -57,6 +57,31 @@ describe("persistent session", () => {
     expect(lastFrame()).not.toContain("kestrel ›");
   });
 
+  it("hydrates the current mission card from durable mission state", async () => {
+    const commandHandlers = handlers();
+    vi.mocked(commandHandlers.missionCurrent).mockResolvedValue({
+      kind: "mission",
+      id: "mission-42",
+      status: "ACCEPTED",
+      title: "Fix the startup crash",
+      repository: "octocat/hello-world",
+    });
+    const harness = mountInteractive({
+      handlers: commandHandlers,
+      signal: new AbortController().signal,
+      capabilities: { columns: 80, rows: 30, color: true },
+    });
+    try {
+      await settle();
+      const frame = harness.lastFrame();
+      expect(frame).toContain("Fix the startup crash");
+      expect(frame).toContain("octocat/hello-world");
+      expect(frame).not.toContain("No active mission");
+    } finally {
+      harness.unmount();
+    }
+  });
+
   it("renders actionable errors as a titled panel", () => {
     const { lastFrame } = render(
       <TranscriptLine
@@ -262,14 +287,14 @@ describe("persistent session — keyboard navigation", () => {
       harness.stdin.send(downArrow());
       await settle();
       const sidebarFrame = harness.lastFrame();
-      expect((sidebarFrame.match(/>/gu) ?? [])).toHaveLength(1);
+      expect(sidebarFrame.match(/>/gu) ?? []).toHaveLength(1);
       expect(sidebarFrame).toMatch(/>\*-\s+Find/u);
       expect(sidebarFrame).not.toMatch(/>\*-\s+Find a challenge/u);
 
       harness.stdin.send(enterKey());
       await settle();
       const actionsFrame = harness.lastFrame();
-      expect((actionsFrame.match(/>/gu) ?? [])).toHaveLength(1);
+      expect(actionsFrame.match(/>/gu) ?? []).toHaveLength(1);
       expect(actionsFrame).toMatch(/>\*x\s+Find a challenge/u);
       expect(actionsFrame).not.toMatch(/>\*-\S+\s+Find/u);
     } finally {
@@ -280,7 +305,9 @@ describe("persistent session — keyboard navigation", () => {
   it.each([
     { columns: 59, rows: 24 },
     { columns: 80, rows: 19 },
-  ])("compact navigation shows the focused section at $columns×$rows", async ({ columns, rows }) => {
+  ])(
+    "compact navigation shows the focused section at $columns×$rows",
+    async ({ columns, rows }) => {
     const harness = mountInteractive({
       handlers: handlers(),
       signal: new AbortController().signal,
@@ -295,7 +322,8 @@ describe("persistent session — keyboard navigation", () => {
     } finally {
       harness.unmount();
     }
-  });
+    },
+  );
 
   it("keeps unauthenticated Find recovery visible and the prompt stable at 50 columns", async () => {
     const commandHandlers = handlers();
@@ -322,9 +350,9 @@ describe("persistent session — keyboard navigation", () => {
         /GitHub authentication is not verified[\s\S]{0,200}\/auth\s+login/u,
       );
       expect(findFrame.split("\n").length).toBeLessThanOrEqual(24);
-      expect(
-        findFrame.split("\n").findIndex((line) => line.includes("Type a command…")),
-      ).toBe(homeFrame.split("\n").findIndex((line) => line.includes("Type a command…")));
+      expect(findFrame.split("\n").findIndex((line) => line.includes("Type a command…"))).toBe(
+        homeFrame.split("\n").findIndex((line) => line.includes("Type a command…")),
+      );
     } finally {
       harness.unmount();
     }
@@ -413,6 +441,12 @@ describe("persistent session — keyboard navigation", () => {
       recommendationId: "rec-42",
       challengeId: "chal-1",
       title: "Fix something",
+      description: "Issue details",
+      repository: "octocat/hello-world",
+      issueNumber: 42,
+      issueUrl: "https://github.com/octocat/hello-world/issues/42",
+      challengeType: "BUG_FIX",
+      language: "TypeScript",
       mood: "focused",
       confidence: 0.9,
       reasons: ["match"],
@@ -468,6 +502,12 @@ describe("persistent session — keyboard navigation", () => {
         recommendationId: "rec-42",
         challengeId: "chal-1",
         title: "Fix something",
+        description: "Issue details",
+        repository: "octocat/hello-world",
+        issueNumber: 42,
+        issueUrl: "https://github.com/octocat/hello-world/issues/42",
+        challengeType: "BUG_FIX",
+        language: "TypeScript",
         mood: "focused",
         confidence: 0.9,
         reasons: ["match"],
@@ -516,6 +556,12 @@ describe("persistent session — keyboard navigation", () => {
       recommendationId: "rec-42",
       challengeId: "chal-1",
       title: "Fix something",
+      description: "Issue details",
+      repository: "octocat/hello-world",
+      issueNumber: 42,
+      issueUrl: "https://github.com/octocat/hello-world/issues/42",
+      challengeType: "BUG_FIX",
+      language: "TypeScript",
       mood: "focused",
       confidence: 0.9,
       reasons: ["match"],
@@ -602,14 +648,19 @@ describe("persistent session — keyboard navigation", () => {
       recommendationId: "rec-42",
       challengeId: "chal-1",
       title: "Fix something",
+      description: "Issue details",
+      repository: "octocat/hello-world",
+      issueNumber: 42,
+      issueUrl: "https://github.com/octocat/hello-world/issues/42",
+      challengeType: "BUG_FIX",
+      language: "TypeScript",
       mood: "focused",
       confidence: 0.9,
       reasons: ["match"],
     });
     let missionAcceptCalls = 0;
     let capturedRecommendationId: string | undefined;
-    vi.mocked(commandHandlers.missionAccept).mockImplementation(
-      async ({ recommendationId }) => {
+    vi.mocked(commandHandlers.missionAccept).mockImplementation(async ({ recommendationId }) => {
         missionAcceptCalls += 1;
         capturedRecommendationId = recommendationId;
         return {
@@ -618,8 +669,7 @@ describe("persistent session — keyboard navigation", () => {
           status: "ACCEPTED",
           title: "Fix something",
         };
-      },
-    );
+    });
     const harness = mountInteractive({
       handlers: commandHandlers,
       signal: new AbortController().signal,
@@ -676,10 +726,10 @@ describe("persistent session — keyboard navigation", () => {
       // would surface it twice (transcript echo + action-panel
       // row), which is the RED signal.
       const afterFrame = harness.lastFrame();
-      const occurrenceCount = (
-        afterFrame.match(/\/mission\s+accept\s+--id\s+rec-42/gu) ?? []
-      ).length;
+      const occurrenceCount = (afterFrame.match(/\/mission\s+accept\s+--id\s+rec-42/gu) ?? [])
+        .length;
       expect(occurrenceCount).toBe(1);
+      expect(afterFrame).not.toContain("No active mission");
     } finally {
       harness.unmount();
     }
@@ -786,6 +836,12 @@ describe("persistent session — keyboard navigation", () => {
       recommendationId: "rec-42",
       challengeId: "chal-1",
       title: "Fix something",
+      description: "Issue details",
+      repository: "octocat/hello-world",
+      issueNumber: 42,
+      issueUrl: "https://github.com/octocat/hello-world/issues/42",
+      challengeType: "BUG_FIX",
+      language: "TypeScript",
       mood: "focused",
       confidence: 0.9,
       reasons: ["match"],
@@ -825,6 +881,7 @@ describe("persistent session — keyboard navigation", () => {
       harness.stdin.send(enterKey());
       await settle();
       const afterCalls = vi.mocked(commandHandlers.missionAccept).mock.calls.length;
+      expect(afterCalls).toBe(beforeCalls);
       // Home Enter must return focus to the prompt. Navigate back into
       // the sidebar to inspect the Find panel and prove the reducer
       // cleared `latestRecommendation` — not just that focus left Home.
@@ -1239,6 +1296,12 @@ describe("actionsForSection — existing behavior preserved", () => {
         recommendationId: "rec-42",
         challengeId: "ch-1",
         title: "Fix something",
+        description: "Issue details",
+        repository: "octocat/hello-world",
+        issueNumber: 42,
+        issueUrl: "https://github.com/octocat/hello-world/issues/42",
+        challengeType: "BUG_FIX",
+        language: "TypeScript",
         mood: "focused",
         confidence: 0.9,
         reasons: ["match"],
@@ -1253,17 +1316,13 @@ describe("actionsForSection — existing behavior preserved", () => {
   });
 });
 
-describe("Session — typed device-authorization propagation (metadata)", () => {
+describe("Session — device authorization history", () => {
   afterEach(cleanup);
 
-  it("retains an enterprise device-authorization URI + code inside the bounded frame under filler pressure", async () => {
-    // Behavioral test for Finding 5: the session must propagate a
-    // typed `device-authorization` view (with a non-github.com
-    // verification URI) into the bounded transcript without relying
-    // on a github.com-specific text regex. The Session delivers the
-    // notification through the controller's `notify` channel; the
-    // resulting entry is classified and bounded by metadata so the
-    // exact enterprise URI and user code survive row-budget eviction.
+  it("retrieves an older device-authorization URI and code by scrolling history", async () => {
+    // Device guidance is ordinary chronological transcript content. It moves
+    // off the live tail after later commands and remains reachable through
+    // PageUp without host-specific classification.
     const verificationUri = "https://github.enterprise.example.com/login/device";
     const userCode = "WXYZ-9876";
     const commandHandlers = handlers();
@@ -1313,32 +1372,70 @@ describe("Session — typed device-authorization propagation (metadata)", () => 
       // hang and the filler commands would never run.
       harness.stdin.send("\u0003");
       await settle(120);
-      // Drive enough noncritical filler to force the bounded window
-      // to evict the older transcript entries. Each `/progress` runs
-      // a handler that returns a plain `verification` view, which is
-      // noncritical and short — perfect for filling the budget.
+      // Drive enough noncritical filler to move the device authorization off
+      // the live tail, then navigate backward through contiguous history
+      // pages. The payload remains in the bounded 200-entry session history.
       for (let i = 0; i < 12; i += 1) {
         harness.stdin.send("/progress\r");
         await settle(60);
       }
-      // The filler handler must actually have been invoked the
-      // intended number of times — otherwise the test scaffolding
-      // missed the post-abort ready state and we cannot trust the
-      // URI/code assertion that follows.
       expect(vi.mocked(commandHandlers.progress).mock.calls.length).toBeGreaterThanOrEqual(12);
-      const frame = harness.lastFrame();
-      // The exact enterprise URI and user code must survive the
-      // bounded window. Without metadata-driven criticality, the
-      // github.com-only regex would drop the device entry on the
-      // floor under filler pressure.
+      expect(harness.lastFrame()).not.toContain(verificationUri);
+
+      let frame = harness.lastFrame();
+      for (let page = 0; page < 40 && !frame.includes(verificationUri); page += 1) {
+        harness.stdin.send("\u001b[5~");
+        await settle();
+        frame = harness.lastFrame();
+      }
       expect(frame).toContain(verificationUri);
       expect(frame).toContain(userCode);
-      // Frame stays within the row budget.
+      expect(frame).toContain("History");
       expect(frame.split("\n").length).toBeLessThanOrEqual(24);
     } finally {
       // If the test fails before the abort listener fires, settle
       // the pending promise so React/Vitest can shut down cleanly.
       loginReject?.(new Error("test cleanup"));
+      harness.unmount();
+    }
+  });
+});
+describe("persistent session — transcript scrolling", () => {
+  afterEach(() => cleanup());
+
+  it("scrolls through command history and returns to the newest output", async () => {
+    const commandHandlers = handlers();
+    let sequence = 0;
+    vi.mocked(commandHandlers.progress).mockImplementation(async () => ({
+      kind: "verification",
+      text: `progress result ${++sequence}`,
+    }));
+    const harness = mountInteractive({
+      handlers: commandHandlers,
+      signal: new AbortController().signal,
+      capabilities: { columns: 80, rows: 24, color: true },
+    });
+    try {
+      await settle();
+      for (let index = 0; index < 8; index += 1) {
+        harness.stdin.send("/progress\r");
+        await settle();
+      }
+
+      const newest = harness.lastFrame();
+      expect(newest).toContain("progress result 8");
+      expect(newest).not.toContain("progress result 1");
+
+      harness.stdin.send("\u001b[5~");
+      await settle();
+      const older = harness.lastFrame();
+      expect(older).toContain("History");
+      expect(older).not.toContain("progress result 8");
+
+      harness.stdin.send("\u001b[F");
+      await settle();
+      expect(harness.lastFrame()).toContain("progress result 8");
+    } finally {
       harness.unmount();
     }
   });

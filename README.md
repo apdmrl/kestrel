@@ -47,6 +47,12 @@ In the interactive shell:
 
 The second Enter is the explicit confirmation; nothing runs until you press it. Only an in-flight device authorization cannot resume after restart; a completed login credential, once stored through your configured Git credential helper, is reused on the next session without re-authenticating.
 
+Command output stays in a bounded in-memory history. Use `PageUp` and `PageDown` to
+move through contiguous transcript pages, `End` to return to the newest output, and
+`/clear` to discard the visual history. Starting a new command returns the view to
+the newest page. The current mission card is hydrated from durable mission state and
+updates immediately after mission commands.
+
 `auth logout` clears the shared `github.com` credential that `git` and `gh` also use, so it
 requires `--confirm github.com`.
 

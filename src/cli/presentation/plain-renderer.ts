@@ -4,6 +4,27 @@ function bulletList(items: readonly string[]): string {
   return items.map((item) => "- " + item).join("\n");
 }
 
+const CHALLENGE_TYPE_LABELS: Readonly<
+  Record<Extract<ViewModel, { kind: "recommendation" }>["challengeType"], string>
+> = {
+  BUG_FIX: "Bug fix",
+  TESTING: "Testing",
+  DOCUMENTATION: "Documentation",
+};
+
+function issueSummary(description: string): string {
+  const paragraph = description
+    .split(/\n\s*\n/u)
+    .map((part) => part.trim())
+    .find((part) => part.length > 0);
+  if (paragraph === undefined) return "No description provided by the issue author.";
+  return paragraph
+    .replace(/^\s{0,3}#{1,6}\s+/gmu, "")
+    .replace(/^\s*[-*+]\s+/gmu, "")
+    .replace(/\s+/gu, " ")
+    .trim();
+}
+
 function renderMission(view: ViewModel & { kind: "mission" }): string {
   const lines = ["Mission " + view.id + ": " + view.status + " - " + view.title];
   if (view.repository !== undefined) {
@@ -41,15 +62,27 @@ function renderAuthStatus(view: ViewModel & { kind: "auth-status" }): string {
 /** Render a view model as plain, ANSI-free text. */
 export function renderPlain(view: ViewModel): string {
   switch (view.kind) {
-    case "recommendation":
+    case "recommendation": {
+      const details = [
+        view.repository + " #" + view.issueNumber,
+        CHALLENGE_TYPE_LABELS[view.challengeType],
+        ...(view.language === null ? [] : [view.language]),
+      ].join(" · ");
       return [
         "Recommendation: " + view.title,
-        "Recommendation ID: " + view.recommendationId,
-        "Mood: " + view.mood,
-        "Confidence: " + view.confidence.toFixed(2),
-        "Reasons:",
+        details,
+        "",
+        "What needs to be done",
+        issueSummary(view.description),
+        "",
+        "Why Kestrel picked this",
         bulletList(view.reasons),
+        "",
+        "Mood: " + view.mood + " · Confidence: " + view.confidence.toFixed(2),
+        "Recommendation ID: " + view.recommendationId,
+        "Issue: " + view.issueUrl,
       ].join("\n");
+    }
     case "mission":
       return renderMission(view);
     case "progress":

@@ -11,9 +11,7 @@ import {
   estimateEntryRows,
   Footer,
   Header,
-  isCriticalTranscriptText,
   isWideTerminal,
-  classifyTranscriptEntry,
   MissionCard,
   navigationRowMarkers,
   NavItem,
@@ -24,7 +22,8 @@ import {
   Sidebar,
   SmallStat,
   type TerminalCapabilities,
-  windowTranscriptEntries,
+  windowTranscriptPage,
+  moveTranscriptPageOffset,
   availableTranscriptRows,
   transcriptPaneWidth,
   contextActionsRowCount,
@@ -73,27 +72,27 @@ describe("isWideTerminal", () => {
 
 describe("navigationRowMarkers", () => {
   it("emits space-space-dash for an unfocused, unselected, enabled row", () => {
-    expect(
-      navigationRowMarkers({ focused: false, selected: false, availability: "enabled" }),
-    ).toBe("  -");
+    expect(navigationRowMarkers({ focused: false, selected: false, availability: "enabled" })).toBe(
+      "  -",
+    );
   });
 
   it("emits space-star-dash for a selected-enabled row", () => {
-    expect(
-      navigationRowMarkers({ focused: false, selected: true, availability: "enabled" }),
-    ).toBe(" *-");
+    expect(navigationRowMarkers({ focused: false, selected: true, availability: "enabled" })).toBe(
+      " *-",
+    );
   });
 
   it("emits greater-star-x for a focused-selected-disabled row (color independent)", () => {
-    expect(
-      navigationRowMarkers({ focused: true, selected: true, availability: "disabled" }),
-    ).toBe(">*x");
+    expect(navigationRowMarkers({ focused: true, selected: true, availability: "disabled" })).toBe(
+      ">*x",
+    );
   });
 
   it("emits greater-space-x for a focused-disabled row", () => {
-    expect(
-      navigationRowMarkers({ focused: true, selected: false, availability: "disabled" }),
-    ).toBe("> x");
+    expect(navigationRowMarkers({ focused: true, selected: false, availability: "disabled" })).toBe(
+      "> x",
+    );
   });
 });
 
@@ -506,7 +505,6 @@ describe("DashboardShell row budget", () => {
     expect(frame).toContain("↑↓");
   });
 
-
   it("keeps the typed command visible at 59x24", () => {
     const { lastFrame } = render(
       <DashboardShell
@@ -621,9 +619,7 @@ describe("DashboardShell row budget", () => {
     for (let i = 0; i < 60; i += 1) {
       lines.push(<Text key={i}>historic line {i}</Text>);
     }
-    lines.push(
-      <Text key="uri">Open https://github.com/login/device and enter ABCD-1234</Text>,
-    );
+    lines.push(<Text key="uri">Open https://github.com/login/device and enter ABCD-1234</Text>);
     lines.push(<Text key="rec">Recommendation ID: rec-42</Text>);
     lines.push(<Text key="cmd">/mission accept --id rec-42</Text>);
     const { lastFrame } = render(
@@ -656,7 +652,10 @@ describe("DashboardShell row budget", () => {
   });
 
   it("windows oversized transcript at 59x24, 44x24, and 80x19", () => {
-    const cases: ReadonlyArray<{ readonly label: string; readonly capabilities: TerminalCapabilities }> = [
+    const cases: ReadonlyArray<{
+      readonly label: string;
+      readonly capabilities: TerminalCapabilities;
+    }> = [
       { label: "59x24", capabilities: { columns: 59, rows: 24, color: true } },
       { label: "44x24", capabilities: { columns: 44, rows: 24, color: true } },
       { label: "80x19", capabilities: { columns: 80, rows: 19, color: true } },
@@ -666,9 +665,7 @@ describe("DashboardShell row budget", () => {
       for (let i = 0; i < 80; i += 1) {
         lines.push(<Text key={i}>older line {i}</Text>);
       }
-      lines.push(
-        <Text key="uri">Open https://github.com/login/device and enter ABCD-1234</Text>,
-      );
+      lines.push(<Text key="uri">Open https://github.com/login/device and enter ABCD-1234</Text>);
       lines.push(<Text key="rec">Recommendation ID: rec-42</Text>);
       lines.push(<Text key="cmd">/mission accept --id rec-42</Text>);
       const { lastFrame } = render(
@@ -694,9 +691,10 @@ describe("DashboardShell row budget", () => {
       );
       const frame = lastFrame() ?? "";
       const actualRows = frame.split("\n").length;
-      expect(actualRows, `expected ≤${capabilities.rows} rows at ${label}, got ${actualRows}`).toBeLessThanOrEqual(
-        capabilities.rows,
-      );
+      expect(
+        actualRows,
+        `expected ≤${capabilities.rows} rows at ${label}, got ${actualRows}`,
+      ).toBeLessThanOrEqual(capabilities.rows);
       expect(frame).toContain("https://github.com/login/device");
       expect(frame).toContain("ABCD-1234");
       expect(frame).toContain("rec-42");
@@ -736,7 +734,7 @@ describe("DashboardShell row budget", () => {
     expect(frame).not.toContain("older filler 0");
   });
  });
-describe("DashboardShell entries row budget (criticality-preserving)", () => {
+describe("DashboardShell transcript row budget", () => {
   afterEach(() => cleanup());
 
   function entries(
@@ -757,7 +755,6 @@ describe("DashboardShell entries row budget (criticality-preserving)", () => {
           id: i + 1,
           text: options.fill(i),
           kind: "output",
-          criticality: "noncritical",
           rows: estimateEntryRows(options.fill(i), "output", options.columns),
         });
       }
@@ -777,7 +774,6 @@ describe("DashboardShell entries row budget (criticality-preserving)", () => {
         "- Retry once you have network connectivity\n" +
         "- Run /auth status to continue.",
       kind: "error",
-      criticality: "critical",
       rows: estimateEntryRows(
         "Error [DM_NETWORK_UNAVAILABLE]: GitHub is unreachable\n- Retry once you have network connectivity\n- Run /auth status to continue.",
         "error",
@@ -788,23 +784,16 @@ describe("DashboardShell entries row budget (criticality-preserving)", () => {
       id: 1000,
       text: "Open https://github.com/login/device and enter ABCD-1234",
       kind: "output",
-      criticality: "critical",
       rows: estimateEntryRows(
         "Open https://github.com/login/device and enter ABCD-1234",
         "output",
         80,
       ),
-      metadata: {
-        kind: "device-authorization",
-        verificationUri: "https://github.com/login/device",
-        userCode: "ABCD-1234",
-      },
     });
     input.push({
       id: 1001,
       text: "Recommendation ID: rec-42",
       kind: "output",
-      criticality: "critical",
       rows: estimateEntryRows("Recommendation ID: rec-42", "output", 80),
     });
     const { lastFrame } = render(
@@ -827,13 +816,8 @@ describe("DashboardShell entries row budget (criticality-preserving)", () => {
         entries={input}
       />,
     );
-    // Critical bounded representations preserve the required URI / code /
-    // and the latest recommendation. The full multiline error text is
-    // dropped in favor of the bounded single-row form so the total
-    // frame stays within the row budget. The recovery hint is the
-    // lowest-priority critical and is dropped when the budget cannot
-    // accommodate it alongside the auth device payload and the
-    // recommendation ID.
+    // The contiguous live tail keeps the latest recommendation and device
+    // result while older filler falls outside the row budget.
     const frame = lastFrame() ?? "";
     expect(frame.split("\n").length).toBeLessThan(wide.rows);
     expect(frame).toContain("ABCD-1234");
@@ -856,26 +840,18 @@ describe("DashboardShell entries row budget (criticality-preserving)", () => {
         columns: capabilities.columns,
         fill: (i) => `older line ${i}`,
       });
-      const uri =
-        "Open https://github.com/login/device and enter ABCD-1234 to authenticate";
+      const uri = "Open https://github.com/login/device and enter ABCD-1234 to authenticate";
       input.push({
         id: 999,
         text: uri,
         kind: "output",
-        criticality: "critical",
         rows: estimateEntryRows(uri, "output", capabilities.columns),
-        metadata: {
-          kind: "device-authorization",
-          verificationUri: "https://github.com/login/device",
-          userCode: "ABCD-1234",
-        },
       });
       const rec = "Recommendation ID: rec-42";
       input.push({
         id: 1000,
         text: rec,
         kind: "output",
-        criticality: "critical",
         rows: estimateEntryRows(rec, "output", capabilities.columns),
       });
       const cmd = "/mission accept --id rec-42";
@@ -883,7 +859,6 @@ describe("DashboardShell entries row budget (criticality-preserving)", () => {
         id: 1001,
         text: cmd,
         kind: "output",
-        criticality: "critical",
         rows: estimateEntryRows(cmd, "output", capabilities.columns),
       });
       const { lastFrame } = render(
@@ -912,39 +887,31 @@ describe("DashboardShell entries row budget (criticality-preserving)", () => {
         actualRows,
         `expected <${capabilities.rows} rows at ${label}, got ${actualRows}`,
       ).toBeLessThan(capabilities.rows);
-      // Critical substrings (URI user code, rec id, accept command) are retained.
+      // The newest contiguous page contains the just-appended result entries.
       expect(frame).toContain("ABCD-1234");
       expect(frame).toContain("rec-42");
       expect(frame).toContain(cmd);
     }
   });
 
-  it("retains a critical entry older than many fillers", () => {
-    const input: RenderableTranscriptEntry[] = [];
-    // Older critical entry — must survive.
-    input.push({
+  it("exposes older critical entries through an explicit history offset", () => {
+    const input: RenderableTranscriptEntry[] = [
+      {
       id: 1,
       text: "Open https://github.com/login/device and enter ABCD-1234",
       kind: "output",
-      criticality: "critical",
       rows: estimateEntryRows(
         "Open https://github.com/login/device and enter ABCD-1234",
         "output",
         80,
       ),
-      metadata: {
-        kind: "device-authorization",
-        verificationUri: "https://github.com/login/device",
-        userCode: "ABCD-1234",
       },
-    });
-    // Many noncritical fillers between the critical entry and the bottom.
+    ];
     for (let i = 0; i < 30; i += 1) {
       input.push({
         id: 100 + i,
         text: `filler line ${i}`,
         kind: "output",
-        criticality: "noncritical",
         rows: estimateEntryRows(`filler line ${i}`, "output", 80),
       });
     }
@@ -952,7 +919,6 @@ describe("DashboardShell entries row budget (criticality-preserving)", () => {
       id: 999,
       text: "/mission accept --id rec-42",
       kind: "output",
-      criticality: "critical",
       rows: estimateEntryRows("/mission accept --id rec-42", "output", 80),
     });
     const { lastFrame } = render(
@@ -972,14 +938,14 @@ describe("DashboardShell entries row budget (criticality-preserving)", () => {
         busy={false}
         placeholder="Type a command…"
         capabilities={{ columns: 80, rows: 19, color: true }}
+        transcriptOffsetEntries={28}
         entries={input}
       />,
     );
     const frame = lastFrame() ?? "";
     expect(frame).toContain("ABCD-1234");
-    expect(frame).toContain("/mission accept --id rec-42");
-    // Older fillers must be dropped; the first one is far above the budget.
-    expect(frame).not.toContain("filler line 0");
+    expect(frame).not.toContain("/mission accept --id rec-42");
+    expect(frame).toContain("History 1–4 / 32");
   });
 });
 
@@ -1009,74 +975,6 @@ describe("estimateEntryRows", () => {
   });
 });
 
-describe("isCriticalTranscriptText", () => {
-  it("flags recommendation accept commands and recovery lines", () => {
-    expect(isCriticalTranscriptText("/mission accept --id rec-42", "")).toBe(true);
-    expect(isCriticalTranscriptText("Run /auth login to continue.", "")).toBe(true);
-  });
-
-  it("flags entries that echo the current typed prompt input", () => {
-    expect(isCriticalTranscriptText("/mission accept --id rec-99", "/mission accept --id rec-99")).toBe(
-      true,
-    );
-  });
-
-  it("does not flag a device-authorization text entry (text path is metadata-free)", () => {
-    // Device-authorization criticality is now driven by the typed
-    // `metadata` the session attaches on the notify channel. The
-    // text-only path no longer hard-codes the github.com host, so
-    // an entry whose text happens to contain a github.com URI is
-    // not promoted here — only `classifyTranscriptEntry` will
-    // recognise it as critical, and only when the metadata is set.
-    expect(
-      isCriticalTranscriptText("Open https://github.com/login/device and enter ABCD-1234", ""),
-    ).toBe(false);
-  });
-
-  it("does not flag plain informational filler", () => {
-    expect(isCriticalTranscriptText("Older filler 3", "")).toBe(false);
-  });
-});
-
-describe("classifyTranscriptEntry", () => {
-  it("flags a device-authorization entry by metadata regardless of host", () => {
-    expect(
-      classifyTranscriptEntry(
-        {
-          text: "Open https://github.enterprise.example.com/login/device and enter WXYZ-9876",
-          metadata: {
-            kind: "device-authorization",
-            verificationUri: "https://github.enterprise.example.com/login/device",
-            userCode: "WXYZ-9876",
-          },
-        },
-        "",
-      ),
-    ).toBe("critical");
-  });
-
-  it("flags a non-device entry by text (recommendation / recovery)", () => {
-    expect(classifyTranscriptEntry({ text: "/mission accept --id rec-42" }, "")).toBe(
-      "critical",
-    );
-    expect(
-      classifyTranscriptEntry({ text: "Run /auth login to continue." }, ""),
-    ).toBe("critical");
-  });
-
-  it("returns noncritical for an arbitrary HTTPS URL text entry without metadata", () => {
-    // A documentation link without device-authorization metadata
-    // must not be promoted. The metadata is the only path that
-    // surfaces a URL as a bounded critical entry.
-    expect(
-      classifyTranscriptEntry(
-        { text: "Read the docs at https://docs.example.com/article/42" },
-        "",
-      ),
-    ).toBe("noncritical");
-  });
-});
-
 describe("transcriptPaneWidth", () => {
   it("subtracts only the sibling sidebar width in wide mode", () => {
     expect(transcriptPaneWidth({ columns: 80, rows: 24, color: true })).toBe(56);
@@ -1094,19 +992,18 @@ describe("availableTranscriptRows (dynamic chrome)", () => {
   });
 });
 
-
 function buildContextActions(count: number, disabled = false): SessionAction[] {
   const actions: SessionAction[] = [];
   for (let i = 0; i < count; i += 1) {
     if (i === 0 && disabled) {
       actions.push({
-        id: 'find.run',
-        label: 'Find a challenge',
-        command: '/find',
+        id: "find.run",
+        label: "Find a challenge",
+        command: "/find",
         availability: {
-          status: 'disabled',
-          reason: 'GitHub auth is required',
-          recoveryCommand: '/auth login',
+          status: "disabled",
+          reason: "GitHub auth is required",
+          recoveryCommand: "/auth login",
         },
       });
     } else {
@@ -1114,7 +1011,7 @@ function buildContextActions(count: number, disabled = false): SessionAction[] {
         id: `act.${i}`,
         label: `Action ${i}`,
         command: `/cmd-${i}`,
-        availability: { status: 'enabled' },
+        availability: { status: "enabled" },
       });
     }
   }
@@ -1189,9 +1086,9 @@ describe("DashboardShell wide-pane + production ContextActions", () => {
     expect(actionsFrame).toContain("ACTIONS 6/6");
     expect(actionsFrame).toContain("Action 5");
     expect(actionsFrame.split("\n").length).toBe(homeFrame.split("\n").length);
-    expect(
-      actionsFrame.split("\n").findIndex((line) => line.includes("Type a command…")),
-    ).toBe(homeFrame.split("\n").findIndex((line) => line.includes("Type a command…")));
+    expect(actionsFrame.split("\n").findIndex((line) => line.includes("Type a command…"))).toBe(
+      homeFrame.split("\n").findIndex((line) => line.includes("Type a command…")),
+    );
   });
 
   it("keeps disabled recovery text visible in a compact action viewport", () => {
@@ -1306,172 +1203,6 @@ describe("DashboardShell wide-pane + production ContextActions", () => {
     );
     expect((lastFrame() ?? "").split("\n").length).toBe(computed);
   });
-
-});
-
-describe("windowTranscriptEntries (bounded critical retention)", () => {
-  function entry(
-    id: number,
-    text: string,
-    criticality: "critical" | "noncritical" = "noncritical",
-    kind: "input" | "output" | "error" | "system" = "output",
-    rows = 1,
-    metadata?: RenderableTranscriptEntry["metadata"],
-  ): RenderableTranscriptEntry {
-    return {
-      id,
-      text,
-      kind,
-      criticality,
-      rows,
-      ...(metadata === undefined ? {} : { metadata }),
-    };
-  }
-
-  it("compacts repeated auth device payloads — keeps only the latest typed metadata", () => {
-    // The latest typed device-authorization entry wins. The bounded
-    // representation is rendered from the latest entry's metadata
-    // (URI + user code), so the older entry's payload is fully
-    // superseded — both the text and the user code of the older
-    // payload disappear from the bounded output.
-    const list: RenderableTranscriptEntry[] = [
-      entry(
-        1,
-        "Open https://github.com/login/device and enter AAAA-1111",
-        "critical",
-        "output",
-        2,
-        {
-          kind: "device-authorization",
-          verificationUri: "https://github.com/login/device",
-          userCode: "AAAA-1111",
-        },
-      ),
-      entry(2, "filler a", "noncritical", "output", 1),
-      entry(
-        3,
-        "Open https://github.com/login/device and enter BBBB-2222",
-        "critical",
-        "output",
-        2,
-        {
-          kind: "device-authorization",
-          verificationUri: "https://github.com/login/device",
-          userCode: "BBBB-2222",
-        },
-      ),
-      entry(4, "filler b", "noncritical", "output", 1),
-    ];
-    const visible = windowTranscriptEntries(list, 4);
-    // Only the latest typed device-authorization entry survives:
-    // BBBB-2222, not AAAA-1111.
-    expect(visible.some((e) => e.text.includes("BBBB-2222"))).toBe(true);
-    expect(visible.some((e) => e.text.includes("AAAA-1111"))).toBe(false);
-  });
-
-  it("compacts repeated recommendation IDs — keeps only the latest", () => {
-    const list: RenderableTranscriptEntry[] = [
-      entry(1, "Recommendation ID: rec-1", "critical", "output", 2),
-      entry(2, "filler", "noncritical", "output", 1),
-      entry(3, "Recommendation ID: rec-2", "critical", "output", 2),
-    ];
-    const visible = windowTranscriptEntries(list, 4);
-    expect(visible.some((e) => e.text.includes("rec-2"))).toBe(true);
-    expect(visible.some((e) => e.text.includes("rec-1"))).toBe(false);
-  });
-
-  it("preserves chronological order of retained entries", () => {
-    const list: RenderableTranscriptEntry[] = [
-      entry(
-        1,
-        "Open https://github.com/login/device and enter AAAA-1111",
-        "critical",
-        "output",
-        2,
-        {
-          kind: "device-authorization",
-          verificationUri: "https://github.com/login/device",
-          userCode: "AAAA-1111",
-        },
-      ),
-      entry(2, "filler between", "noncritical", "output", 1),
-      entry(3, "Recommendation ID: rec-9", "critical", "output", 2),
-    ];
-    const visible = windowTranscriptEntries(list, 100);
-    // Both criticals survive (budget is large): their relative order
-    // must match the input.
-    expect(visible.findIndex((e) => e.text.includes("AAAA-1111"))).toBeLessThan(
-      visible.findIndex((e) => e.text.includes("rec-9")),
-    );
-    // The filler is between the two criticals in the original input,
-    // so the retained order must keep it there (or compact it) — but
-    // it must NOT appear after rec-9.
-    const fillerIndex = visible.findIndex((e) => e.text === "filler between");
-    const recIndex = visible.findIndex((e) => e.text.includes("rec-9"));
-    if (fillerIndex >= 0 && recIndex >= 0) {
-      expect(fillerIndex).toBeLessThan(recIndex);
-    }
-  });
-
-  it("keeps a complete actionable error when the row budget can render it", () => {
-    const text = [
-      "Error [DM_GITHUB_AUTH_REQUIRED]: GitHub authentication is not configured",
-      "- Set GITHUB_CLIENT_ID and run the command again",
-      "Run /auth login to continue.",
-    ].join("\n");
-    const list = [entry(1, text, "critical", "error", estimateEntryRows(text, "error", 80))];
-
-    const visible = windowTranscriptEntries(list, 20, 80);
-
-    expect(visible).toHaveLength(1);
-    expect(visible[0]?.text).toBe(text);
-  });
-
-  it("renders a bounded critical representation when the critical entry itself exceeds the budget", () => {
-    const text =
-      "Open https://github.com/login/device and enter ABCDE-12345 to authenticate your session";
-    const list: RenderableTranscriptEntry[] = [
-      entry(
-        1,
-        text,
-        "critical",
-        "output",
-        10,
-        {
-          kind: "device-authorization",
-          verificationUri: "https://github.com/login/device",
-          userCode: "ABCDE-12345",
-        },
-      ),
-    ];
-    const visible = windowTranscriptEntries(list, 3);
-    expect(visible).toHaveLength(1);
-    const bounded = visible[0];
-    expect(bounded?.text).toContain("https://github.com/login/device");
-    expect(bounded?.text).toContain("ABCDE-12345");
-  });
-
-  it("preserves the full recommendation ID + accept command when the entry cannot fit", () => {
-    const list: RenderableTranscriptEntry[] = [
-      entry(1, "Recommendation ID: rec-42 with extra verbosity padding", "critical", "output", 10),
-      entry(2, "/mission accept --id rec-42 and more text", "critical", "output", 10),
-    ];
-    const visible = windowTranscriptEntries(list, 3);
-    expect(visible.length).toBeGreaterThan(0);
-    expect(visible.some((e) => e.text.includes("rec-42"))).toBe(true);
-  });
-});
-
-describe("isCriticalTranscriptText — prompt is separately rendered", () => {
-  it("does not flag entries whose text merely contains the prompt input substring `/`", () => {
-    expect(isCriticalTranscriptText("Run /find", "/")).toBe(false);
-  });
-
-  it("does not flag command echoes that happen to contain a single character of prompt", () => {
-    expect(isCriticalTranscriptText("/find a challenge", "/")).toBe(false);
-    expect(isCriticalTranscriptText("/auth status", "/")).toBe(false);
-    expect(isCriticalTranscriptText("/mission current", "/")).toBe(false);
-  });
 });
 
 describe("estimateEntryRows — display cells (CJK + emoji)", () => {
@@ -1530,98 +1261,11 @@ describe("estimateEntryRows — grapheme clusters (keycap + ZWJ emoji)", () => {
   });
 });
 
-describe("windowTranscriptEntries — long bounded critical (≥ pane width)", () => {
-  it("allocates only the bounded slots that fit and keeps the frame ≤ rowBudget", () => {
-    // The latest recommendation is a long unconstrained string that, if
-    // rendered verbatim, would wrap to several rows. The windowing
-    // helper must allocate only the bounded row count that fits the
-    // budget, not the raw wrapped row count of the original text.
-    const longId = "x".repeat(400);
-    const recText = `Recommendation ID: ${longId}`;
-    const list: RenderableTranscriptEntry[] = [
-      {
-        id: 1,
-        text: "Open https://github.com/login/device and enter ABCD-1234",
-        kind: "output",
-        criticality: "critical",
-        rows: 2,
-        metadata: {
-          kind: "device-authorization",
-          verificationUri: "https://github.com/login/device",
-          userCode: "ABCD-1234",
-        },
-      },
-      {
-        id: 2,
-        text: recText,
-        kind: "output",
-        criticality: "critical",
-        rows: estimateEntryRows(recText, "output", 53),
-      },
-      {
-        id: 3,
-        text: "/mission accept --id " + longId,
-        kind: "output",
-        criticality: "critical",
-        rows: estimateEntryRows("/mission accept --id " + longId, "output", 53),
-      },
-    ];
-    const budget = 3;
-    const visible = windowTranscriptEntries(list, budget, 53);
-    // The total declared row count never exceeds the budget.
-    const totalRows = visible.reduce((sum, e) => sum + e.rows, 0);
-    expect(totalRows).toBeLessThanOrEqual(budget);
-    // The auth device payload survives and is bounded to a single
-    // representation. At least one critical survives.
-    expect(visible.length).toBeGreaterThan(0);
-    const boundedText = visible.map((e) => e.text).join("\n");
-    expect(boundedText).toContain("https://github.com/login/device");
-  });
-
-  it("restores the strong two-critical three-row assertion with a long ID", () => {
-    // Two critical entries, a small row budget. The windowing helper
-    // must allocate both bounded representations and stay within the
-    // declared budget (3 rows total). The previous contract weakened
-    // to `visible.length > 0`; this asserts the actual bound.
-    const longId = "y".repeat(200);
-    const list: RenderableTranscriptEntry[] = [
-      {
-        id: 1,
-        text: "Open https://github.com/login/device and enter AAAA-1111",
-        kind: "output",
-        criticality: "critical",
-        rows: 2,
-        metadata: {
-          kind: "device-authorization",
-          verificationUri: "https://github.com/login/device",
-          userCode: "AAAA-1111",
-        },
-      },
-      {
-        id: 2,
-        text: `Recommendation ID: ${longId}`,
-        kind: "output",
-        criticality: "critical",
-        rows: estimateEntryRows(`Recommendation ID: ${longId}`, "output", 53),
-      },
-    ];
-    const visible = windowTranscriptEntries(list, 3, 53);
-    const totalRows = visible.reduce((sum, e) => sum + e.rows, 0);
-    // The total declared rows must not exceed the budget; if it does,
-    // the lowest-priority critical (recommendation) is dropped.
-    expect(totalRows).toBeLessThanOrEqual(3);
-    expect(visible.length).toBeGreaterThan(0);
-    // The auth device payload (highest priority) is always retained.
-    expect(visible.some((e) => e.text.includes("AAAA-1111"))).toBe(true);
-  });
-});
-
 describe("DashboardShell wide-mode 57–80 cell row cap (live pane width)", () => {
   afterEach(() => cleanup());
 
   it("windows wide-mode entries that wrap at the live main-pane width", () => {
     const wideCaps: TerminalCapabilities = { columns: 80, rows: 24, color: true };
-    const paneWidth = transcriptPaneWidth(wideCaps);
     const input: RenderableTranscriptEntry[] = [];
     for (let i = 0; i < 20; i += 1) {
       const text = "x".repeat(57 + (i % 24));
@@ -1629,7 +1273,6 @@ describe("DashboardShell wide-mode 57–80 cell row cap (live pane width)", () =
         id: i + 1,
         text,
         kind: "output",
-        criticality: "noncritical",
         rows: estimateEntryRows(text, "output", wideCaps.columns),
       });
     }
@@ -1658,124 +1301,41 @@ describe("DashboardShell wide-mode 57–80 cell row cap (live pane width)", () =
   });
 });
 
-describe("windowTranscriptEntries — typed device-authorization metadata", () => {
-  // The smallest typed contract the bounded windowing helper must honor:
-  // a renderable entry may carry an optional `metadata` field that
-  // declares the semantic intent of the entry. The device-authorization
-  // shape is the only kind required to keep the latest GitHub Enterprise
-  // device-flow payload critical and bounded without hard-coding
-  // github.com into the text-regex. The metadata carries the validated
-  // `verificationUri` and `userCode` from the typed view, and the
-  // bounded representation must render them verbatim.
-  const deviceAuthMetadata = (
-    verificationUri: string,
-    userCode: string,
-  ): { readonly kind: "device-authorization"; readonly verificationUri: string; readonly userCode: string } => ({
-    kind: "device-authorization",
-    verificationUri,
-    userCode,
-  });
-
-  function deviceEntry(
-    id: number,
-    verificationUri: string,
-    userCode: string,
-    rows = 2,
-  ): RenderableTranscriptEntry {
-    return {
-      id,
-      text: `Open ${verificationUri} and enter ${userCode}`,
+describe("windowTranscriptPage", () => {
+  it("returns contiguous pages measured from the newest entry", () => {
+    const entries: RenderableTranscriptEntry[] = Array.from({ length: 6 }, (_, index) => ({
+      id: index + 1,
+      text: `entry ${index + 1}`,
       kind: "output",
-      criticality: "critical",
-      rows,
-      metadata: deviceAuthMetadata(verificationUri, userCode),
-    };
-  }
+      rows: 1,
+    }));
 
-  it("retains a typed device-authorization entry with a non-github.com HTTPS URI under filler pressure", () => {
-    // A GitHub Enterprise (or any other) device-flow payload uses a
-    // different verification URI. The previous github.com-only regex
-    // dropped these entries on the floor under filler pressure because
-    // the text did not match the hard-coded host. The metadata-driven
-    // path must keep the latest typed device payload critical and
-    // bound the URI/code from metadata, not from the github.com regex.
-    const verificationUri = "https://github.enterprise.example.com/login/device";
-    const userCode = "WXYZ-9876";
-    const list: RenderableTranscriptEntry[] = [
-      deviceEntry(1, verificationUri, userCode, 2),
-    ];
-    for (let i = 0; i < 12; i += 1) {
-      list.push({
-        id: 100 + i,
-        text: `filler line ${i}`,
-        kind: "output",
-        criticality: "noncritical",
-        rows: estimateEntryRows(`filler line ${i}`, "output", 80),
-      });
-    }
-    const visible = windowTranscriptEntries(
-      list,
-      availableTranscriptRows({ columns: 80, rows: 24, color: true }),
-    );
-    // The exact enterprise URI and code survive the bounded window.
-    const joined = visible.map((e) => e.text).join("\n");
-    expect(joined).toContain(verificationUri);
-    expect(joined).toContain(userCode);
-    // The frame stays within the declared row budget.
-    const totalRows = visible.reduce((sum, e) => sum + e.rows, 0);
-    expect(totalRows).toBeLessThanOrEqual(
-      availableTranscriptRows({ columns: 80, rows: 24, color: true }),
-    );
-    // The oldest filler was evicted; the bounded device payload is
-    // preserved.
-    expect(visible.some((e) => e.text === "filler line 0")).toBe(false);
+    expect(windowTranscriptPage(entries, 3, 0).map((entry) => entry.id)).toEqual([4, 5, 6]);
+    expect(windowTranscriptPage(entries, 3, 3).map((entry) => entry.id)).toEqual([1, 2, 3]);
   });
 
-  it("does not promote an arbitrary HTTPS URL text entry without device metadata", () => {
-    // A text entry that contains an unrelated HTTPS URL — but lacks the
-    // typed `metadata` — must not be promoted to critical. The metadata
-    // is the single source of truth for device-authorization
-    // criticality; arbitrary URL text stays noncritical so it is
-    // evicted under filler pressure and cannot impersonate a device
-    // payload.
-    const list: RenderableTranscriptEntry[] = [
-      {
-        id: 1,
-        text: "Read the docs at https://docs.example.com/article/42 for more context",
-        kind: "output",
-        criticality: "noncritical",
-        rows: 2,
-      },
-    ];
-    for (let i = 0; i < 20; i += 1) {
-      list.push({
-        id: 100 + i,
-        text: `filler line ${i}`,
-        kind: "output",
-        criticality: "noncritical",
-        rows: estimateEntryRows(`filler line ${i}`, "output", 80),
-      });
-    }
-    const visible = windowTranscriptEntries(
-      list,
-      availableTranscriptRows({ columns: 80, rows: 24, color: true }),
-    );
-    const joined = visible.map((e) => e.text).join("\n");
-    expect(joined).not.toContain("docs.example.com/article/42");
+  it("advances variable-height pages without skipping entries", () => {
+    const entries: RenderableTranscriptEntry[] = Array.from({ length: 10 }, (_, index) => ({
+      id: index + 1,
+      text: `entry ${index + 1}`,
+      kind: "output",
+      rows: 6,
+    }));
+
+    const firstOlder = moveTranscriptPageOffset(entries, 10, 0, "older");
+    const secondOlder = moveTranscriptPageOffset(entries, 10, firstOlder, "older");
+
+    expect(firstOlder).toBe(1);
+    expect(secondOlder).toBe(2);
+    expect(windowTranscriptPage(entries, 10, secondOlder).map((entry) => entry.id)).toEqual([8]);
+    expect(moveTranscriptPageOffset(entries, 10, secondOlder, "newer")).toBe(firstOlder);
   });
 
-  it("bounds a typed device-authorization entry that exceeds the budget to '<URI> (code <code>)'", () => {
-    // The bounded representation must render the exact metadata
-    // values, not a github.com-derived substring. A long URI + code
-    // pair is collapsed into the canonical "<URI> (code <code>)"
-    // shape, preserving both fields verbatim.
-    const verificationUri = "https://github.enterprise.example.com/login/device";
-    const userCode = "WXYZ-9876";
-    const list: RenderableTranscriptEntry[] = [deviceEntry(1, verificationUri, userCode, 10)];
-    const visible = windowTranscriptEntries(list, 3, 36);
-    expect(visible).toHaveLength(1);
-    const bounded = visible[0];
-    expect(bounded?.text).toContain(verificationUri);
-    expect(bounded?.text).toContain(`(code ${userCode})`);
+  it("keeps one oversized entry visible instead of returning an empty page", () => {
+    const entries: RenderableTranscriptEntry[] = [
+      { id: 1, text: "large output", kind: "output", rows: 8 },
+    ];
+
+    expect(windowTranscriptPage(entries, 3, 0).map((entry) => entry.id)).toEqual([1]);
   });
 });
