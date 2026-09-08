@@ -15,6 +15,7 @@ export interface InteractiveSessionOptions {
   readonly stdin?: NodeJS.ReadStream;
   readonly stdout?: NodeJS.WriteStream;
   readonly render?: typeof render;
+  readonly onCleanup?: (cleanup: (() => void) | undefined) => void;
 }
 
 export async function runInteractiveSession(options: InteractiveSessionOptions): Promise<void> {
@@ -23,6 +24,7 @@ export async function runInteractiveSession(options: InteractiveSessionOptions):
     stdin,
     stdout: options.stdout ?? process.stdout,
   });
+  options.onCleanup?.(terminal.cleanup);
   let closeOnAbort: (() => void) | undefined;
   try {
     const app = (options.render ?? render)(
@@ -41,7 +43,25 @@ export async function runInteractiveSession(options: InteractiveSessionOptions):
       options.signal.removeEventListener("abort", closeOnAbort);
     }
     terminal.cleanup();
+    options.onCleanup?.(undefined);
   }
+}
+
+export function createSignalHandler(options: {
+  readonly controller: AbortController;
+  readonly getActiveSessionCleanup: () => (() => void) | undefined;
+  readonly exit: (code: number) => void;
+}): () => void {
+  let forced = false;
+  return () => {
+    if (forced) {
+      options.getActiveSessionCleanup()?.();
+      options.exit(130);
+      return;
+    }
+    forced = true;
+    options.controller.abort();
+  };
 }
 
 export async function main(): Promise<void> {
@@ -72,14 +92,12 @@ export async function main(): Promise<void> {
   // unwind gracefully (releasing locks, preserving resumable state). A second
   // signal forces an immediate exit for commands that do not observe the abort.
   const controller = new AbortController();
-  let forced = false;
-  const onSignal = (): void => {
-    if (forced) {
-      process.exit(130);
-    }
-    forced = true;
-    controller.abort();
-  };
+  let activeSessionCleanup: (() => void) | undefined;
+  const onSignal = createSignalHandler({
+    controller,
+    getActiveSessionCleanup: () => activeSessionCleanup,
+    exit: (code) => process.exit(code),
+  });
   process.on("SIGINT", onSignal);
   process.on("SIGTERM", onSignal);
   // Bootstrap is signal-free in Task 2: every handler now reads its
@@ -92,7 +110,13 @@ export async function main(): Promise<void> {
   });
   try {
     if (shouldStartSession(args)) {
-      await runInteractiveSession({ handlers, signal: controller.signal });
+      await runInteractiveSession({
+        handlers,
+        signal: controller.signal,
+        onCleanup: (cleanup) => {
+          activeSessionCleanup = cleanup;
+        },
+      });
     } else {
       const program = createProgram({ handlers, signal: controller.signal });
       await program.parseAsync(process.argv);

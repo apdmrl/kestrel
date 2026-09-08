@@ -8,7 +8,7 @@ import {
   SYNCHRONIZED_OUTPUT_BEGIN,
   SYNCHRONIZED_OUTPUT_END,
 } from "./presentation/atomic-terminal-session.js";
-import { runInteractiveSession } from "./main.js";
+import { createSignalHandler, runInteractiveSession } from "./main.js";
 
 class FakeTerminalOutput extends EventEmitter {
   readonly isTTY = true;
@@ -115,5 +115,27 @@ describe("runInteractiveSession", () => {
       SYNCHRONIZED_OUTPUT_END,
       ALTERNATE_SCREEN_EXIT,
     ]);
+  });
+});
+
+describe("createSignalHandler", () => {
+  it("restores an active terminal session before a second signal forces exit", () => {
+    const controller = new AbortController();
+    const events: string[] = [];
+    const onSignal = createSignalHandler({
+      controller,
+      getActiveSessionCleanup: () => () => events.push("cleanup"),
+      exit: (code) => {
+        events.push(`exit:${code}`);
+      },
+    });
+
+    onSignal();
+    expect(controller.signal.aborted).toBe(true);
+    expect(events).toEqual([]);
+
+    onSignal();
+
+    expect(events).toEqual(["cleanup", "exit:130"]);
   });
 });
