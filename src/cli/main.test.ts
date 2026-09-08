@@ -8,7 +8,7 @@ import {
   SYNCHRONIZED_OUTPUT_BEGIN,
   SYNCHRONIZED_OUTPUT_END,
 } from "./presentation/atomic-terminal-session.js";
-import { createSignalHandler, runInteractiveSession } from "./main.js";
+import { createSignalHandler, isExecutableEntrypoint, runInteractiveSession } from "./main.js";
 
 class FakeTerminalOutput extends EventEmitter {
   readonly isTTY = true;
@@ -137,5 +137,11 @@ describe("createSignalHandler", () => {
     onSignal();
 
     expect(events).toEqual(["cleanup", "exit:130"]);
+  });
+});
+
+describe("isExecutableEntrypoint", () => {
+  it("returns false instead of throwing for an unresolvable argv entry", () => {
+    expect(isExecutableEntrypoint("/path/that/does/not/exist", import.meta.url)).toBe(false);
   });
 });

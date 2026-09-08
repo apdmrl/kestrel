@@ -144,9 +144,15 @@ export async function main(): Promise<void> {
   }
 }
 
-if (
-  process.argv[1] !== undefined &&
-  realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))
-) {
+export function isExecutableEntrypoint(argvEntry: string | undefined, moduleUrl: string): boolean {
+  if (argvEntry === undefined) return false;
+  try {
+    return realpathSync(argvEntry) === realpathSync(fileURLToPath(moduleUrl));
+  } catch {
+    return false;
+  }
+}
+
+if (isExecutableEntrypoint(process.argv[1], import.meta.url)) {
   void main();
 }
