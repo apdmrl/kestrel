@@ -36,11 +36,22 @@ describe("bootstrap", () => {
     const config = createConfig({
       KESTREL_HOME: "/tmp/home",
       KESTREL_WORKSPACE: "/tmp/ws",
-      GITHUB_CLIENT_ID: "client-id",
+      GITHUB_CLIENT_ID: " client-id ",
     });
     expect(config.home).toBe("/tmp/home");
     expect(config.workspaceRoot).toBe("/tmp/ws");
     expect(config.githubClientId).toBe("client-id");
+  });
+
+  it("uses the production GitHub client ID without an environment override", () => {
+    expect(createConfig({}).githubClientId).toBe("Ov23lizdZtG8goMx2GZC");
+  });
+
+  it("uses the production GitHub client ID for blank environment overrides", () => {
+    expect(createConfig({ GITHUB_CLIENT_ID: "" }).githubClientId).toBe("Ov23lizdZtG8goMx2GZC");
+    expect(createConfig({ GITHUB_CLIENT_ID: " \t " }).githubClientId).toBe(
+      "Ov23lizdZtG8goMx2GZC",
+    );
   });
 
   it("returns an empty journey without credentials", async () => {

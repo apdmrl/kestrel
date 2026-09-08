@@ -82,7 +82,7 @@ import type { DeviceAuthorizationViewModel, ViewModel } from "../cli/presentatio
 export interface KestrelConfig {
   readonly home: string;
   readonly workspaceRoot: string;
-  readonly githubClientId: string | undefined;
+  readonly githubClientId: string;
   readonly githubApiUrl: string | undefined;
   /** Whether KESTREL_NO_BROWSER suppresses the device-flow browser launch. */
   readonly noBrowser: boolean;
@@ -104,11 +104,13 @@ export interface BootstrapOptions {
   readonly challengeSourceFactory?: (token: string) => ChallengeSource;
 }
 
+const DEFAULT_GITHUB_CLIENT_ID = "Ov23lizdZtG8goMx2GZC";
+
 export function createConfig(env: Record<string, string | undefined>): KestrelConfig {
   return {
     home: env.KESTREL_HOME ?? join(homedir(), ".kestrel"),
     workspaceRoot: env.KESTREL_WORKSPACE ?? join(homedir(), "Kestrel", "missions"),
-    githubClientId: env.GITHUB_CLIENT_ID,
+    githubClientId: env.GITHUB_CLIENT_ID?.trim() || DEFAULT_GITHUB_CLIENT_ID,
     githubApiUrl: env.GITHUB_API_URL,
     noBrowser: env.KESTREL_NO_BROWSER !== undefined,
   };
@@ -244,7 +246,7 @@ export async function bootstrap(
     options.gateway ??
     new OctokitGateway(
       new Octokit(octokitOptions),
-      config.githubClientId ?? "",
+      config.githubClientId,
       createOAuthDeviceAuth,
     );
   const interactive = options.interactive ?? true;

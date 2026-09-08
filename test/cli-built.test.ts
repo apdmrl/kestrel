@@ -1,6 +1,6 @@
 
 import { execFile, spawn } from "node:child_process";
-import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { promisify } from "node:util";
@@ -22,11 +22,12 @@ async function runNpm(args: string[]): Promise<void> {
 function runCli(
   args: string[],
   env: Record<string, string> = {},
+  entrypoint: string = distMain,
 ): Promise<{ code: number; stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
     execFile(
       process.execPath,
-      [distMain, ...args],
+      [entrypoint, ...args],
       {
         env: { ...process.env, ...env },
         cwd: root,
@@ -48,6 +49,23 @@ describe("built CLI", () => {
   beforeAll(async () => {
     await runNpm(["run", "build"]);
   }, 120_000);
+
+  it.skipIf(process.platform === "win32")(
+    "runs through a symlinked executable path",
+    async () => {
+      const binDir = mkdtempSync(join(tmpdir(), "kestrel-cli-bin-"));
+      const bin = join(binDir, "kestrel");
+      try {
+        symlinkSync(distMain, bin);
+        const result = await runCli(["--version"], { KESTREL_HOME: join(binDir, "home") }, bin);
+        expect(result.code).toBe(0);
+        expect(result.stdout.trim()).toBe("0.1.0");
+      } finally {
+        rmSync(binDir, { recursive: true, force: true });
+      }
+    },
+    30_000,
+  );
   it("exposes the complete v0.1 command hierarchy", async () => {
     for (const [group, expected] of [
       ["", ["find", "mission", "agent", "verify", "journey", "progress", "preferences"]],
