@@ -13,11 +13,7 @@ export interface Credential {
  * forward the signal into any subprocess or network I/O.
  */
 export interface CredentialStore {
-  get(
-    service: string,
-    account: string,
-    signal: AbortSignal,
-  ): Promise<Credential | undefined>;
+  get(service: string, account: string, signal: AbortSignal): Promise<Credential | undefined>;
   store(credential: Credential, signal: AbortSignal): Promise<void>;
   delete(service: string, account: string, signal: AbortSignal): Promise<void>;
 }

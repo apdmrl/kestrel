@@ -25,6 +25,7 @@ change is preserved outside the staged diff.
 Replaced the old "Connecting to GitHub" prose (which described implicit
 `find` login and a single-step browser launch) with the verified interactive
 behavior:
+
 - The session renders the first frame immediately and checks GitHub status
   for up to five seconds; it never starts login automatically.
 - If GitHub is required, the user picks `Auth` in the sidebar, chooses
@@ -87,12 +88,12 @@ $ npx vitest run test/docs/commands.test.ts \
 
 Per-file counts:
 
-| File                                        | Tests |
-| ------------------------------------------- | ----- |
-| `test/e2e/auth-cli.test.ts`                 | 12    |
-| `src/cli/interactive/session-auth.test.tsx` | 11    |
-| `test/docs/commands.test.ts`                | 1     |
-| **Total**                                   | **24**|
+| File                                        | Tests  |
+| ------------------------------------------- | ------ |
+| `test/e2e/auth-cli.test.ts`                 | 12     |
+| `src/cli/interactive/session-auth.test.tsx` | 11     |
+| `test/docs/commands.test.ts`                | 1      |
+| **Total**                                   | **24** |
 
 The focused docs tests, the real-PTY smoke, and the targeted Step 3
 test runs above are complete. The repository-wide Step 5 gate
@@ -170,11 +171,11 @@ Three new failing tests were added to
 `src/cli/interactive/session-state.test.ts`:
 
 - `invalidates the connected state to required when an operation
-  fails with DM_GITHUB_AUTH_REQUIRED`
+fails with DM_GITHUB_AUTH_REQUIRED`
 - `invalidates the connected state to expired when an operation
-  fails with DM_GITHUB_AUTH_EXPIRED`
+fails with DM_GITHUB_AUTH_EXPIRED`
 - `preserves the connected state when an operation fails with a
-  post-auth network error`
+post-auth network error`
 
 One pre-existing test (`restores authBeforeLogin when HOME_SELECTED
 abandons a running login`) was updated to assert the new
@@ -380,6 +381,7 @@ as `sequence="/exit\r"`. The lineBreak branch then runs
 `drainQueue(["/exit"])`.
 
 The actual failure path:
+
 1. `/auth login\r` → `drainQueue(["/auth login"])`. The drainQueue loop
    shifts `/auth login`, admits, and awaits the still-pending handler.
 2. `/exit\r` → `drainQueue(["/exit"])`. The drainQueue call pushes
@@ -391,13 +393,13 @@ The actual failure path:
 4. `drainQueue`'s awaited `submit('/auth login')` resolves, the loop
    re-checks `commandQueue.current.length`, shifts the queued `/exit`,
    calls `submit('/exit')` with `admissionSlot.current.running ===
-   false`, and reaches the `parsed.kind === "exit"` branch which calls
+false`, and reaches the `parsed.kind === "exit"` branch which calls
    `close()` → `onExit?.()` → `exit()`.
 
 The production busy guard at session.tsx:380 only runs when
 `admissionSlot.current.running` is `true` at the time submit processes
 the command. The race window opens because the queued `/exit` is
-shifted from the queue and submitted *after* the slot has already been
+shifted from the queue and submitted _after_ the slot has already been
 released by the prior submit's finally.
 
 ### Proposed correction

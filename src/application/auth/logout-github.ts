@@ -76,11 +76,7 @@ export async function logoutGitHub(
     throw confirmationRequiredError();
   }
   const signal = input.signal ?? NEVER_ABORTED;
-  const existing = await deps.credentialStore.get(
-    "github",
-    logoutConfirmationToken(),
-    signal,
-  );
+  const existing = await deps.credentialStore.get("github", logoutConfirmationToken(), signal);
   if (existing !== undefined) {
     await deps.credentialStore.delete("github", existing.account, signal);
   }

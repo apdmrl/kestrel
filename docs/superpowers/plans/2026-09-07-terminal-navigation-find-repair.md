@@ -27,6 +27,7 @@
 ### Task 1: Deterministic terminal navigation and geometry
 
 **Files:**
+
 - Modify: `src/cli/interactive/session.tsx`
 - Modify: `src/cli/interactive/session-state.ts`
 - Modify: `src/cli/interactive/dashboard.tsx`
@@ -35,6 +36,7 @@
 - Test: `src/cli/interactive/dashboard.test.tsx`
 
 **Interfaces:**
+
 - Consumes: `SessionState.focus`, `selectedSectionIndex`, `selectedActionIndex`; `SECTION_SELECTED`, `ACTION_SELECTED`, `FOCUS_CHANGED`, and `HOME_SELECTED` events; `TerminalCapabilities`.
 - Produces: reducer-owned navigation state, `actionFocused={reducerState.focus === "actions"}`, visible compact focus, and a bounded action viewport whose height does not move the prompt while categories change.
 
@@ -43,7 +45,7 @@
 Use the real `FakeInkStdin` harness at `80×24`. Send Down twice from the prompt to select Find. Assert exactly one `>` focus marker and that it belongs to Find; the action remains selected but not focused. Send Enter and assert focus moves exclusively to the first action.
 
 ```ts
-expect((frame.match(/>/gu) ?? [])).toHaveLength(1);
+expect(frame.match(/>/gu) ?? []).toHaveLength(1);
 expect(frame).toMatch(/>\*-\s+Find/u);
 expect(frame).not.toMatch(/>\*-\s+Find a challenge/u);
 ```
@@ -94,12 +96,14 @@ git commit -m "fix(ui): stabilize keyboard navigation"
 ### Task 2: Correct bounded GitHub discovery
 
 **Files:**
+
 - Modify: `src/application/discovery/discovery-planner.ts`
 - Modify: `src/infrastructure/github/github-challenge-source.ts`
 - Test: `src/application/discovery/discovery-planner.test.ts`
 - Test: `src/infrastructure/github/github-challenge-source.test.ts`
 
 **Interfaces:**
+
 - Consumes: `DiscoveryPlan.batches`, `DiscoveryBatch.pageBudget`, `SearchQuery.labels/topics/language`, `ChallengeSource.search(intent, signal)`.
 - Produces: GitHub OR-label query encoding, bounded multi-page traversal, normalized-candidate deduplication, and cancellation propagation.
 
@@ -143,12 +147,14 @@ git commit -m "fix(discovery): broaden bounded GitHub search"
 ### Task 3: Clear stale recommendation after empty Find
 
 **Files:**
+
 - Modify: `src/cli/interactive/session.tsx`
 - Modify: `src/cli/interactive/session-state.ts`
 - Test: `src/cli/interactive/session.test.tsx`
 - Test: `src/cli/interactive/session-state.test.ts`
 
 **Interfaces:**
+
 - Consumes: parsed `SessionCommand.kind`, `SessionControllerResult`, matching operation IDs.
 - Produces: typed reducer event `FIND_COMPLETED_EMPTY` carrying the matching operation ID; no new public `ViewModel` variant or JSON field.
 
@@ -188,10 +194,12 @@ git commit -m "fix(ui): clear stale empty find results"
 ### Task 4: End-to-end verification and cleanup
 
 **Files:**
+
 - Modify if required by actual behavior: `CHANGELOG.md`
 - Remove: any throwaway smoke scripts created during verification
 
 **Interfaces:**
+
 - Consumes: built `dist/cli/main.js`, fake stdin/stdout harness, GitHub adapter fakes.
 - Produces: observed behavioral evidence for navigation, Find, output parity, and repository quality.
 

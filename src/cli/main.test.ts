@@ -46,7 +46,6 @@ function renderFrame(app: Instance): typeof InkRender {
 }
 
 describe("runInteractiveSession", () => {
-
   it("mounts Ink inside the atomic terminal session and restores it after normal exit", async () => {
     const output = new FakeTerminalOutput();
 

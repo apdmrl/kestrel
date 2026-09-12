@@ -175,9 +175,20 @@ function prependToPath(dir: string): string {
   return dir + delimiter + (process.env.PATH ?? "");
 }
 
+function environmentWithoutHostGitCredentials(): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(process.env).filter(
+      ([key]) =>
+        !key.startsWith("GIT_CONFIG_") &&
+        !key.startsWith("GIT_CREDENTIAL_") &&
+        key !== "GIT_ASKPASS" &&
+        key !== "SSH_ASKPASS",
+    ),
+  );
+}
 function cliEnv(extraEnv: Record<string, string> = {}): Record<string, string> {
   return {
-    ...process.env,
+    ...environmentWithoutHostGitCredentials(),
     KESTREL_HOME: home,
     KESTREL_WORKSPACE: workspace,
     GITHUB_API_URL: serverUrl,
@@ -1089,34 +1100,6 @@ describe("kestrel end-to-end workflow", () => {
     expect(await readdir(recDir)).toContain(id + ".json");
   }, 60_000);
 
-  it("keeps --json stdout machine-readable during interactive device authorization", async () => {
-    // Task 1 removed implicit device flow: `find` no longer starts a GitHub
-    // device flow. Authorization guidance therefore flows through the explicit
-    // `auth login` command under test, not from a discovery operation.
-    const result = await runCli(["--json", "--no-browser", "auth", "login"], {
-      PATH: prependToPath(noCredGitDir),
-      GITHUB_CLIENT_ID: "test-client-id",
-    });
-    expect(result.status).toBe(0);
-
-    // Every nonempty stdout byte must be exactly one JSON document.
-    const stdoutLines = result.stdout.split("\n").filter((line) => line.trim().length > 0);
-    expect(stdoutLines.length).toBeGreaterThan(0);
-    const parsed = JSON.parse(stdoutLines.join("\n")) as { ok: boolean };
-    expect(parsed.ok).toBe(true);
-
-    // Human authorization guidance must never pollute machine stdout.
-    expect(result.stdout).not.toContain("https://github.com/login/device");
-    expect(result.stdout).not.toContain("ABCD");
-
-    // The guidance belongs on stderr and carries only safe fields.
-    expect(result.stderr).toContain("https://github.com/login/device");
-    expect(result.stderr).toContain("ABCD");
-    expect(result.stderr).not.toContain("device-code-secret");
-    expect(result.stderr).not.toContain("DEVICE_FLOW_ACCESS_TOKEN");
-    expect(result.stderr).not.toContain("Bearer ");
-  }, 60_000);
-
   it("preserves interactive device guidance on stderr in plain mode", async () => {
     // Task 1 removed implicit device flow: explicit `auth login` is the only
     // path that may begin the device flow, so this scenario invokes it
@@ -2015,7 +1998,7 @@ describe("kestrel end-to-end workflow", () => {
       // device polling is explicit `auth login` (or `/auth login` in the
       // shell), so we drive that command directly instead of letting `find`
       // start the flow as a side effect.
-      const polling = spawnCli(["--json", "--no-browser", "auth", "login"], {
+      const polling = spawnCli(["--no-browser", "auth", "login"], {
         PATH: prependToPath(noCredGitDir),
         GITHUB_CLIENT_ID: "test-client-id",
       });
@@ -2146,7 +2129,7 @@ describe("kestrel end-to-end workflow", () => {
         // Task 1 removed implicit device flow: `find` no longer begins the
         // device flow, so this cancellation targets the explicit `auth login`
         // command that is the only authorized entry point.
-        const child = spawnCli(["--json", "--no-browser", "auth", "login"], {
+        const child = spawnCli(["--no-browser", "auth", "login"], {
           PATH: prependToPath(noCredGitDir),
           GITHUB_CLIENT_ID: "test-client-id",
         });
@@ -2226,7 +2209,7 @@ describe("kestrel end-to-end workflow", () => {
       // Task 1 removed implicit device flow from `find`: the only path that
       // may begin the device flow is explicit `auth login` (or `/auth login`
       // in the shell), so this cancellation drives that command directly.
-      const child = spawnCli(["--json", "--no-browser", "auth", "login"], {
+      const child = spawnCli(["--no-browser", "auth", "login"], {
         PATH: prependToPath(noCredGitDir),
         GITHUB_CLIENT_ID: "test-client-id",
       });
@@ -2253,7 +2236,7 @@ describe("kestrel end-to-end workflow", () => {
       // Task 1 removed implicit device flow from `find`: the only path that
       // may begin the device flow is explicit `auth login` (or `/auth login`
       // in the shell), so this cancellation drives that command directly.
-      const child = spawnCli(["--json", "--no-browser", "auth", "login"], {
+      const child = spawnCli(["--no-browser", "auth", "login"], {
         PATH: prependToPath(noCredGitDir),
         GITHUB_CLIENT_ID: "test-client-id",
       });

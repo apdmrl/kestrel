@@ -242,14 +242,14 @@ This metadata provides early interactive feedback only. The application credenti
 
 ### 8.2 Auth contextual actions
 
-| State | Primary action | Secondary actions |
-|---|---|---|
-| `checking` | Status shown disabled | none |
-| `required` | `/auth login` | `/auth status` |
-| `expired` | `/auth login` | `/auth status`, confirmed logout |
-| `unknown` | `/auth status` | `/auth login` |
-| `connected` | `/auth status` | confirmed logout |
-| `logging-in` | Cancel instruction | other auth actions disabled |
+| State        | Primary action        | Secondary actions                |
+| ------------ | --------------------- | -------------------------------- |
+| `checking`   | Status shown disabled | none                             |
+| `required`   | `/auth login`         | `/auth status`                   |
+| `expired`    | `/auth login`         | `/auth status`, confirmed logout |
+| `unknown`    | `/auth status`        | `/auth login`                    |
+| `connected`  | `/auth status`        | confirmed logout                 |
+| `logging-in` | Cancel instruction    | other auth actions disabled      |
 
 GitHub-dependent categories are disabled during `checking`, `required`, `expired`, `unknown`, and `logging-in`. Local categories remain enabled unless a foreground operation temporarily owns command execution.
 
@@ -315,12 +315,12 @@ After restart:
 
 ## 12. Input, cancellation, and exit behavior
 
-| Input | Idle | Foreground command | Login |
-|---|---|---|---|
-| Ctrl+C in Ink | clear prompt; keep session | abort current child | abort login child; keep session |
-| `/exit` | close session | unavailable while busy | unavailable while busy |
-| Process SIGINT/SIGTERM | abort lifetime and close | abort parent and child | abort parent and login child |
-| Second process signal | force exit 130 | force exit 130 | force exit 130 |
+| Input                  | Idle                       | Foreground command     | Login                           |
+| ---------------------- | -------------------------- | ---------------------- | ------------------------------- |
+| Ctrl+C in Ink          | clear prompt; keep session | abort current child    | abort login child; keep session |
+| `/exit`                | close session              | unavailable while busy | unavailable while busy          |
+| Process SIGINT/SIGTERM | abort lifetime and close   | abort parent and child | abort parent and login child    |
+| Second process signal  | force exit 130             | force exit 130         | force exit 130                  |
 
 Ink input cancellation and process-signal cancellation are separate test cases. The first is operation-scoped; the second is lifetime-scoped.
 

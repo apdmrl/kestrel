@@ -1,9 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { renderJson } from "./json-renderer.js";
-import type {
-  AuthStatusViewModel,
-  ErrorViewModel,
-} from "./view-models.js";
+import type { AuthStatusViewModel, ErrorViewModel } from "./view-models.js";
 
 /**
  * Exact regression assertions for the JSON envelope.

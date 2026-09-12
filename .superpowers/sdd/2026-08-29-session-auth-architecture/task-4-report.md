@@ -80,7 +80,7 @@ build / full test suite was run per the directive.
 
 ```ts
 export interface NavigationSection {
-  readonly id: SessionSectionId;          // "home" | "find" | "mission" | …
+  readonly id: SessionSectionId; // "home" | "find" | "mission" | …
   readonly label: string;
   readonly requires?: "github";
   readonly actions: readonly SessionAction[];
@@ -94,8 +94,7 @@ export interface SessionAction {
 }
 
 export type ActionAvailability =
-  | { status: "enabled" }
-  | { status: "disabled"; reason: string; recoveryCommand?: string };
+  { status: "enabled" } | { status: "disabled"; reason: string; recoveryCommand?: string };
 
 export const NAVIGATION_SECTIONS: readonly NavigationSection[];
 export function actionsForSection(
@@ -128,8 +127,8 @@ export function actionsForSection(
   action with `recoveryCommand: "/auth login"` (or `/auth status` for
   `unknown`) and appends the matching primary action, so the Find test
   observes `[{ id: "find.run", availability: { status: "disabled",
-  reason: <string>, recoveryCommand: "/auth login" } },
-  { id: "auth.login", command: "/auth login", availability: { status: "enabled" } }]`.
+reason: <string>, recoveryCommand: "/auth login" } },
+{ id: "auth.login", command: "/auth login", availability: { status: "enabled" } }]`.
 - No fixed `auth` command lives in the static `NAVIGATION_SECTIONS`
   definition: `SECTION_ACTIONS.auth` is `[]`. The auth sidebar position
   derives its actions from `authActions(auth)` per render.
@@ -388,7 +387,7 @@ renderSessionView({ kind: "device-authorization",
    the notify shape beyond `toContain(URI)` and `toContain(userCode)`,
    which hold because the controller forwards the exact
    `device-authorization` view the test injects).
-4. **The dashboard's prior user work is replaced wholesale.** The
+3. **The dashboard's prior user work is replaced wholesale.** The
    user's untracked `dashboard.tsx`/`dashboard.test.tsx` were evolved
    into the approved category/action design (per the brief's
    "evolve them into the approved category/action design rather than
@@ -402,12 +401,12 @@ renderSessionView({ kind: "device-authorization",
    consumer of `NavItem.active` would have to migrate — but
    `NavItem` is only imported by the dashboard itself and the untracked
    test file.
-5. **`NAVIGATION_ITEMS` no longer exists.** Anything in the codebase
+4. **`NAVIGATION_ITEMS` no longer exists.** Anything in the codebase
    that referenced `NAVIGATION_ITEMS` (only the untracked user
    `session.tsx` hunks) had to be folded into the navigation
    transition. The current `session.tsx` no longer imports
    `NAVIGATION_ITEMS`, so the loss is contained.
-6. **Six auth states tested, but `logging-in`'s `auth.cancel` action
+5. **Six auth states tested, but `logging-in`'s `auth.cancel` action
    does not call a handler.** The brief's spec puts a cancel
    instruction on `auth.cancel`; this commit ships the action
    metadata only. The cancel runtime (abort login child, restore
@@ -583,8 +582,7 @@ $ npx vitest run src/cli/interactive/session-navigation.test.ts \
    both `checking` and `unknown`; `find`, `mission`, `agent`, and `verify` are all
    covered by the new `disables Find during checking auth with /auth status recovery`
    and `disables Mission, Agent, and Verify during checking auth with /auth status
-   recovery` tests.
-
+recovery` tests.
 
 ## Fix Round 2 (commit c0d855a)
 
@@ -733,7 +731,7 @@ chrome entirely.
 - **Critical strings retained inside the bounded frame.** Tests assert
   the auth/operation status, active section / actions panel, prompt,
   key hint (`↑↓` / `enter`), typed command (`/mission accept --id
-  rec-42`), and the full recommendation ID survive every tier.
+rec-42`), and the full recommendation ID survive every tier.
 
 #### Final focused run (row-budget suite)
 
@@ -772,28 +770,28 @@ capabilities   | rows |  cols
 4. **Home clears prompt and restores dashboard.** The Home-key hook
    resets input, `selectedCategoryIndex`, `selectedActionIndex`, and
    `focus` to their initial values.
-6. **`TerminalCapabilities` is required on `DashboardShell`.** The prop
+5. **`TerminalCapabilities` is required on `DashboardShell`.** The prop
    is declared without `?`. Session's optional `capabilities` prop
    defaults to the 80x24 fallback.
-7. **Existing tests that depended on the old "ready made header"
+6. **Existing tests that depended on the old "ready made header"
    layout are preserved.** `renders a calm status bar, welcome panel,
-   and minimal prompt` still asserts `KESTREL`, `LOCAL WORKSPACE`,
+and minimal prompt` still asserts `KESTREL`, `LOCAL WORKSPACE`,
    `Ready`, `›`, and `Try /help` — the bounded shell retains all of
    them. `does not start work from an already-aborted session` still
    asserts `Ready`.
-8. **All transcript / output rendering routes through `TranscriptLine`
+7. **All transcript / output rendering routes through `TranscriptLine`
    and `renderSessionView`.** No second display convention. Critical
    strings (verification URI, user code, recommendation ID, typed
    command) survive at every tier — verified by the `renders the
-   verification URI and user code in compact view` test and the
+verification URI and user code in compact view` test and the
    `preserves the typed command and auth status inside the bounded
-   shell` test.
-9. **All commands and `Session` imports still resolve.** `Session`,
+shell` test.
+8. **All commands and `Session` imports still resolve.** `Session`,
    `TranscriptLine`, and `sessionInputTransition` remain exported from
    `session.tsx` so the harness and unit suite keep working without a
    second seam.
-10. **No formatter / lint / typecheck / build / full test suite run.**
-    Only the six focused files were exercised, per the directive.
+9. **No formatter / lint / typecheck / build / full test suite run.**
+   Only the six focused files were exercised, per the directive.
 
 ## Fix Round 3 (commit 157fd51)
 
@@ -982,6 +980,7 @@ $ npx vitest run src/cli/interactive/session.test.tsx \
 ```
 
 Net delta from the prior focused run (116 tests):
+
 - `+14` new tests (11 in `dashboard.test.tsx`, 3 in `session.test.tsx`)
 - 0 regressions across the 6 focused files.
 
@@ -1060,7 +1059,7 @@ Net delta from the prior focused run (116 tests):
 
 1. **Live stdout dimensions without override.**
    New `derives capabilities from Ink's stdout when no override is
-   supplied` test mounts `<Session />` with `FakeInkStdout(59, 24)` and
+supplied` test mounts `<Session />` with `FakeInkStdout(59, 24)` and
    asserts the rendered frame contains `Ready` and `Type a command…`
    while staying within 24 rows — proof that production reads the
    stream, not the 80x24 fallback.
@@ -1075,15 +1074,15 @@ Net delta from the prior focused run (116 tests):
 
 3. **Critical entry older than many fillers retained.**
    New `retains a critical entry older than many fillers` and `never
-   truncates a critical multiline entry inside the bounded frame` cases
+truncates a critical multiline entry inside the bounded frame` cases
    assert that a critical entry inserted before 30 noncritical fillers
    survives at 80×19, and that a critical multiline error entry never
    has its text mutated by the windowing helper.
 
 4. **Auth-status failure transitions from `checking` to `unknown` and
-    exposes login recovery.**
+   exposes login recovery.**
    New `transitions authState from checking to unknown when /auth status
-   fails with DM_NETWORK_UNAVAILABLE` case mocks the controller to
+fails with DM_NETWORK_UNAVAILABLE` case mocks the controller to
    reject with a classified `DM_NETWORK_UNAVAILABLE` error, then
    asserts the rendered frame contains `DM_NETWORK_UNAVAILABLE`, the
    appended recovery line `Run /auth status to continue.`, the
@@ -1166,28 +1165,28 @@ supersession is implicit. Transient state (`input`, `focus`,
   removed (the reducer owns both transitions).
 - `src/cli/interactive/session.test.tsx` — preserves every
   round-4 test from `persistent session` through `persistent session
-  — live stdout capabilities` (18 tests). Replaces the two
+— live stdout capabilities` (18 tests). Replaces the two
   round-4 `persistent session — auth failure propagation` cases with
   a single reducer-driven case (`transitions to unknown only when
-  /auth status fails during checking`) that asserts on the live
+/auth status fails during checking`) that asserts on the live
   contextual action panel rather than incidental transcript text the
   compact 80×24 budget intentionally drops. Adds three new
   reducer-driven cases (`Session — auth failure routing
-  (reducer-driven)`):
+(reducer-driven)`):
   - `preserves the connected state when /find fails with
-    DM_NETWORK_UNAVAILABLE`
+DM_NETWORK_UNAVAILABLE`
   - `restores required state when /auth login fails with
-    DM_GITHUB_AUTH_REQUIRED`
+DM_GITHUB_AUTH_REQUIRED`
   - `transitions to unknown only when /auth status fails during
-    checking`
-  Adds three dashboard-integration cases (`ContextActions — variable
-  row chrome`, `DashboardShell — wide pane with production
-  ContextActions`, `actionsForSection — existing behavior preserved`)
-  consolidated from the round-5 cleanup. New regex constants
-  (`FIND_ENABLED`, `FIND_RECOVERY_AUTH_STATUS`, `FIND_RECOVERY_AUTH_LOGIN`)
-  anchor on the Find-section ContextActions panel so the bounded
-  shell's intentional drop of the transcript line does not break the
-  assertion.
+checking`
+    Adds three dashboard-integration cases (`ContextActions — variable
+row chrome`, `DashboardShell — wide pane with production
+ContextActions`, `actionsForSection — existing behavior preserved`)
+    consolidated from the round-5 cleanup. New regex constants
+    (`FIND_ENABLED`, `FIND_RECOVERY_AUTH_STATUS`, `FIND_RECOVERY_AUTH_LOGIN`)
+    anchor on the Find-section ContextActions panel so the bounded
+    shell's intentional drop of the transcript line does not break the
+    assertion.
 - `src/cli/interactive/dashboard.test.tsx` — round-5 row-budget and
   bounded-critical cases remain consolidated from the round-5 cleanup
   (71 tests, all passing).
@@ -1200,11 +1199,11 @@ supersession is implicit. Transient state (`input`, `focus`,
 
 ### Reducer Dispatch Wiring
 
-| Command kind         | ID counter  | Pre-await dispatch                            | Success dispatch                         | Failure dispatch                          |
-| -------------------- | ----------- | --------------------------------------------- | ---------------------------------------- | ----------------------------------------- |
-| `auth-status`        | `attemptId` | `AUTH_CHECK_STARTED`                          | `AUTH_RESOLVED` (CONNECTED / NOT_CONNECTED / EXPIRED, login as recorded) | `AUTH_FAILED` (errorCode)               |
-| `auth-login`         | `operationId` | `OPERATION_STARTED` (cancellable=true)        | `OPERATION_SUCCEEDED` (reducer restores `authBeforeLogin` on non-connected result, sets `connected` on connected result) | `OPERATION_FAILED` (reducer restores `authBeforeLogin`) |
-| other (`/find`, ...) | `operationId` | `OPERATION_STARTED` (cancellable=true)        | `OPERATION_SUCCEEDED` (view)             | `OPERATION_FAILED` (reducer preserves `auth`) |
+| Command kind         | ID counter    | Pre-await dispatch                     | Success dispatch                                                                                                         | Failure dispatch                                        |
+| -------------------- | ------------- | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------- |
+| `auth-status`        | `attemptId`   | `AUTH_CHECK_STARTED`                   | `AUTH_RESOLVED` (CONNECTED / NOT_CONNECTED / EXPIRED, login as recorded)                                                 | `AUTH_FAILED` (errorCode)                               |
+| `auth-login`         | `operationId` | `OPERATION_STARTED` (cancellable=true) | `OPERATION_SUCCEEDED` (reducer restores `authBeforeLogin` on non-connected result, sets `connected` on connected result) | `OPERATION_FAILED` (reducer restores `authBeforeLogin`) |
+| other (`/find`, ...) | `operationId` | `OPERATION_STARTED` (cancellable=true) | `OPERATION_SUCCEEDED` (view)                                                                                             | `OPERATION_FAILED` (reducer preserves `auth`)           |
 
 The reducer ignores every event whose `attemptId / operationId` does
 not match the running operation / attempt, so a stale resolution
@@ -1243,18 +1242,18 @@ the round-4 baseline and the new tests re-run. Both round-5 cases
 failed exactly where expected:
 
 - `preserves the connected state when /find fails with
-  DM_NETWORK_UNAVAILABLE` — pre-reducer transitions auth to
+DM_NETWORK_UNAVAILABLE` — pre-reducer transitions auth to
   `unknown` so the Find-section ContextActions surfaces
   `/auth status` as recovery; the test's
   `not.toMatch(FIND_RECOVERY_AUTH_STATUS)` assertion fails.
 - `restores required state when /auth login fails with
-  DM_GITHUB_AUTH_REQUIRED` — pre-reducer transitions auth to
+DM_GITHUB_AUTH_REQUIRED` — pre-reducer transitions auth to
   `unknown` so the Find-section ContextActions surfaces
   `/auth status`; the test's
   `toMatch(FIND_RECOVERY_AUTH_LOGIN)` and
   `not.toMatch(FIND_RECOVERY_AUTH_STATUS)` assertions fail.
 - `transitions to unknown only when /auth status fails during
-  checking` — passes on both implementations because the reducer
+checking` — passes on both implementations because the reducer
   preserves the round-4 `AUTH_FAILED` → `unknown` transition;
   included as a regression guard.
 
@@ -1318,17 +1317,17 @@ $ npx vitest run src/cli/interactive/session-state.test.ts \
 
 ### Counts
 
-| Suite                                    | Round-4 | Round-5 |
-| ---------------------------------------- | ------- | ------- |
-| session-state.test.ts                    | 52      | 52      |
-| session.test.tsx                         | 20      | 24      |
-| session-auth.test.tsx                    | 4       | 4       |
-| session-controller.test.ts               | 11      | 11      |
-| session-navigation.test.ts               | 21      | 21      |
-| session-renderer.test.ts                 | 18      | 18      |
-| dashboard.test.tsx                       | 71      | 71      |
-| session-parser.test.ts                   | 38      | 38      |
-| **Focused suite total**                   | **235** | **239** |
+| Suite                      | Round-4 | Round-5 |
+| -------------------------- | ------- | ------- |
+| session-state.test.ts      | 52      | 52      |
+| session.test.tsx           | 20      | 24      |
+| session-auth.test.tsx      | 4       | 4       |
+| session-controller.test.ts | 11      | 11      |
+| session-navigation.test.ts | 21      | 21      |
+| session-renderer.test.ts   | 18      | 18      |
+| dashboard.test.tsx         | 71      | 71      |
+| session-parser.test.ts     | 38      | 38      |
+| **Focused suite total**    | **235** | **239** |
 
 ### Self-Review
 
@@ -1355,7 +1354,6 @@ $ npx vitest run src/cli/interactive/session-state.test.ts \
 - `package.json` / `package-lock.json` direct `string-width` metadata
   is consistent (`^7.2.0` → installed `7.2.0`); no change required.
 
-
 ## Fix Round 6 — Bounded Critical Retention, Grapheme Segmentation, Logout Auth Transition, Direct Dependency
 
 ### Status
@@ -1367,14 +1365,14 @@ Important blockers are closed; the contract limitation is gone.
 
 ### Findings Addressed
 
-| # | Finding | Resolution |
-| - | ------- | --------- |
-| 1 | Wire actual transcript pane width into production row measurement | `transcriptPaneWidth` was already wired through `DashboardShell` → `availableTranscriptRows` → `windowTranscriptEntries` and through `Session` → `estimateEntryRows`. The new "windows wide-mode entries that wrap at the live 53-cell pane width" test asserts the shell windows 20 filler entries in the 57–80-cell range against the live 53-cell wide-mode pane width and stays ≤ `capabilities.rows`. |
-| 2 | Count every rendered contextual-action row | `contextActionsRowCount` already mirrors the component's render path (label + command + disabled reason/recovery + borders + outer margins). The new "budgets ContextActions row count from enabled+disabled rows, not just action count" test compares the helper's row count against the actual rendered output for 6 production actions and asserts equality. The new "counts ContextActions disabled rows for each disabled action" test verifies a 6-disabled-action list reserves ≥ 18 body rows. |
-| 3 | Enforce the budget when bounded critical slots exceed it | `finalizeWindowedEntries` already hard-bounds critical slot allocation: a critical is dropped when its bounded row count would push the running total past `rowBudget`. The new "allocates only the bounded slots that fit" test confirms the total declared rows ≤ `rowBudget`. The new "restores the strong two-critical three-row assertion" test verifies a long-IDs pair (200-char recommendation) still satisfies the bounded budget. |
-| 4 | Segment Unicode by grapheme before measuring wrapped rows | `segmentGraphemes` already calls `Intl.Segmenter({ granularity: "grapheme" })` and `wrapLineToWidth` consumes cells per grapheme. The new "treats a keycap emoji like 1️⃣ as a single grapheme cluster" test asserts the cell count and row count for 20 repeated keycap emoji. The new "treats a ZWJ family emoji 👨‍👩‍👧‍👦 as a single grapheme cluster" test asserts the ZWJ family case. The new "segments text before string-width so wrapping matches terminal cells" test asserts 5 keycap emoji at 4-column width wraps to ≤ 6 rows. |
-| 5 | Transition auth state after a successful logout | `Session.submit` already dispatches `AUTH_CHECK_STARTED` for both `auth-status` and `auth-logout` and dispatches `AUTH_RESOLVED` with `detail: "NOT_CONNECTED"` when the controller returns an `auth-status` view with `detail: "LOGGED_OUT"`. The new "dispatches AUTH_RESOLVED disconnected after a successful /auth logout" test mocks `authLogout` to return the `LOGGED_OUT` view, runs the live session through `/auth status` → `/auth logout --confirm github.com`, navigates to the Find section, and asserts the live `ContextActions` panel flips from `*- Find a challenge` (enabled) to `>*x Find a challenge` (disabled with `/auth login` recovery). The `FIND_ENABLED` regex was tightened to anchor on the literal `*-` enabled marker so the disabled `>*x` row (which still renders `/find` underneath) is not mistaken for an enabled action. |
-| 6 | Commit the direct string-width dependency and synchronized lock entry | `package.json` already declared `string-width ^7.2.0` as a direct dependency. The root entry of `package-lock.json` was missing it; running `npm install --package-lock-only` synchronized the lock without upgrading any other package. `git diff --stat package.json package-lock.json` reports `2 insertions(+), 0 deletions(-)` — the only changes are the new string-width line in each file. |
+| #   | Finding                                                               | Resolution                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| --- | --------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Wire actual transcript pane width into production row measurement     | `transcriptPaneWidth` was already wired through `DashboardShell` → `availableTranscriptRows` → `windowTranscriptEntries` and through `Session` → `estimateEntryRows`. The new "windows wide-mode entries that wrap at the live 53-cell pane width" test asserts the shell windows 20 filler entries in the 57–80-cell range against the live 53-cell wide-mode pane width and stays ≤ `capabilities.rows`.                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| 2   | Count every rendered contextual-action row                            | `contextActionsRowCount` already mirrors the component's render path (label + command + disabled reason/recovery + borders + outer margins). The new "budgets ContextActions row count from enabled+disabled rows, not just action count" test compares the helper's row count against the actual rendered output for 6 production actions and asserts equality. The new "counts ContextActions disabled rows for each disabled action" test verifies a 6-disabled-action list reserves ≥ 18 body rows.                                                                                                                                                                                                                                                                                                                                                           |
+| 3   | Enforce the budget when bounded critical slots exceed it              | `finalizeWindowedEntries` already hard-bounds critical slot allocation: a critical is dropped when its bounded row count would push the running total past `rowBudget`. The new "allocates only the bounded slots that fit" test confirms the total declared rows ≤ `rowBudget`. The new "restores the strong two-critical three-row assertion" test verifies a long-IDs pair (200-char recommendation) still satisfies the bounded budget.                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| 4   | Segment Unicode by grapheme before measuring wrapped rows             | `segmentGraphemes` already calls `Intl.Segmenter({ granularity: "grapheme" })` and `wrapLineToWidth` consumes cells per grapheme. The new "treats a keycap emoji like 1️⃣ as a single grapheme cluster" test asserts the cell count and row count for 20 repeated keycap emoji. The new "treats a ZWJ family emoji 👨‍👩‍👧‍👦 as a single grapheme cluster" test asserts the ZWJ family case. The new "segments text before string-width so wrapping matches terminal cells" test asserts 5 keycap emoji at 4-column width wraps to ≤ 6 rows.                                                                                                                                                                                                                                                                                                                              |
+| 5   | Transition auth state after a successful logout                       | `Session.submit` already dispatches `AUTH_CHECK_STARTED` for both `auth-status` and `auth-logout` and dispatches `AUTH_RESOLVED` with `detail: "NOT_CONNECTED"` when the controller returns an `auth-status` view with `detail: "LOGGED_OUT"`. The new "dispatches AUTH_RESOLVED disconnected after a successful /auth logout" test mocks `authLogout` to return the `LOGGED_OUT` view, runs the live session through `/auth status` → `/auth logout --confirm github.com`, navigates to the Find section, and asserts the live `ContextActions` panel flips from `*- Find a challenge` (enabled) to `>*x Find a challenge` (disabled with `/auth login` recovery). The `FIND_ENABLED` regex was tightened to anchor on the literal `*-` enabled marker so the disabled `>*x` row (which still renders `/find` underneath) is not mistaken for an enabled action. |
+| 6   | Commit the direct string-width dependency and synchronized lock entry | `package.json` already declared `string-width ^7.2.0` as a direct dependency. The root entry of `package-lock.json` was missing it; running `npm install --package-lock-only` synchronized the lock without upgrading any other package. `git diff --stat package.json package-lock.json` reports `2 insertions(+), 0 deletions(-)` — the only changes are the new string-width line in each file.                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 
 ### RED / GREEN Evidence
 
@@ -1438,19 +1436,20 @@ $ npx vitest run src/cli/interactive/dashboard.test.tsx \
 ```
 
 Net delta from round 5 (239 tests):
+
 - +9 new tests across `dashboard.test.tsx` (8 new) and `session.test.tsx` (1 new).
 - 0 regressions across the 8 focused files.
 
 ### Per-Finding Test Counts
 
-| Finding | New Tests | Assertion |
-| ------- | --------- | -------- |
-| 1 (transcript pane width) | 1 | Wide-mode 20-row 57–80-cell fillers measured at 53-cell pane width stay within `capabilities.rows`. |
-| 2 (ContextActions row count) | 2 | (a) 6-action production list: helper count == rendered count. (b) 6-disabled-action list: helper count ≥ 18 body rows. |
-| 3 (bounded critical retention) | 2 | (a) 3 critical slots in 3-row budget: total ≤ budget. (b) 2 critical slots + long ID in 3-row budget: total ≤ budget, auth-device survives. |
-| 4 (grapheme segmentation) | 3 | (a) 20 keycap emoji at 20 columns: 3–4 rows. (b) 10 ZWJ family at 20 columns: 2–4 rows. (c) 5 keycap at 4 columns: 3–6 rows. |
-| 5 (logout AUTH_RESOLVED) | 1 | Live session: `*- Find a challenge` after connect → `>*x Find a challenge` after logout. `authLogout` handler called. |
-| 6 (dependency lock) | 0 | Lockfile diff: 1 line added to root entry, 0 upgrades elsewhere. |
+| Finding                        | New Tests | Assertion                                                                                                                                   |
+| ------------------------------ | --------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1 (transcript pane width)      | 1         | Wide-mode 20-row 57–80-cell fillers measured at 53-cell pane width stay within `capabilities.rows`.                                         |
+| 2 (ContextActions row count)   | 2         | (a) 6-action production list: helper count == rendered count. (b) 6-disabled-action list: helper count ≥ 18 body rows.                      |
+| 3 (bounded critical retention) | 2         | (a) 3 critical slots in 3-row budget: total ≤ budget. (b) 2 critical slots + long ID in 3-row budget: total ≤ budget, auth-device survives. |
+| 4 (grapheme segmentation)      | 3         | (a) 20 keycap emoji at 20 columns: 3–4 rows. (b) 10 ZWJ family at 20 columns: 2–4 rows. (c) 5 keycap at 4 columns: 3–6 rows.                |
+| 5 (logout AUTH_RESOLVED)       | 1         | Live session: `*- Find a challenge` after connect → `>*x Find a challenge` after logout. `authLogout` handler called.                       |
+| 6 (dependency lock)            | 0         | Lockfile diff: 1 line added to root entry, 0 upgrades elsewhere.                                                                            |
 
 ### Dependency Lock Evidence
 

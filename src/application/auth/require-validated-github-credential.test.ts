@@ -126,10 +126,7 @@ describe("requireValidatedGitHubCredential", () => {
       });
     };
     await expect(
-      requireValidatedGitHubCredential(
-        { credentialStore: store, gateway },
-        { account: "github" },
-      ),
+      requireValidatedGitHubCredential({ credentialStore: store, gateway }, { account: "github" }),
     ).rejects.toMatchObject({ code: "DM_GITHUB_AUTH_EXPIRED" });
     expect(gateway.deviceFlowCalls).toBe(0);
     expect(gateway.pollForTokenCalls).toBe(0);
@@ -152,10 +149,7 @@ describe("requireValidatedGitHubCredential", () => {
       throw networkError;
     };
     await expect(
-      requireValidatedGitHubCredential(
-        { credentialStore: store, gateway },
-        { account: "github" },
-      ),
+      requireValidatedGitHubCredential({ credentialStore: store, gateway }, { account: "github" }),
     ).rejects.toMatchObject({ code: "DM_GITHUB_TIMEOUT" });
     expect(gateway.deviceFlowCalls).toBe(0);
   });

@@ -126,7 +126,7 @@ describe("actionsForSection — auth", () => {
         }
       }
     });
-   }
+  }
 
   it("surfaces logging-in cancellation as a disabled, non-routable instruction", () => {
     const actions = actionsForSection("auth", { status: "logging-in", phase: "starting" }, null);
@@ -146,8 +146,11 @@ describe("actionsForSection — Find availability", () => {
     const find = actions.find((action) => action.id === "find.run");
     const login = actions.find((action) => action.id === "auth.login");
     expect(find?.availability).toMatchObject({ status: "disabled" });
-    expect(typeof find?.availability?.reason).toBe("string");
-    expect(find?.availability?.recoveryCommand).toBe("/auth login");
+    if (find === undefined || find.availability.status !== "disabled") {
+      throw new Error("expected Find action to be disabled");
+    }
+    expect(typeof find.availability.reason).toBe("string");
+    expect(find.availability.recoveryCommand).toBe("/auth login");
     expect(login).toEqual({
       id: "auth.login",
       label: expect.any(String),
@@ -170,7 +173,10 @@ describe("actionsForSection — Find availability", () => {
     const find = actions.find((action) => action.id === "find.run");
     const status = actions.find((action) => action.id === "auth.status");
     expect(find?.availability).toMatchObject({ status: "disabled" });
-    expect(find?.availability?.recoveryCommand).toBe("/auth status");
+    if (find === undefined || find.availability.status !== "disabled") {
+      throw new Error("expected Find action to be disabled");
+    }
+    expect(find.availability.recoveryCommand).toBe("/auth status");
     expect(status?.command).toBe("/auth status");
     expect(status?.availability).toEqual({ status: "enabled" });
   });
@@ -180,7 +186,10 @@ describe("actionsForSection — Find availability", () => {
     const find = actions.find((action) => action.id === "find.run");
     const status = actions.find((action) => action.id === "auth.status");
     expect(find?.availability).toMatchObject({ status: "disabled" });
-    expect(find?.availability?.recoveryCommand).toBe("/auth status");
+    if (find === undefined || find.availability.status !== "disabled") {
+      throw new Error("expected Find action to be disabled");
+    }
+    expect(find.availability.recoveryCommand).toBe("/auth status");
     expect(status?.command).toBe("/auth status");
   });
 

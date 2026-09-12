@@ -176,13 +176,13 @@ export function runStartupAuth(input: {
 
 ## Counts
 
-| Suite                       | Before Task 5 | After Task 5 | Delta |
-| --------------------------- | ------------- | ------------ | ----- |
-| session-runtime.test.ts     | n/a           | 15           | +15   |
-| session-state.test.ts       | 52            | 52           | 0     |
-| session.test.tsx            | 25            | 25           | 0     |
-| session-auth.test.tsx       | 4             | 6            | +2    |
-| **Focused suite total**     | **81**        | **98**       | **+17** |
+| Suite                   | Before Task 5 | After Task 5 | Delta   |
+| ----------------------- | ------------- | ------------ | ------- |
+| session-runtime.test.ts | n/a           | 15           | +15     |
+| session-state.test.ts   | 52            | 52           | 0       |
+| session.test.tsx        | 25            | 25           | 0       |
+| session-auth.test.tsx   | 4             | 6            | +2      |
+| **Focused suite total** | **81**        | **98**       | **+17** |
 
 ## Self-Review
 
@@ -195,41 +195,41 @@ export function runStartupAuth(input: {
    promise is intentionally unhandled; React schedules the call but the
    first paint completes independently. The reducer's `AUTH_CHECK_STARTED`
    transition is the only state mutation.
-4. **Child operations are scoped, not lifetime.** `submit()` always
+3. **Child operations are scoped, not lifetime.** `submit()` always
    passes `child.controller.signal` to handlers. The lifetime `signal`
    is forwarded through `createChildOperation(signal)` and only affects
    the child when the process actually shuts down. The CLI's lifetime
    `controller.signal` is the parent; the brief's "Process abort remains
    lifetime shutdown" contract is preserved at the `main.ts` listener.
-5. **Late result suppression.** `runStartupAuth` and the reducer both
+4. **Late result suppression.** `runStartupAuth` and the reducer both
    suppress stale events: the runtime uses a `settled` flag for the
    startup attempt, and the reducer ignores events whose
    `attemptId`/`operationId` does not match the running attempt/operation.
    Both contract layers are present and do not conflict.
-6. **Disabled Find never calls `handlers.find`.** The contextual action
+5. **Disabled Find never calls `handlers.find`.** The contextual action
    panel's Enter branch checks `availability.status === "enabled"`
    before filling the prompt. A disabled Find action leaves the prompt
    untouched and never invokes the handler. This was verified by the
    new `never invokes the find handler when the Find action is disabled`
    test in `session-auth.test.tsx`.
-7. **`onCancel` removed cleanly.** No reference to `SessionProps.onCancel`
+6. **`onCancel` removed cleanly.** No reference to `SessionProps.onCancel`
    remains in `src/`. `main.ts` never passed it; `session-auth.test.tsx`
    was migrated to `onSessionExit` (`onExit`) with `debug: true` so the
    FakeInk harness actually captures frames.
-8. **No second key convention, no second render path.** Idle Ctrl+C
+7. **No second key convention, no second render path.** Idle Ctrl+C
    reuses the existing `sessionInputTransition` idle path; busy Ctrl+C
    aborts through the same `useInput` hook. The transcript continues to
    route through `TranscriptLine` + `renderSessionView`; no new chrome
    was introduced.
-9. **Timer/listener cleanup.** `runStartupAuth` clears its
+8. **Timer/listener cleanup.** `runStartupAuth` clears its
    `setTimeout` handle inside `finalize` (and inside the deadline
    handler itself). `createChildOperation`'s `dispose()` removes the
    parent's `abort` listener. `submit()` calls `child.dispose()` in
    `finally`. `useRealTimers()` runs in `afterEach` for both describes
    that touch fake timers; the runtime test file completes in 49ms.
-10. **No formatter / lint / typecheck / build / full suite run** per the
-    directive. The brief's exact Step 8 command plus an adjacent
-    touched-module regression check is the entire validation scope.
+9. **No formatter / lint / typecheck / build / full suite run** per the
+   directive. The brief's exact Step 8 command plus an adjacent
+   touched-module regression check is the entire validation scope.
 
 ## Limitations
 
@@ -246,13 +246,14 @@ export function runStartupAuth(input: {
    after `dispose()`; the runtime never relies on disposal to stop a
    handler, only to free the listener.
 3. **`TimeoutHandle` is exposed as a named alias for `ReturnType<typeof
-   setTimeout>`** so consumers don't reach for the helper. There is no
+setTimeout>`** so consumers don't reach for the helper. There is no
    dedicated Node-binding boundary in this codebase; the alias documents
    the type at the export point.
 4. **The mount-time startup auth check runs exactly once.** A remount
    (e.g. session reset) would re-trigger it because the `useEffect` deps
    are empty. The brief did not require a reset path; this matches the
    existing single-mount contract.
+
 ## R1 Follow-up: Startup Auth Unmount + Foreground Admission Gate
 
 The SessionRuntimeReview re-review surfaced two Important lifecycle
@@ -375,13 +376,13 @@ $ npx vitest run src/cli/interactive/session-controller.test.ts \
 
 ### Counts
 
-| Suite                       | Before R1 | After R1 | Delta |
-| --------------------------- | --------- | -------- | ----- |
-| session-runtime.test.ts     | 15        | 17       | +2    |
-| session-state.test.ts       | 52        | 52       | 0     |
-| session.test.tsx            | 25        | 25       | 0     |
-| session-auth.test.tsx       | 6         | 8        | +2    |
-| **Focused suite total**     | **98**    | **102**  | **+4** |
+| Suite                   | Before R1 | After R1 | Delta  |
+| ----------------------- | --------- | -------- | ------ |
+| session-runtime.test.ts | 15        | 17       | +2     |
+| session-state.test.ts   | 52        | 52       | 0      |
+| session.test.tsx        | 25        | 25       | 0      |
+| session-auth.test.tsx   | 6         | 8        | +2     |
+| **Focused suite total** | **98**    | **102**  | **+4** |
 
 Two new runtime tests cover the dispose API (timer cleared + parent
 listener detached + late event suppressed). Two new session-auth tests
@@ -533,13 +534,13 @@ No regressions in the touched modules.
 
 ### Counts
 
-| Suite                       | Before R2 | After R2 | Delta |
-| --------------------------- | --------- | -------- | ----- |
-| session-runtime.test.ts     | 17        | 21       | +4    |
-| session-state.test.ts       | 52        | 52       | 0     |
-| session.test.tsx            | 25        | 25       | 0     |
-| session-auth.test.tsx       | 8         | 10       | +2    |
-| **Focused suite total**     | **102**   | **108**  | **+6** |
+| Suite                   | Before R2 | After R2 | Delta  |
+| ----------------------- | --------- | -------- | ------ |
+| session-runtime.test.ts | 17        | 21       | +4     |
+| session-state.test.ts   | 52        | 52       | 0      |
+| session.test.tsx        | 25        | 25       | 0      |
+| session-auth.test.tsx   | 8         | 10       | +2     |
+| **Focused suite total** | **102**   | **108**  | **+6** |
 
 (Task 4 adjacent total remains 129/129.)
 
@@ -556,7 +557,6 @@ No regressions in the touched modules.
 No formatter / lint / typecheck / build / full suite run per the
 directive. The brief's exact four-file suite plus an adjacent
 touched-module regression check is the entire validation scope.
-
 
 ## R3 Follow-up: Transcript Recording, Stronger Disposal & Remainder Coverage
 
@@ -680,13 +680,13 @@ No regressions in the touched modules.
 
 ### Counts
 
-| Suite                       | Before R3 | After R3 | Delta |
-| --------------------------- | --------- | -------- | ----- |
-| session-runtime.test.ts     | 21        | 21       | 0     |
-| session-state.test.ts       | 52        | 52       | 0     |
-| session.test.tsx            | 25        | 25       | 0     |
-| session-auth.test.tsx       | 10        | 10       | 0     |
-| **Focused suite total**     | **108**   | **108**  | **0** |
+| Suite                   | Before R3 | After R3 | Delta |
+| ----------------------- | --------- | -------- | ----- |
+| session-runtime.test.ts | 21        | 21       | 0     |
+| session-state.test.ts   | 52        | 52       | 0     |
+| session.test.tsx        | 25        | 25       | 0     |
+| session-auth.test.tsx   | 10        | 10       | 0     |
+| **Focused suite total** | **108**   | **108**  | **0** |
 
 Test counts unchanged because the strengthening tightened existing
 tests rather than adding new ones. The OLD code paths now fail the

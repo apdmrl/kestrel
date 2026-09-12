@@ -244,11 +244,7 @@ export async function bootstrap(
   const octokitOptions = config.githubApiUrl !== undefined ? { baseUrl: config.githubApiUrl } : {};
   const gateway =
     options.gateway ??
-    new OctokitGateway(
-      new Octokit(octokitOptions),
-      config.githubClientId,
-      createOAuthDeviceAuth,
-    );
+    new OctokitGateway(new Octokit(octokitOptions), config.githubClientId, createOAuthDeviceAuth);
   const interactive = options.interactive ?? true;
   const browserLauncher =
     options.browserLauncher ??

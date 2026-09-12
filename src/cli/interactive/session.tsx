@@ -213,7 +213,7 @@ export function Session({
 
   const initialCategoryIndex =
     initialCategory === undefined
-    ? 0
+      ? 0
       : Math.max(
           0,
           NAVIGATION_SECTIONS.findIndex((section) => section.id === initialCategory),
@@ -286,7 +286,7 @@ export function Session({
       });
     return () => {
       disposed = true;
-  };
+    };
     // The durable mission is hydrated once. Later mission command results
     // update the reducer directly and cannot be overwritten by this read.
   }, []);
@@ -606,7 +606,7 @@ export function Session({
   };
   // Cancel the in-flight foreground child operation. Busy Ctrl+C must
   // abort only the current command so the session can keep accepting
- // new ones; the lifetime signal stays untouched.
+  // new ones; the lifetime signal stays untouched.
   const drainQueue = async (commands: readonly string[]): Promise<void> => {
     // Filter out `/clear` and `/exit` commands queued while the
     // admission slot is busy. They cannot run until the slot is

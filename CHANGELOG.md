@@ -21,6 +21,8 @@
   full-screen clears on each keystroke. Batched Enter input clears the prompt correctly, and
   authentication configuration failures retain their actual setup action instead of collapsing
   to a circular `Run /auth login` message.
+- Persistent-shell `/help` now renders one command per line, and the packaged POSIX executable
+  includes a Node shebang so clean npm installs launch correctly.
 - Persistent-shell navigation has one visible focus owner as movement shifts between
   the prompt, sidebar, and contextual actions; the terminal-aware layout keeps frame
   and prompt geometry stable while navigating.

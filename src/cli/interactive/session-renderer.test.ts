@@ -8,9 +8,9 @@ const AUTH_REQUIRED_ERROR = createKestrelError({
   category: "USER_ACTION_REQUIRED",
   userMessage: "GitHub authentication is required to continue",
   suggestedActions: ["Run 'kestrel auth login' to authenticate, then retry"],
-  retryability: "manual",
-  recoveryStrategy: "USER_GUIDED",
-  severity: "blocking",
+  retryability: "NO_RETRY",
+  recoveryStrategy: "USER_ACTION",
+  severity: "ERROR",
 });
 
 const AUTH_EXPIRED_ERROR = createKestrelError({
@@ -18,9 +18,9 @@ const AUTH_EXPIRED_ERROR = createKestrelError({
   category: "USER_ACTION_REQUIRED",
   userMessage: "GitHub authentication has expired",
   suggestedActions: ["Re-run the command to re-authenticate"],
-  retryability: "manual",
-  recoveryStrategy: "USER_GUIDED",
-  severity: "blocking",
+  retryability: "NO_RETRY",
+  recoveryStrategy: "USER_ACTION",
+  severity: "ERROR",
 });
 
 const AUTH_CANCELLED_ERROR = createKestrelError({
@@ -28,9 +28,9 @@ const AUTH_CANCELLED_ERROR = createKestrelError({
   category: "USER_ACTION_REQUIRED",
   userMessage: "Login was cancelled; the session remains active.",
   suggestedActions: ["Run /auth login when ready to authenticate again."],
-  retryability: "manual",
-  recoveryStrategy: "USER_GUIDED",
-  severity: "informational",
+  retryability: "NO_RETRY",
+  recoveryStrategy: "USER_ACTION",
+  severity: "INFO",
 });
 
 function errorViewModel(error: KestrelError): ErrorViewModel {
@@ -129,9 +129,9 @@ describe("renderSessionView — error", () => {
       category: "TRANSIENT",
       userMessage: "Network is unavailable",
       suggestedActions: ["Check your connection and retry"],
-      retryability: "transient",
-      recoveryStrategy: "AUTO_RETRY",
-      severity: "warning",
+      retryability: "RETRYABLE",
+      recoveryStrategy: "RETRY",
+      severity: "WARNING",
     });
     expect(renderSessionView(errorViewModel(networkError))).toMatchObject({
       kind: "error",
@@ -146,9 +146,9 @@ describe("renderSessionView — unique guidance", () => {
       category: "USER_ACTION_REQUIRED",
       userMessage: "GitHub authentication is required to continue",
       suggestedActions: ["Run 'kestrel auth login' to authenticate, then retry"],
-      retryability: "manual",
-      recoveryStrategy: "USER_GUIDED",
-      severity: "blocking",
+      retryability: "NO_RETRY",
+      recoveryStrategy: "USER_ACTION",
+      severity: "ERROR",
     });
     const rendered = renderSessionView(errorViewModel(error));
     expect(rendered.text).not.toContain("kestrel auth login");
@@ -166,9 +166,9 @@ describe("renderSessionView — unique guidance", () => {
         "Check the GitHub status page if the failure persists",
         "Use a personal access token as a fallback",
       ],
-      retryability: "manual",
-      recoveryStrategy: "USER_GUIDED",
-      severity: "blocking",
+      retryability: "NO_RETRY",
+      recoveryStrategy: "USER_ACTION",
+      severity: "ERROR",
     });
     const rendered = renderSessionView(errorViewModel(error));
     expect(rendered.text).toContain("to authenticate, then retry");
@@ -182,9 +182,9 @@ describe("renderSessionView — unique guidance", () => {
       category: "TRANSIENT",
       userMessage: "Network is unavailable",
       suggestedActions: ["Run `kestrel auth status` to re-check"],
-      retryability: "transient",
-      recoveryStrategy: "AUTO_RETRY",
-      severity: "warning",
+      retryability: "RETRYABLE",
+      recoveryStrategy: "RETRY",
+      severity: "WARNING",
     });
     const rendered = renderSessionView(errorViewModel(error));
     expect(rendered.text).toContain("Run `/auth status` to re-check");
@@ -197,9 +197,9 @@ describe("renderSessionView — unique guidance", () => {
       category: "USER_ACTION_REQUIRED",
       userMessage: "Auth missing",
       suggestedActions: ["Run /auth login to continue."],
-      retryability: "manual",
-      recoveryStrategy: "USER_GUIDED",
-      severity: "blocking",
+      retryability: "NO_RETRY",
+      recoveryStrategy: "USER_ACTION",
+      severity: "ERROR",
     });
     const rendered = renderSessionView(errorViewModel(error));
     const occurrences = rendered.text.split("Run /auth login to continue.").length - 1;
@@ -215,9 +215,9 @@ describe("renderSessionView — unique guidance", () => {
         "Run /auth login, then re-run the command",
         "Verify your network connection",
       ],
-      retryability: "manual",
-      recoveryStrategy: "USER_GUIDED",
-      severity: "blocking",
+      retryability: "NO_RETRY",
+      recoveryStrategy: "USER_ACTION",
+      severity: "ERROR",
     });
     const rendered = renderSessionView(errorViewModel(error));
     expect(rendered.text).toContain("- Run /auth login, then re-run the command");

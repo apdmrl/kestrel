@@ -71,7 +71,7 @@ function mount(props: {
     createElement(Session, {
       handlers: props.handlers,
       signal: props.signal,
-      onExit: props.onSessionExit,
+      ...(props.onSessionExit === undefined ? {} : { onExit: props.onSessionExit }),
     }),
     {
       // The fakes implement only the stream surface Ink touches.
@@ -153,14 +153,14 @@ describe("session auth interaction", () => {
             const err = Object.assign(
               new Error("Login was cancelled; the session remains active."),
               {
-              code: "DM_GITHUB_AUTH_CANCELLED",
-              name: "KestrelError",
-              category: "USER_ACTION_REQUIRED",
-              userMessage: "Login was cancelled; the session remains active.",
-              suggestedActions: ["Run /auth login when ready to authenticate again."],
-              retryability: "manual",
-              recoveryStrategy: "USER_GUIDED",
-              severity: "INFO",
+                code: "DM_GITHUB_AUTH_CANCELLED",
+                name: "KestrelError",
+                category: "USER_ACTION_REQUIRED",
+                userMessage: "Login was cancelled; the session remains active.",
+                suggestedActions: ["Run /auth login when ready to authenticate again."],
+                retryability: "manual",
+                recoveryStrategy: "USER_GUIDED",
+                severity: "INFO",
               },
             );
             reject(err);
@@ -566,130 +566,129 @@ describe("session auth interaction — prompt clearing on synchronous admission"
   });
 });
 
+afterEach(() => {
+  vi.useRealTimers();
+});
 
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  it("cancels a held token request, runs /progress, then accepts the exact recommendation on the second Enter", async () => {
-    // Task 6 regression — a single FakeInk scenario covering four
-    // contracts in the order they would surface in a real session:
-    //
-    //   (1) explicit login cancellation: the device-flow token poll is
-    //       held by the local `/login/oauth/access_token` fixture; busy
-    //       Ctrl+C aborts the in-flight login child, the held request
-    //       closes, and the auth subsystem never reaches the credential
-    //       store (the handler rejects with DM_GITHUB_AUTH_CANCELLED
-    //       before storing anything).
-    //   (2) same-session local `/progress`: after cancellation, the
-    //       same session serves the local progress command without ever
-    //       touching the network.
-    //   (3) exact recommendation action first Enter fills the prompt:
-    //       pressing Enter on the focused recommendation.accept action
-    //       places the exact `/mission accept --id rec-42` command in
-    //       the prompt buffer; the mission accept handler is NOT
-    //       called yet.
-    //   (4) second Enter accepts the exact ID once: pressing Enter on
-    //       the filled prompt invokes `missionAccept` exactly once
-  const commandHandlers = handlers();
-    // The auth subsystem under test is the REAL `authenticateGitHub`
-    // application use case wired against two fakes: a `GitHubGateway`
-    // whose device-flow `beginDeviceFlow` returns an authorization
-    // immediately (so the controller's notify channel renders the
-    // device-authorization notice) and whose `pollForToken` is held
-    // open until the child signal aborts, and a `CredentialStore`
-    // whose `store` is a counted spy over the persisted credential
-    // list. Ctrl+C aborts the in-flight login child; the gateway's
-    // poll rejects with `DM_GITHUB_AUTH_CANCELLED`; `authenticateGitHub`
-    // propagates that rejection; the credential store is never
-    // reached. The previous iteration stood in for this boundary with
-    // a hand-rolled promise whose `.then` callback bumped a counter on
-    // resolution — a fake of a fake. The store assertion below now
-    // exercises the real `CredentialStore.store` boundary instead of
-    // a disconnected counter.
-    const presentedNotices: ViewModel[] = [];
-    let pollAbortObserved = false;
-    let pollBeginObserved = false;
-    let storeCredentialCalls = 0;
-    const storedCredentials: Credential[] = [];
-    const fakeCredentialStore: CredentialStore = {
-      async get(_service, _account, _signal) {
-        return undefined;
-      },
-      async store(credential, _signal) {
-        storeCredentialCalls += 1;
-        storedCredentials.push(credential);
-      },
-      async delete(_service, _account, _signal) {
-        // Cancellation rejects before any storage step; the login
-        // path never deletes here, so this branch stays empty.
-      },
-    };
-    const fakeGateway: GitHubGateway = {
-      async beginDeviceFlow(): Promise<DeviceFlowAuthorization> {
-        return {
-          deviceCode: "device-code",
-          userCode: "ABCD-1234",
-          verificationUri: "https://github.com/login/device",
-          expiresInSeconds: 900,
-          intervalSeconds: 5,
-        };
-      },
+it("cancels a held token request, runs /progress, then accepts the exact recommendation on the second Enter", async () => {
+  // Task 6 regression — a single FakeInk scenario covering four
+  // contracts in the order they would surface in a real session:
+  //
+  //   (1) explicit login cancellation: the device-flow token poll is
+  //       held by the local `/login/oauth/access_token` fixture; busy
+  //       Ctrl+C aborts the in-flight login child, the held request
+  //       closes, and the auth subsystem never reaches the credential
+  //       store (the handler rejects with DM_GITHUB_AUTH_CANCELLED
+  //       before storing anything).
+  //   (2) same-session local `/progress`: after cancellation, the
+  //       same session serves the local progress command without ever
+  //       touching the network.
+  //   (3) exact recommendation action first Enter fills the prompt:
+  //       pressing Enter on the focused recommendation.accept action
+  //       places the exact `/mission accept --id rec-42` command in
+  //       the prompt buffer; the mission accept handler is NOT
+  //       called yet.
+  //   (4) second Enter accepts the exact ID once: pressing Enter on
+  //       the filled prompt invokes `missionAccept` exactly once
+  // The auth subsystem under test is the REAL `authenticateGitHub`
+  // application use case wired against two fakes: a `GitHubGateway`
+  // whose device-flow `beginDeviceFlow` returns an authorization
+  // immediately (so the controller's notify channel renders the
+  // device-authorization notice) and whose `pollForToken` is held
+  // open until the child signal aborts, and a `CredentialStore`
+  // whose `store` is a counted spy over the persisted credential
+  // list. Ctrl+C aborts the in-flight login child; the gateway's
+  // poll rejects with `DM_GITHUB_AUTH_CANCELLED`; `authenticateGitHub`
+  // propagates that rejection; the credential store is never
+  // reached. The previous iteration stood in for this boundary with
+  // a hand-rolled promise whose `.then` callback bumped a counter on
+  // resolution — a fake of a fake. The store assertion below now
+  // exercises the real `CredentialStore.store` boundary instead of
+  // a disconnected counter.
+  const presentedNotices: ViewModel[] = [];
+  let pollAbortObserved = false;
+  let pollBeginObserved = false;
+  let storeCredentialCalls = 0;
+  const storedCredentials: Credential[] = [];
+  const fakeCredentialStore: CredentialStore = {
+    async get(_service, _account, _signal) {
+      return undefined;
+    },
+    async store(credential, _signal) {
+      storeCredentialCalls += 1;
+      storedCredentials.push(credential);
+    },
+    async delete(_service, _account, _signal) {
+      // Cancellation rejects before any storage step; the login
+      // path never deletes here, so this branch stays empty.
+    },
+  };
+  const fakeGateway: GitHubGateway = {
+    async beginDeviceFlow(): Promise<DeviceFlowAuthorization> {
+      return {
+        deviceCode: "device-code",
+        userCode: "ABCD-1234",
+        verificationUri: "https://github.com/login/device",
+        expiresInSeconds: 900,
+        intervalSeconds: 5,
+      };
+    },
     async pollForToken(_deviceCode: string, signal?: AbortSignal): Promise<GitHubToken> {
-        pollBeginObserved = true;
-        return new Promise<GitHubToken>((_resolve, reject) => {
-          if (signal === undefined) {
+      pollBeginObserved = true;
+      return new Promise<GitHubToken>((_resolve, reject) => {
+        if (signal === undefined) {
+          reject(
+            createKestrelError({
+              code: "DM_GITHUB_AUTH_CANCELLED",
+              category: "USER_ACTION_REQUIRED",
+              userMessage: "device flow cancelled",
+              suggestedActions: ["Run /auth login when ready to authenticate again."],
+              retryability: "NO_RETRY",
+              recoveryStrategy: "USER_ACTION",
+              severity: "INFO",
+            }),
+          );
+          return;
+        }
+        signal.addEventListener(
+          "abort",
+          () => {
+            pollAbortObserved = true;
             reject(
               createKestrelError({
                 code: "DM_GITHUB_AUTH_CANCELLED",
                 category: "USER_ACTION_REQUIRED",
                 userMessage: "device flow cancelled",
-              suggestedActions: ["Run /auth login when ready to authenticate again."],
+                suggestedActions: ["Run /auth login when ready to authenticate again."],
                 retryability: "NO_RETRY",
                 recoveryStrategy: "USER_ACTION",
                 severity: "INFO",
               }),
             );
-            return;
-          }
-          signal.addEventListener(
-            "abort",
-            () => {
-              pollAbortObserved = true;
-              reject(
-                createKestrelError({
-                  code: "DM_GITHUB_AUTH_CANCELLED",
-                  category: "USER_ACTION_REQUIRED",
-                  userMessage: "device flow cancelled",
-                suggestedActions: ["Run /auth login when ready to authenticate again."],
-                  retryability: "NO_RETRY",
-                  recoveryStrategy: "USER_ACTION",
-                  severity: "INFO",
-                }),
-              );
-            },
-            { once: true },
-          );
-        });
-      },
-      async getViewer() {
-        return { login: "octocat", id: 1 };
-      },
-      async getPullRequest(): Promise<never> {
-        throw new Error("unused in auth-boundary test");
-      },
-      async getIssueLinkage(): Promise<undefined> {
-        return undefined;
-      },
-      async getMergeInfo() {
-        return { merged: false, mergeSha: undefined, mergedAt: undefined };
-      },
-    };
-    // Replace the default mock handler with the real `authenticateGitHub`
-    // use case against the two fakes above. This is the application
-    // boundary the previous hand-rolled promise was emulating.
-    commandHandlers.authLogin = vi.fn(
-      async (_args: Record<string, never>, context: CommandContext) => {
+          },
+          { once: true },
+        );
+      });
+    },
+    async getViewer() {
+      return { login: "octocat", id: 1 };
+    },
+    async getPullRequest(): Promise<never> {
+      throw new Error("unused in auth-boundary test");
+    },
+    async getIssueLinkage(): Promise<undefined> {
+      return undefined;
+    },
+    async getMergeInfo() {
+      return { merged: false, mergeSha: undefined, mergedAt: undefined };
+    },
+  };
+  // Replace the default mock handler with the real `authenticateGitHub`
+  // use case against the two fakes above. This is the application
+  // boundary the previous hand-rolled promise was emulating.
+  const commandHandlers = handlers({
+    authLogin: vi.fn(
+      async (_args: Record<string, never>, context: CommandContext): Promise<ViewModel> => {
         const auth = await authenticateGitHub(
           { credentialStore: fakeCredentialStore, gateway: fakeGateway },
           {
@@ -713,172 +712,173 @@ describe("session auth interaction — prompt clearing on synchronous admission"
           detail: "CONNECTED",
         };
       },
-    );
+    ),
+  });
 
-    // The mount-time startup auth check runs first. The first
-    // `authStatus` call returns NOT_CONNECTED; a subsequent explicit
-    // /auth status (after we cancel the login) returns CONNECTED so
-    // the Find action becomes enabled.
-    let authStatusCalls = 0;
-    vi.mocked(commandHandlers.authStatus).mockImplementation(async () => {
-      authStatusCalls += 1;
-      return authStatusCalls === 1
-        ? notConnectedAuthStatus
-        : {
-            kind: "auth-status",
-            connected: true,
-            login: "octocat",
-            detail: "CONNECTED",
-          };
-    });
+  // The mount-time startup auth check runs first. The first
+  // `authStatus` call returns NOT_CONNECTED; a subsequent explicit
+  // /auth status (after we cancel the login) returns CONNECTED so
+  // the Find action becomes enabled.
+  let authStatusCalls = 0;
+  vi.mocked(commandHandlers.authStatus).mockImplementation(async () => {
+    authStatusCalls += 1;
+    return authStatusCalls === 1
+      ? notConnectedAuthStatus
+      : {
+          kind: "auth-status",
+          connected: true,
+          login: "octocat",
+          detail: "CONNECTED",
+        };
+  });
 
-    const recommendation: ViewModel = {
-      kind: "recommendation",
-      recommendationId: "rec-42",
-      challengeId: "chal-1",
-      title: "Fix something",
+  const recommendation: ViewModel = {
+    kind: "recommendation",
+    recommendationId: "rec-42",
+    challengeId: "chal-1",
+    title: "Fix something",
     description: "Issue details",
     repository: "octocat/hello-world",
     issueNumber: 42,
     issueUrl: "https://github.com/octocat/hello-world/issues/42",
     challengeType: "BUG_FIX",
     language: "TypeScript",
-      mood: "focused",
-      confidence: 0.9,
-      reasons: ["match"],
-    };
-    vi.mocked(commandHandlers.find).mockResolvedValue(recommendation);
+    mood: "focused",
+    confidence: 0.9,
+    reasons: ["match"],
+  };
+  vi.mocked(commandHandlers.find).mockResolvedValue(recommendation);
 
-    let progressCalls = 0;
-    vi.mocked(commandHandlers.progress).mockImplementation(async () => {
-      progressCalls += 1;
-      return { kind: "verification", text: "local-progress-ok" };
-    });
-
-    let missionAcceptCalls = 0;
-    let missionAcceptId: string | undefined;
-  vi.mocked(commandHandlers.missionAccept).mockImplementation(async ({ recommendationId }) => {
-        missionAcceptCalls += 1;
-        missionAcceptId = recommendationId;
-        return {
-          kind: "mission",
-          id: "mission-42",
-          status: "ACCEPTED",
-          title: recommendation.title,
-        };
+  let progressCalls = 0;
+  vi.mocked(commandHandlers.progress).mockImplementation(async () => {
+    progressCalls += 1;
+    return { kind: "verification", text: "local-progress-ok" };
   });
 
-    const onSessionExit = vi.fn();
-    const harness = mount({
-      handlers: commandHandlers,
-      onSessionExit,
-      signal: new AbortController().signal,
-    });
-    try {
-      await settle();
-      // (1) Explicit login cancellation. The user types `/auth login`
-      // and the real `authenticateGitHub` use case is dispatched; its
-      // gateway `beginDeviceFlow` returns the authorization and emits
-      // it through the controller's notify channel, then `pollForToken`
-      // is held until the child signal aborts. Pressing Ctrl+C aborts
-      // the child signal so the held request closes with
-      // `DM_GITHUB_AUTH_CANCELLED` and the credential store is never
-      // reached.
-      harness.stdin.send("/auth login\r");
-      await settle();
-      expect(commandHandlers.authLogin).toHaveBeenCalledTimes(1);
-      // The device-flow authorization notice has been delivered through
-      // callback also records it for direct assertion.
-      expect(presentedNotices).toEqual([
-        {
-          kind: "device-authorization",
-          verificationUri: "https://github.com/login/device",
-          userCode: "ABCD-1234",
-        },
-      ]);
-      // The gateway's `pollForToken` was reached and is still held.
-      expect(pollBeginObserved).toBe(true);
-      harness.stdin.send("\u0003");
-      await settle(80);
-      // The held token request closed: the gateway's `pollForToken`
-      // observed the abort signal and rejected the in-flight promise.
-      expect(pollAbortObserved).toBe(true);
-      expect(onSessionExit).not.toHaveBeenCalled();
-      // No credential was stored: the abort path rejected before any
-      // storage step could run. The real `CredentialStore.store`
-      // boundary is exercised here, not a disconnected counter on a
-      // fake promise's `.then` chain. This assertion FAILS if the
-      // cancellation ever reaches the store (e.g. a future change that
-      // resolves the polled token on abort instead of rejecting).
-      expect(storeCredentialCalls).toBe(0);
-      expect(storedCredentials).toEqual([]);
-      // Sanity: the rejected handler has settled; no later resolution
-      // can still fire the store spy from a queued microtask.
-      await settle(40);
-      expect(storeCredentialCalls).toBe(0);
-      expect(storedCredentials).toEqual([]);
+  let missionAcceptCalls = 0;
+  let missionAcceptId: string | undefined;
+  vi.mocked(commandHandlers.missionAccept).mockImplementation(async ({ recommendationId }) => {
+    missionAcceptCalls += 1;
+    missionAcceptId = recommendationId;
+    return {
+      kind: "mission",
+      id: "mission-42",
+      status: "ACCEPTED",
+      title: recommendation.title,
+    };
+  });
 
-      // (2) Same-session local /progress runs after the cancellation.
-      // The local command is admitted without ever touching the
-      // network or auth subsystem.
-      harness.stdin.send("/progress\r");
-      await settle();
-      expect(progressCalls).toBe(1);
+  const onSessionExit = vi.fn();
+  const harness = mount({
+    handlers: commandHandlers,
+    onSessionExit,
+    signal: new AbortController().signal,
+  });
+  try {
+    await settle();
+    // (1) Explicit login cancellation. The user types `/auth login`
+    // and the real `authenticateGitHub` use case is dispatched; its
+    // gateway `beginDeviceFlow` returns the authorization and emits
+    // it through the controller's notify channel, then `pollForToken`
+    // is held until the child signal aborts. Pressing Ctrl+C aborts
+    // the child signal so the held request closes with
+    // `DM_GITHUB_AUTH_CANCELLED` and the credential store is never
+    // reached.
+    harness.stdin.send("/auth login\r");
+    await settle();
+    expect(commandHandlers.authLogin).toHaveBeenCalledTimes(1);
+    // The device-flow authorization notice has been delivered through
+    // callback also records it for direct assertion.
+    expect(presentedNotices).toEqual([
+      {
+        kind: "device-authorization",
+        verificationUri: "https://github.com/login/device",
+        userCode: "ABCD-1234",
+      },
+    ]);
+    // The gateway's `pollForToken` was reached and is still held.
+    expect(pollBeginObserved).toBe(true);
+    harness.stdin.send("\u0003");
+    await settle(80);
+    // The held token request closed: the gateway's `pollForToken`
+    // observed the abort signal and rejected the in-flight promise.
+    expect(pollAbortObserved).toBe(true);
+    expect(onSessionExit).not.toHaveBeenCalled();
+    // No credential was stored: the abort path rejected before any
+    // storage step could run. The real `CredentialStore.store`
+    // boundary is exercised here, not a disconnected counter on a
+    // fake promise's `.then` chain. This assertion FAILS if the
+    // cancellation ever reaches the store (e.g. a future change that
+    // resolves the polled token on abort instead of rejecting).
+    expect(storeCredentialCalls).toBe(0);
+    expect(storedCredentials).toEqual([]);
+    // Sanity: the rejected handler has settled; no later resolution
+    // can still fire the store spy from a queued microtask.
+    await settle(40);
+    expect(storeCredentialCalls).toBe(0);
+    expect(storedCredentials).toEqual([]);
 
-      // (3) Explicit /auth status connects so the Find action
-      // becomes enabled. The user can then navigate to the sidebar
-      // and arm the recommendation accept action.
-      harness.stdin.send("/auth status\r");
-      await settle();
-      expect(authStatusCalls).toBe(2);
+    // (2) Same-session local /progress runs after the cancellation.
+    // The local command is admitted without ever touching the
+    // network or auth subsystem.
+    harness.stdin.send("/progress\r");
+    await settle();
+    expect(progressCalls).toBe(1);
 
-      // Run /find so a recommendation is captured. The captured view
-      // enables the recommendation.accept contextual action.
-      harness.stdin.send("/find\r");
-      await settle();
+    // (3) Explicit /auth status connects so the Find action
+    // becomes enabled. The user can then navigate to the sidebar
+    // and arm the recommendation accept action.
+    harness.stdin.send("/auth status\r");
+    await settle();
+    expect(authStatusCalls).toBe(2);
 
-      // Navigate: Up moves focus to the sidebar; Down steps once
-      // from Home (index 0) to Find (1); Enter focuses the action
-      // panel; Down arms the recommendation.accept row.
-      harness.stdin.send("\u001b[A");
-      await settle();
-      harness.stdin.send("\u001b[B");
-      await settle();
-      harness.stdin.send("\r");
-      await settle();
-      harness.stdin.send("\u001b[B");
-      await settle();
+    // Run /find so a recommendation is captured. The captured view
+    // enables the recommendation.accept contextual action.
+    harness.stdin.send("/find\r");
+    await settle();
 
-      // First Enter on the focused recommendation.accept action
-      // fills the prompt with the exact command. missionAccept is
-      // NOT called yet — the action just placed text into the
-      // prompt buffer.
-      const beforeAcceptCalls = missionAcceptCalls;
-      harness.stdin.send("\r");
-      await settle();
-      expect(missionAcceptCalls).toBe(beforeAcceptCalls);
-      const filledFrame = harness.lastFrame();
-      expect(filledFrame).toContain("/mission accept --id rec-42");
-      // (4) Second Enter on the filled prompt submits the exact
-      // command. missionAccept is invoked exactly once with the
-      // exact recommendation id bound to the action.
-      harness.stdin.send("\r");
-      await settle();
-      expect(missionAcceptCalls).toBe(beforeAcceptCalls + 1);
-      expect(missionAcceptId).toBe("rec-42");
-      // Final causal assertion: after the entire scenario runs, the
-      // credential store is still empty. The cancellation closed the
-      // held request before any token reached storage; the rest of
-      // the session never exercises the auth path again.
-      expect(storeCredentialCalls).toBe(0);
-      expect(storedCredentials).toEqual([]);
-      // Only one device-authorization notice was emitted — at the
-      // beginning of the cancelled login. No further authorization
-      // steps run for the rest of the session.
-      expect(presentedNotices).toHaveLength(1);
-    } finally {
-      harness.unmount();
-    }
+    // Navigate: Up moves focus to the sidebar; Down steps once
+    // from Home (index 0) to Find (1); Enter focuses the action
+    // panel; Down arms the recommendation.accept row.
+    harness.stdin.send("\u001b[A");
+    await settle();
+    harness.stdin.send("\u001b[B");
+    await settle();
+    harness.stdin.send("\r");
+    await settle();
+    harness.stdin.send("\u001b[B");
+    await settle();
+
+    // First Enter on the focused recommendation.accept action
+    // fills the prompt with the exact command. missionAccept is
+    // NOT called yet — the action just placed text into the
+    // prompt buffer.
+    const beforeAcceptCalls = missionAcceptCalls;
+    harness.stdin.send("\r");
+    await settle();
+    expect(missionAcceptCalls).toBe(beforeAcceptCalls);
+    const filledFrame = harness.lastFrame();
+    expect(filledFrame).toContain("/mission accept --id rec-42");
+    // (4) Second Enter on the filled prompt submits the exact
+    // command. missionAccept is invoked exactly once with the
+    // exact recommendation id bound to the action.
+    harness.stdin.send("\r");
+    await settle();
+    expect(missionAcceptCalls).toBe(beforeAcceptCalls + 1);
+    expect(missionAcceptId).toBe("rec-42");
+    // Final causal assertion: after the entire scenario runs, the
+    // credential store is still empty. The cancellation closed the
+    // held request before any token reached storage; the rest of
+    // the session never exercises the auth path again.
+    expect(storeCredentialCalls).toBe(0);
+    expect(storedCredentials).toEqual([]);
+    // Only one device-authorization notice was emitted — at the
+    // beginning of the cancelled login. No further authorization
+    // steps run for the rest of the session.
+    expect(presentedNotices).toHaveLength(1);
+  } finally {
+    harness.unmount();
+  }
 });
 
 describe("session — busy /clear and /exit rejection", () => {
@@ -1001,16 +1001,16 @@ describe("session — LOGIN_AUTHORIZATION reducer dispatch via notify", () => {
     let loginReject: ((reason: unknown) => void) | undefined;
     let capturedSignal: AbortSignal | undefined;
     vi.mocked(commandHandlers.authLogin).mockImplementation(async (_args, context) => {
-        capturedSignal = context.signal;
-        context.onNotice?.({
-          kind: "device-authorization",
-          verificationUri: "https://github.com/login/device",
-          userCode: "ABCD-1234",
-        });
-        return new Promise<ViewModel>((resolve, reject) => {
-          loginResolve = resolve;
-          loginReject = reject;
-        });
+      capturedSignal = context.signal;
+      context.onNotice?.({
+        kind: "device-authorization",
+        verificationUri: "https://github.com/login/device",
+        userCode: "ABCD-1234",
+      });
+      return new Promise<ViewModel>((resolve, reject) => {
+        loginResolve = resolve;
+        loginReject = reject;
+      });
     });
     const harness = mount({
       handlers: commandHandlers,
@@ -1041,34 +1041,34 @@ describe("session — LOGIN_AUTHORIZATION reducer dispatch via notify", () => {
     let loginResolve: ((view: ViewModel) => void) | undefined;
     let loginReject: ((reason: unknown) => void) | undefined;
     vi.mocked(commandHandlers.authLogin).mockImplementation(async (_args, context) => {
-        return new Promise<ViewModel>((resolve, reject) => {
-          loginResolve = resolve;
-          loginReject = reject;
-          // The login holds until its child signal aborts. The
-          // device-authorization notice is then delivered as a
-          // late event — after the operation has been cancelled.
-          // A late notice must NOT flip the reducer or appear in
-          // the transcript.
-          context.signal?.addEventListener("abort", () => {
-            context.onNotice?.({
-              kind: "device-authorization",
-              verificationUri: "https://github.com/login/device",
-              userCode: "STALE-9999",
-            });
-            reject(
-              Object.assign(new Error("Login was cancelled; the session remains active."), {
-                code: "DM_GITHUB_AUTH_CANCELLED",
-                name: "KestrelError",
-                category: "USER_ACTION_REQUIRED",
-                userMessage: "Login was cancelled; the session remains active.",
-                suggestedActions: ["Run /auth login when ready to authenticate again."],
-                retryability: "manual",
-                recoveryStrategy: "USER_GUIDED",
-                severity: "INFO",
-              }),
-            );
+      return new Promise<ViewModel>((resolve, reject) => {
+        loginResolve = resolve;
+        loginReject = reject;
+        // The login holds until its child signal aborts. The
+        // device-authorization notice is then delivered as a
+        // late event — after the operation has been cancelled.
+        // A late notice must NOT flip the reducer or appear in
+        // the transcript.
+        context.signal?.addEventListener("abort", () => {
+          context.onNotice?.({
+            kind: "device-authorization",
+            verificationUri: "https://github.com/login/device",
+            userCode: "STALE-9999",
           });
+          reject(
+            Object.assign(new Error("Login was cancelled; the session remains active."), {
+              code: "DM_GITHUB_AUTH_CANCELLED",
+              name: "KestrelError",
+              category: "USER_ACTION_REQUIRED",
+              userMessage: "Login was cancelled; the session remains active.",
+              suggestedActions: ["Run /auth login when ready to authenticate again."],
+              retryability: "manual",
+              recoveryStrategy: "USER_GUIDED",
+              severity: "INFO",
+            }),
+          );
         });
+      });
     });
     const harness = mount({
       handlers: commandHandlers,
@@ -1237,7 +1237,7 @@ describe("session — Home key is a no-op while an operation is running", () => 
     let loginReject: ((reason: unknown) => void) | undefined;
     vi.mocked(commandHandlers.authLogin).mockImplementation(
       async (_args, context) =>
-        new Promise<ViewModel>((_resolve, reject) => {
+        new Promise<ViewModel>((resolve, reject) => {
           resolveAuthLogin = resolve;
           loginReject = reject;
           context.signal?.addEventListener("abort", () => {

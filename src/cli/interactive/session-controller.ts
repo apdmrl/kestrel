@@ -36,7 +36,7 @@ export function createSessionController(
     if (command.kind === "help") {
       const view: ViewModel = {
         kind: "verification",
-        text: "/help  /clear  /exit\n/auth login  /auth status  /auth logout --confirm github.com\n/find  /mission current  /mission ...\n/progress  /journey  /preferences ...",
+        text: "/help\n/clear\n/exit\n/auth login\n/auth status\n/auth logout --confirm github.com\n/find\n/mission current\n/mission ...\n/progress\n/journey\n/preferences ...",
       };
       return { kind: "output", view };
     }
@@ -78,7 +78,10 @@ export function createSessionController(
           );
           break;
         case "mission-accept":
-          view = await handlers.missionAccept({ recommendationId: command.recommendationId }, context);
+          view = await handlers.missionAccept(
+            { recommendationId: command.recommendationId },
+            context,
+          );
           break;
         case "mission-prepare":
           view = await handlers.missionPrepare(

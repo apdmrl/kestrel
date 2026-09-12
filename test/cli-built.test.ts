@@ -1,4 +1,3 @@
-
 import { execFile, spawn } from "node:child_process";
 import { chmodSync, existsSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -11,6 +10,36 @@ const root = process.cwd();
 const execFileAsync = promisify(execFile);
 const distMain = join(root, "dist", "cli", "main.js");
 
+function environmentWithoutHostGitCredentials(): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(process.env).filter(
+      ([key]) =>
+        !key.startsWith("GIT_CONFIG_") &&
+        !key.startsWith("GIT_CREDENTIAL_") &&
+        key !== "GIT_ASKPASS" &&
+        key !== "SSH_ASKPASS",
+    ),
+  );
+}
+
+function createNoCredentialGitShim(): string {
+  const shimDir = mkdtempSync(join(tmpdir(), "kestrel-cli-auth-shim-"));
+  const script = [
+    "#!/usr/bin/env node",
+    "const args = process.argv.slice(2);",
+    "if (args[0] === 'credential' && args[1] === 'fill') process.exit(0);",
+    "if (args[0] === 'config' && args[1] === '--get' && args[2] === 'credential.helper') {",
+    "  process.stdout.write('test-helper\\n');",
+    "  process.exit(0);",
+    "}",
+    "process.exit(0);",
+    "",
+  ].join("\n");
+  writeFileSync(join(shimDir, "git"), script, "utf8");
+  writeFileSync(join(shimDir, "git.cmd"), '@echo off\r\nnode "%~dp0git" %*\r\n', "utf8");
+  chmodSync(join(shimDir, "git"), 0o755);
+  return shimDir;
+}
 /** Run npm. On Windows `npm` is `npm.cmd` and needs the command interpreter.
  * A non-zero exit rejects so a broken build fails the suite instead of
  * silently shipping a stale `dist/`. */
@@ -29,7 +58,7 @@ function runCli(
       process.execPath,
       [entrypoint, ...args],
       {
-        env: { ...process.env, ...env },
+        env: { ...environmentWithoutHostGitCredentials(), ...env },
         cwd: root,
         timeout: 30_000,
       },
@@ -105,13 +134,14 @@ describe("built CLI", () => {
 
   it("reports find auth errors to stderr with a nonzero exit code", async () => {
     const home = mkdtempSync(join(tmpdir(), "kestrel-cli-"));
+    const shimDir = createNoCredentialGitShim();
     try {
-      // No cached credential and no device-flow escape hatch: `find` must fail
-      // closed so a built CLI never starts an implicit device flow. The shipped
-      // OAuth client id is present, but no token exists and no interactive
-      // prompt is allowed, so the classified error reaches the user unchanged.
+      // The packaged CLI must see a configured test helper that has no
+      // credential. The launcher also strips inherited Git configuration, so
+      // a workstation helper cannot satisfy this lookup.
       const result = await runCli(["find"], {
         KESTREL_HOME: home,
+        PATH: shimDir + delimiter + (process.env.PATH ?? ""),
         GIT_CONFIG_NOSYSTEM: "1",
         GIT_CONFIG_GLOBAL: join(home, "empty-gitconfig"),
         GIT_TERMINAL_PROMPT: "0",
@@ -121,6 +151,7 @@ describe("built CLI", () => {
       expect(result.stderr).not.toContain("login/device");
     } finally {
       rmSync(home, { recursive: true, force: true });
+      rmSync(shimDir, { recursive: true, force: true });
     }
   }, 30_000);
 
@@ -204,7 +235,7 @@ describe("built CLI", () => {
       const child = spawn(process.execPath, [distMain], {
         cwd: root,
         env: {
-          ...process.env,
+          ...environmentWithoutHostGitCredentials(),
           KESTREL_HOME: home,
           GIT_CONFIG_NOSYSTEM: "1",
           GIT_CONFIG_GLOBAL: join(home, "empty-gitconfig"),
@@ -255,7 +286,10 @@ describe("built CLI", () => {
       // fallback. The CLI's own signal handler aborts the
       // AbortController, execa cancels the helper, and Ink's abort
       // listener unmounts the shell — all graceful exits.
-      expect(exitCode, "CLI parent did not exit gracefully within the bounded budget").not.toBeNull();
+      expect(
+        exitCode,
+        "CLI parent did not exit gracefully within the bounded budget",
+      ).not.toBeNull();
       // 0 (clean), 130/143 (signal-induced termination), or 1 (the
       // non-TTY Ink render error after the signal handler tore the
       // session down) all count as "the shell came down".
@@ -264,7 +298,10 @@ describe("built CLI", () => {
       // `git credential fill` is what tore the hung helper down.
       // Without the AbortSignal wire-through, execa would leak the
       // child and the exit marker would never appear.
-      expect(existsSync(exitMarker), "git credential fill helper exited without writing its marker").toBe(true);
+      expect(
+        existsSync(exitMarker),
+        "git credential fill helper exited without writing its marker",
+      ).toBe(true);
       // No implicit device flow: the gateway never saw a
       // /login/device/code request during startup or shutdown.
       expect(deviceCodePaths).toEqual([]);

@@ -423,7 +423,10 @@ describe("session reducer", () => {
     const unrelated = sessionReducer(started, {
       type: "OPERATION_SUCCEEDED",
       operationId: 1,
-      view: { kind: "progress", counts: { completed: 1 }, summary: "ok" } satisfies ViewModel,
+      view: {
+        kind: "progress",
+        counts: { accepted: 0, completed: 1, submitted: 0, linked: 0, merged: 0, abandoned: 0 },
+      } satisfies ViewModel,
     });
     expect(unrelated.latestRecommendation).toBeNull();
     expect(unrelated.operation).toEqual({ status: "idle" });
@@ -444,7 +447,10 @@ describe("session reducer", () => {
     const succeeded = sessionReducer(started, {
       type: "OPERATION_SUCCEEDED",
       operationId: 1,
-      view: { kind: "progress", counts: { completed: 0 }, summary: "no missions yet" },
+      view: {
+        kind: "progress",
+        counts: { accepted: 0, completed: 0, submitted: 0, linked: 0, merged: 0, abandoned: 0 },
+      },
     });
     expect(succeeded.auth).toEqual({ status: "unknown", errorCode: "DM_NETWORK_UNAVAILABLE" });
   });
@@ -665,7 +671,10 @@ describe("session reducer", () => {
     const succeeded = sessionReducer(started, {
       type: "OPERATION_SUCCEEDED",
       operationId: 4,
-      view: { kind: "progress", counts: { completed: 0 }, summary: "ok" },
+      view: {
+        kind: "progress",
+        counts: { accepted: 0, completed: 0, submitted: 0, linked: 0, merged: 0, abandoned: 0 },
+      },
     });
     expect(succeeded.auth).toEqual({ status: "expired" });
     expect(succeeded.operation).toEqual({ status: "idle" });
@@ -986,8 +995,7 @@ describe("session reducer", () => {
     expect(failed.auth).toEqual({ status: "connected", login: "octocat" });
     expect(failed.operation).toEqual({ status: "idle" });
   });
-
-  });
+});
 
 describe("initialSessionState", () => {
   it("starts in the auth-checking phase on attempt 1 with no input or recommendation", () => {

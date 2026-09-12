@@ -61,6 +61,7 @@
 ### Task 1: Guard GitHub Operations Without Device Flow
 
 **Files:**
+
 - Create: `src/application/auth/require-validated-github-credential.ts`
 - Create: `src/application/auth/require-validated-github-credential.test.ts`
 - Modify: `src/bootstrap/index.ts` (`requireGithubToken`, `discover`)
@@ -68,6 +69,7 @@
 - Modify: `test/cli-built.test.ts` (unauthenticated Find expectation)
 
 **Interfaces:**
+
 - Consumes: `CredentialStore.get(service, account, signal?)`, `GitHubGateway.getViewer(token, signal?)`, existing `KestrelError` codes.
 - Produces: `requireValidatedGitHubCredential(deps, input): Promise<ValidatedGitHubCredential>` where the result is `{ readonly token: string; readonly login: string }` and the function can never begin device flow.
 
@@ -174,6 +176,7 @@ git commit -m "fix(auth): prevent implicit login for github operations"
 ### Task 2: Pass Operation-Scoped Command Context
 
 **Files:**
+
 - Modify: `src/cli/command-handlers.ts`
 - Modify: `src/bootstrap/index.ts`
 - Modify: `src/bootstrap/index.test.ts`
@@ -187,6 +190,7 @@ git commit -m "fix(auth): prevent implicit login for github operations"
 - Modify: `test/docs/commands.test.ts`
 
 **Interfaces:**
+
 - Consumes: existing command-specific argument objects and process lifetime signal from `main`.
 - Produces: `CommandContext`; every `CommandHandlers` method has `(args, context)`, with `{}` as args for no-argument commands. `createProgram` accepts `signal?: AbortSignal` and passes it in context.
 
@@ -286,10 +290,13 @@ const context = (): CommandContext =>
 
 options.handlers.authStatus({}, context());
 options.handlers.find(findArgs, context());
-options.handlers.authLogin({}, {
-  ...context(),
-  onNotice: (view) => err(renderPlain(view) + "\n"),
-});
+options.handlers.authLogin(
+  {},
+  {
+    ...context(),
+    onNotice: (view) => err(renderPlain(view) + "\n"),
+  },
+);
 ```
 
 Change `createSessionController` to accept an explicit context when executing a parsed command:
@@ -328,10 +335,12 @@ git commit -m "refactor(cli): scope cancellation to command invocations"
 ### Task 3: Implement the Pure Session State Machine
 
 **Files:**
+
 - Create: `src/cli/interactive/session-state.ts`
 - Create: `src/cli/interactive/session-state.test.ts`
 
 **Interfaces:**
+
 - Consumes: `TranscriptEntry` and stable auth status/error codes.
 - Produces: `SessionState`, `SessionEvent`, `initialSessionState()`, and `sessionReducer(state, event)`; Task 5 depends on exact event names below.
 
@@ -348,7 +357,10 @@ it.each([
 });
 
 it("ignores a late result from an expired auth attempt", () => {
-  const retrying = sessionReducer(initialSessionState(), { type: "AUTH_CHECK_STARTED", attemptId: 2 });
+  const retrying = sessionReducer(initialSessionState(), {
+    type: "AUTH_CHECK_STARTED",
+    attemptId: 2,
+  });
   const late = sessionReducer(retrying, {
     type: "AUTH_RESOLVED",
     attemptId: 1,
@@ -431,6 +443,7 @@ git commit -m "feat(tui): add deterministic session state machine"
 ### Task 4: Add Contextual Navigation and Interactive Recovery Rendering
 
 **Files:**
+
 - Create: `src/cli/interactive/session-navigation.ts`
 - Create: `src/cli/interactive/session-navigation.test.ts`
 - Create: `src/cli/interactive/session-renderer.ts`
@@ -441,6 +454,7 @@ git commit -m "feat(tui): add deterministic session state machine"
 - Modify: `src/cli/interactive/session-controller.test.ts`
 
 **Interfaces:**
+
 - Consumes: `SessionAuthState`, `ViewModel`, `ErrorViewModel`, and stable auth error codes.
 - Produces: `NAVIGATION_SECTIONS`, `actionsForSection(sectionId, auth)`, `renderSessionView(view)`, and dashboard props for contextual actions.
 
@@ -450,14 +464,22 @@ git commit -m "feat(tui): add deterministic session state machine"
 it("disables Find and exposes login recovery when auth is required", () => {
   const actions = actionsForSection("find", { status: "required" });
   expect(actions).toEqual([
-    expect.objectContaining({ id: "find.run", availability: { status: "disabled", reason: expect.any(String) } }),
-    expect.objectContaining({ id: "auth.login", command: "/auth login", availability: { status: "enabled" } }),
+    expect.objectContaining({
+      id: "find.run",
+      availability: { status: "disabled", reason: expect.any(String) },
+    }),
+    expect.objectContaining({
+      id: "auth.login",
+      command: "/auth login",
+      availability: { status: "enabled" },
+    }),
   ]);
 });
 
 it("keeps local progress enabled while auth is unknown", () => {
-  expect(actionsForSection("progress", { status: "unknown", errorCode: "DM_NETWORK_UNAVAILABLE" })[0])
-    .toMatchObject({ command: "/progress", availability: { status: "enabled" } });
+  expect(
+    actionsForSection("progress", { status: "unknown", errorCode: "DM_NETWORK_UNAVAILABLE" })[0],
+  ).toMatchObject({ command: "/progress", availability: { status: "enabled" } });
 });
 ```
 
@@ -466,12 +488,14 @@ Cover adaptive Auth actions for all six auth states and connected/required Find 
 - [ ] **Step 2: Write failing interactive renderer tests**
 
 ```ts
-expect(renderSessionView({
-  kind: "auth-status",
-  connected: false,
-  login: null,
-  detail: "NOT_CONNECTED",
-})).toMatchObject({ text: expect.stringContaining("/auth login"), recoveryCommand: "/auth login" });
+expect(
+  renderSessionView({
+    kind: "auth-status",
+    connected: false,
+    login: null,
+    detail: "NOT_CONNECTED",
+  }),
+).toMatchObject({ text: expect.stringContaining("/auth login"), recoveryCommand: "/auth login" });
 
 expect(renderSessionView(errorViewModel(authRequiredError))).toMatchObject({
   text: expect.not.stringContaining("kestrel auth login"),
@@ -569,6 +593,7 @@ git commit -m "feat(tui): add contextual auth-aware navigation"
 ### Task 5: Integrate Startup Auth Deadline and Foreground Cancellation
 
 **Files:**
+
 - Create: `src/cli/interactive/session-runtime.ts`
 - Create: `src/cli/interactive/session-runtime.test.ts`
 - Modify: `src/cli/interactive/session.tsx`
@@ -577,6 +602,7 @@ git commit -m "feat(tui): add contextual auth-aware navigation"
 - Modify: `src/cli/main.ts`
 
 **Interfaces:**
+
 - Consumes: Task 2 operation-context handlers, Task 3 reducer/events, Task 4 navigation/rendering.
 - Produces: `STARTUP_AUTH_TIMEOUT_MS = 5_000`, `runStartupAuth`, `createChildOperation`, and a Session that owns only active child cancellation while `signal` remains the lifetime parent.
 
@@ -594,7 +620,11 @@ it("renders first and marks auth unknown at the five-second deadline", async () 
     dispatch: (event) => events.push(event),
   });
   await vi.advanceTimersByTimeAsync(5_000);
-  expect(events).toContainEqual({ type: "AUTH_FAILED", attemptId: 1, errorCode: "STARTUP_AUTH_TIMEOUT" });
+  expect(events).toContainEqual({
+    type: "AUTH_FAILED",
+    attemptId: 1,
+    errorCode: "STARTUP_AUTH_TIMEOUT",
+  });
   await run;
 });
 ```
@@ -683,6 +713,7 @@ git commit -m "feat(tui): check auth without blocking session startup"
 ### Task 6: Prove Renderer, Offline, and Process Contracts End to End
 
 **Files:**
+
 - Modify: `src/cli/presentation/plain-renderer.test.ts`
 - Modify: `src/cli/presentation/json-renderer.test.ts`
 - Modify: `test/cli-built.test.ts`
@@ -691,6 +722,7 @@ git commit -m "feat(tui): check auth without blocking session startup"
 - Modify: `src/cli/interactive/session-auth.test.tsx`
 
 **Interfaces:**
+
 - Consumes: completed application, handler, reducer, renderer, and runtime behavior.
 - Produces: regression evidence for exact output, no implicit device flow, timeout release, login cancellation, and local offline operation.
 
@@ -740,10 +772,12 @@ git commit -m "test(auth): cover offline interactive recovery"
 ### Task 7: Document Verified Behavior and Run the Integration Gate
 
 **Files:**
+
 - Modify: `README.md`
 - Modify: `docs/troubleshooting.md`
 
 **Interfaces:**
+
 - Consumes: observed behavior from Tasks 1–6.
 - Produces: user documentation and repository-wide verification evidence.
 

@@ -328,8 +328,7 @@ function deriveGitHubActions(
   // `required`, `expired`, and `logging-in` mean "log in now".
   const recoveryCommand =
     auth.status === "unknown" || auth.status === "checking" ? "/auth status" : "/auth login";
-  const loginLabel =
-    auth.status === "expired" ? "Re-authenticate GitHub" : "Log in to GitHub";
+  const loginLabel = auth.status === "expired" ? "Re-authenticate GitHub" : "Log in to GitHub";
   return [
     ...base.map((action) => ({
       ...action,

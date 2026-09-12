@@ -239,10 +239,7 @@ export function windowTranscriptPage(
   offsetEntries: number,
 ): readonly RenderableTranscriptEntry[] {
   if (rowBudget <= 0 || entries.length === 0) return [];
-  const clampedOffset = Math.min(
-    Math.max(0, Math.floor(offsetEntries)),
-    entries.length - 1,
-  );
+  const clampedOffset = Math.min(Math.max(0, Math.floor(offsetEntries)), entries.length - 1);
   let cursor = entries.length - 1 - clampedOffset;
   const selected: RenderableTranscriptEntry[] = [];
   let selectedRows = 0;
@@ -266,10 +263,7 @@ export function moveTranscriptPageOffset(
   direction: "older" | "newer",
 ): number {
   if (rowBudget <= 0 || entries.length === 0) return 0;
-  const currentOffset = Math.min(
-    Math.max(0, Math.floor(offsetEntries)),
-    entries.length - 1,
-  );
+  const currentOffset = Math.min(Math.max(0, Math.floor(offsetEntries)), entries.length - 1);
   if (direction === "older") {
     const visibleCount = windowTranscriptPage(entries, rowBudget, currentOffset).length;
     return currentOffset + visibleCount < entries.length
@@ -302,7 +296,7 @@ function transcriptPosition(
     if (id === last.id) {
       end = index + 1;
       break;
-  }
+    }
   }
   return `${start}–${end}`;
 }
@@ -472,16 +466,16 @@ export function availableTranscriptRows(
 
 const SECTION_ICONS: Readonly<Record<string, { readonly icon: string; readonly accent: Accent }>> =
   {
-  home: { icon: "⌂", accent: "cyan" },
-  find: { icon: "⌕", accent: "purple" },
-  mission: { icon: "◆", accent: "yellow" },
-  agent: { icon: "◇", accent: "purple" },
-  verify: { icon: "✓", accent: "green" },
-  progress: { icon: "▰", accent: "green" },
-  journey: { icon: "↗", accent: "cyan" },
-  auth: { icon: "◎", accent: "green" },
-  preferences: { icon: "⚙", accent: "cyan" },
-};
+    home: { icon: "⌂", accent: "cyan" },
+    find: { icon: "⌕", accent: "purple" },
+    mission: { icon: "◆", accent: "yellow" },
+    agent: { icon: "◇", accent: "purple" },
+    verify: { icon: "✓", accent: "green" },
+    progress: { icon: "▰", accent: "green" },
+    journey: { icon: "↗", accent: "cyan" },
+    auth: { icon: "◎", accent: "green" },
+    preferences: { icon: "⚙", accent: "cyan" },
+  };
 
 export type NavigationRowState = {
   readonly focused: boolean;

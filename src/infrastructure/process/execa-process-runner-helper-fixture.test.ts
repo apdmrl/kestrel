@@ -51,7 +51,12 @@ async function makeTempFile(parent: string, subpath: string): Promise<void> {
 }
 
 async function runRealGitCapturing(cwd: string, args: readonly string[]): Promise<string> {
-  const { promise, resolve, reject } = Promise.withResolvers<string>();
+  let resolve!: (value: string) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<string>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
   const chunks: Buffer[] = [];
   const child = spawn("git", [...args], { cwd });
   child.stdout.on("data", (chunk: Buffer) => chunks.push(chunk));
@@ -103,85 +108,68 @@ describe.skipIf(!isPosix)(
       }
     });
 
-    it(
-      "aborts the direct git child and the hanging helper descendant in the same process group",
-      async () => {
-        const repoDir = join(dir, "repo");
-        await makeTempFile(repoDir, ".gitkeep");
-        await runRealGit(repoDir, ["init", "--quiet"]);
-        await runRealGit(repoDir, ["config", "user.email", "test@example.com"]);
-        await runRealGit(repoDir, ["config", "user.name", "Test"]);
+    it("aborts the direct git child and the hanging helper descendant in the same process group", async () => {
+      const repoDir = join(dir, "repo");
+      await makeTempFile(repoDir, ".gitkeep");
+      await runRealGit(repoDir, ["init", "--quiet"]);
+      await runRealGit(repoDir, ["config", "user.email", "test@example.com"]);
+      await runRealGit(repoDir, ["config", "user.name", "Test"]);
 
-        const helperPath = join(dir, "hang-helper.sh");
-        const helperPidFile = join(dir, "helper.pid");
-        const helperScript = [
-          "#!/usr/bin/env bash",
-          `echo $$ > "${helperPidFile}"`,
-          "while true; do sleep 1; done",
-          "",
-        ].join("\n");
-        await writeFile(helperPath, helperScript, "utf8");
-        await chmod(helperPath, 0o755);
-        await runRealGit(repoDir, [
-          "config",
-          "--add",
-          "credential.helper",
-          helperPath,
-        ]);
+      const helperPath = join(dir, "hang-helper.sh");
+      const helperPidFile = join(dir, "helper.pid");
+      const helperScript = [
+        "#!/usr/bin/env bash",
+        `echo $$ > "${helperPidFile}"`,
+        "while true; do sleep 1; done",
+        "",
+      ].join("\n");
+      await writeFile(helperPath, helperScript, "utf8");
+      await chmod(helperPath, 0o755);
+      await runRealGit(repoDir, ["config", "--add", "credential.helper", helperPath]);
 
-        const runner = new ExecaProcessRunner();
-        const controller = new AbortController();
+      const runner = new ExecaProcessRunner();
+      const controller = new AbortController();
 
-        const pending = runner.run({
-          executable: "git",
-          args: ["credential", "fill"],
-          cwd: repoDir,
-          signal: controller.signal,
-          timeoutMs: 30_000,
-          input: "protocol=https\nhost=example.test\n",
-        });
+      const pending = runner.run({
+        executable: "git",
+        args: ["credential", "fill"],
+        cwd: repoDir,
+        signal: controller.signal,
+        timeoutMs: 30_000,
+        input: "protocol=https\nhost=example.test\n",
+      });
 
-        // The helper writes its own PID before sleeping. Wait for it.
-        const pidText = await waitForFile(helperPidFile, 5_000);
-        const helperPid = Number.parseInt(pidText.trim(), 10);
-        expect(Number.isFinite(helperPid)).toBe(true);
-        expect(helperPid).toBeGreaterThan(0);
-        helperPids.push(helperPid);
-        // The helper is alive before the abort fires.
-        expect(pidAlive(helperPid)).toBe(true);
+      // The helper writes its own PID before sleeping. Wait for it.
+      const pidText = await waitForFile(helperPidFile, 5_000);
+      const helperPid = Number.parseInt(pidText.trim(), 10);
+      expect(Number.isFinite(helperPid)).toBe(true);
+      expect(helperPid).toBeGreaterThan(0);
+      helperPids.push(helperPid);
+      // The helper is alive before the abort fires.
+      expect(pidAlive(helperPid)).toBe(true);
 
-        controller.abort();
+      controller.abort();
 
-        await expect(pending).rejects.toMatchObject({
-          code: "DM_PROCESS_CANCELLED",
-        });
+      await expect(pending).rejects.toMatchObject({
+        code: "DM_PROCESS_CANCELLED",
+      });
 
-        // The hanging helper descendant must also be gone — proof
-        // that the runner's POSIX process-group kill reached Git's
-        // spawned helper (PROCESS-TREE-004).
-        expect(pidAlive(helperPid)).toBe(false);
-      },
-      35_000,
-    );
+      // The hanging helper descendant must also be gone — proof
+      // that the runner's POSIX process-group kill reached Git's
+      // spawned helper (PROCESS-TREE-004).
+      expect(pidAlive(helperPid)).toBe(false);
+    }, 35_000);
 
-    it(
-      "writes the configured helper script and reads it back from the repo",
-      async () => {
-        const repoDir = join(dir, "smoke");
-        await makeTempFile(repoDir, ".gitkeep");
-        await runRealGit(repoDir, ["init", "--quiet"]);
-        const helperPath = join(dir, "noop-helper.sh");
-        await writeFile(helperPath, "#!/usr/bin/env bash\nexit 0\n", "utf8");
-        await chmod(helperPath, 0o755);
-        await runRealGit(repoDir, [
-          "config",
-          "--add",
-          "credential.helper",
-          helperPath,
-        ]);
-        const out = await runRealGitCapturing(repoDir, ["config", "credential.helper"]);
-        expect(out.trim()).toBe(helperPath);
-      },
-    );
+    it("writes the configured helper script and reads it back from the repo", async () => {
+      const repoDir = join(dir, "smoke");
+      await makeTempFile(repoDir, ".gitkeep");
+      await runRealGit(repoDir, ["init", "--quiet"]);
+      const helperPath = join(dir, "noop-helper.sh");
+      await writeFile(helperPath, "#!/usr/bin/env bash\nexit 0\n", "utf8");
+      await chmod(helperPath, 0o755);
+      await runRealGit(repoDir, ["config", "--add", "credential.helper", helperPath]);
+      const out = await runRealGitCapturing(repoDir, ["config", "credential.helper"]);
+      expect(out.trim()).toBe(helperPath);
+    });
   },
 );

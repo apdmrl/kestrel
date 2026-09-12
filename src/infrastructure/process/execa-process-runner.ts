@@ -135,12 +135,7 @@ export class ExecaProcessRunner implements ProcessRunner {
     child.stderr?.on("data", (chunk: Buffer) => stderrChunks.push(chunk));
     const childPid = child.pid;
     let groupKillListener: (() => void) | undefined;
-    if (
-      options.signal !== undefined &&
-      isPosix &&
-      typeof childPid === "number" &&
-      childPid > 0
-    ) {
+    if (options.signal !== undefined && isPosix && typeof childPid === "number" && childPid > 0) {
       const parentSignal = options.signal;
       groupKillListener = (): void => {
         try {

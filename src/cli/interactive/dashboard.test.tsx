@@ -733,7 +733,7 @@ describe("DashboardShell row budget", () => {
     expect(frame).toContain("https://github.com/login/device");
     expect(frame).not.toContain("older filler 0");
   });
- });
+});
 describe("DashboardShell transcript row budget", () => {
   afterEach(() => cleanup());
 
@@ -897,14 +897,14 @@ describe("DashboardShell transcript row budget", () => {
   it("exposes older critical entries through an explicit history offset", () => {
     const input: RenderableTranscriptEntry[] = [
       {
-      id: 1,
-      text: "Open https://github.com/login/device and enter ABCD-1234",
-      kind: "output",
-      rows: estimateEntryRows(
-        "Open https://github.com/login/device and enter ABCD-1234",
-        "output",
-        80,
-      ),
+        id: 1,
+        text: "Open https://github.com/login/device and enter ABCD-1234",
+        kind: "output",
+        rows: estimateEntryRows(
+          "Open https://github.com/login/device and enter ABCD-1234",
+          "output",
+          80,
+        ),
       },
     ];
     for (let i = 0; i < 30; i += 1) {

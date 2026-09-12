@@ -22,10 +22,10 @@ interface CliResult {
  * A real helper is required for "not connected" to be distinguishable from
  * "no credential helper configured", which is a different, classified error.
  */
- async function createCredentialShim(dir: string, token: string | undefined): Promise<void> {
-   const script = [
+async function createCredentialShim(dir: string, token: string | undefined): Promise<void> {
+  const script = [
     "#!/usr/bin/env node",
-     "const args = process.argv.slice(2);",
+    "const args = process.argv.slice(2);",
 
     "if (args[0] === 'credential' && args[1] === 'fill') {",
     token === undefined
@@ -401,11 +401,7 @@ describe("built CLI auth commands", () => {
       expect(existsSync(credentialFixture)).toBe(true);
       const stored = await readFile(credentialFixture, "utf8");
       const expectedCredentialRecord =
-        "protocol=https\nhost=github.com\nusername=" +
-        account +
-        "\npassword=" +
-        token +
-        "\n\n";
+        "protocol=https\nhost=github.com\nusername=" + account + "\npassword=" + token + "\n\n";
       expect(stored).toBe(expectedCredentialRecord);
       // Pre-condition: the shim's `credential fill` replay path must
       // come from the persisted approval, never a hard-coded value the
@@ -424,10 +420,7 @@ describe("built CLI auth commands", () => {
       // just stored through the stateful shim, so the CLI
       // authenticates with the cached token, validates against /user,
       // and queries /search/issues for the recommendation.
-      const findResult = await runAsync(
-        [cli, "--json", "find", "--mood", "QUICK_WIN"],
-        loginEnv,
-      );
+      const findResult = await runAsync([cli, "--json", "find", "--mood", "QUICK_WIN"], loginEnv);
       expect(findResult.status, "find stderr:\n" + findResult.stderr).toBe(0);
       // No second device-code request reached the fixture. The cached
       // credential satisfied `find`'s auth requirement.

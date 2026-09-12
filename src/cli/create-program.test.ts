@@ -27,8 +27,7 @@ function handlers(overrides: Partial<CommandHandlers> = {}): {
   // Fakes may ignore the second context parameter but must conform to the new
   // (args, context) CommandHandlers signature.
   const base: CommandHandlers = {
-    find: async (args, ctx) =>
-      record("find", args, ctx, { kind: "verification", text: "find" }),
+    find: async (args, ctx) => record("find", args, ctx, { kind: "verification", text: "find" }),
     authLogin: async (args, ctx) => record("authLogin", args, ctx, authStatusView("CONNECTED")),
     authStatus: async (args, ctx) => record("authStatus", args, ctx, authStatusView("CONNECTED")),
     authLogout: async (args, ctx) => record("authLogout", args, ctx, authStatusView("LOGGED_OUT")),
@@ -54,8 +53,10 @@ function handlers(overrides: Partial<CommandHandlers> = {}): {
       record("verifyLink", args, ctx, { kind: "verification", text: "link" }),
     verifyMerge: async (args, ctx) =>
       record("verifyMerge", args, ctx, { kind: "verification", text: "merge" }),
-    journey: async (args, ctx) => record("journey", args, ctx, { kind: "verification", text: "journey" }),
-    progress: async (args, ctx) => record("progress", args, ctx, { kind: "verification", text: "progress" }),
+    journey: async (args, ctx) =>
+      record("journey", args, ctx, { kind: "verification", text: "journey" }),
+    progress: async (args, ctx) =>
+      record("progress", args, ctx, { kind: "verification", text: "progress" }),
     preferencesGet: async (args, ctx) =>
       record("preferencesGet", args, ctx, { kind: "verification", text: "prefs-get" }),
     preferencesSet: async (args, ctx) =>
@@ -161,9 +162,7 @@ describe("createProgram command routing", () => {
   it("routes mission break-lock with --id", async () => {
     const { handlers: h, calls } = handlers();
     await parse(h, ["mission", "break-lock", "--id", "m1"]);
-    expect(calls).toEqual([
-      { handler: "missionBreakLock", args: [{ missionId: "m1" }, {}] },
-    ]);
+    expect(calls).toEqual([{ handler: "missionBreakLock", args: [{ missionId: "m1" }, {}] }]);
   });
 
   it("rejects mission break-lock without --id before the handler runs", async () => {
@@ -290,11 +289,8 @@ describe("createProgram auth commands", () => {
   it("routes auth logout with the confirmation token", async () => {
     const { handlers: h, calls } = handlers();
     await parse(h, ["auth", "logout", "--confirm", "github.com"]);
-    expect(calls).toEqual([
-      { handler: "authLogout", args: [{ confirmation: "github.com" }, {}] },
-    ]);
+    expect(calls).toEqual([{ handler: "authLogout", args: [{ confirmation: "github.com" }, {}] }]);
   });
-
 
   it("routes auth logout without a confirmation so the use case can refuse", async () => {
     const { handlers: h, calls } = handlers();
@@ -497,7 +493,10 @@ describe("createProgram command context forwarding", () => {
       stderr: c.stderr,
     });
     await program.parseAsync(["node", "kestrel", "auth", "login"]);
-    expect(authLogin).toHaveBeenCalledWith({}, expect.objectContaining({ onNotice: expect.any(Function) }));
+    expect(authLogin).toHaveBeenCalledWith(
+      {},
+      expect.objectContaining({ onNotice: expect.any(Function) }),
+    );
     expect(c.getErr()).toContain("ABCD-1234");
   });
 });

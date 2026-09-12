@@ -5,7 +5,7 @@ import type {
   RunProcessOptions,
 } from "../../ports/process-runner.js";
 import { GitCredentialStore } from "./git-credential-store.js";
-type RunPredicate = (args: string[]) => boolean;
+type RunPredicate = (args: readonly string[]) => boolean;
 
 class FakeRunner implements ProcessRunner {
   readonly calls: { args: string[]; input?: string; signal?: AbortSignal }[] = [];
@@ -139,8 +139,7 @@ describe("GitCredentialStore", () => {
 
   it("cancels a hung `git credential approve` subprocess via the caller's AbortSignal", async () => {
     const runner = new FakeRunner();
-    runner.hangMatcher = (args) =>
-      args[0] === "credential" && args[1] === "approve";
+    runner.hangMatcher = (args) => args[0] === "credential" && args[1] === "approve";
     const store = new GitCredentialStore(runner);
     const controller = new AbortController();
     // `requireHelper` resolves (a helper is configured), so the store
@@ -159,8 +158,7 @@ describe("GitCredentialStore", () => {
 
   it("cancels a hung `git credential reject` subprocess via the caller's AbortSignal", async () => {
     const runner = new FakeRunner();
-    runner.hangMatcher = (args) =>
-      args[0] === "credential" && args[1] === "reject";
+    runner.hangMatcher = (args) => args[0] === "credential" && args[1] === "reject";
     const store = new GitCredentialStore(runner);
     const controller = new AbortController();
     // The `git credential reject` subprocess is held open; aborting the

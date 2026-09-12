@@ -157,9 +157,7 @@ describe("runStartupAuth", () => {
 
   it("renders first and marks auth unknown at the five-second deadline", async () => {
     vi.useFakeTimers();
-    const authStatus = vi.fn(
-      () => new Promise<ViewModel>(() => undefined),
-    );
+    const authStatus = vi.fn(() => new Promise<ViewModel>(() => undefined));
     const events: SessionEvent[] = [];
     const handle = runStartupAuth({
       handlers: handlers({ authStatus }),
@@ -182,9 +180,7 @@ describe("runStartupAuth", () => {
     // The handler's promise never resolves and never observes the abort
     // signal — `runStartupAuth` must still settle so the reducer can
     // transition to `unknown` and the rest of the session can render.
-    const authStatus = vi.fn(
-      () => new Promise<ViewModel>(() => undefined),
-    );
+    const authStatus = vi.fn(() => new Promise<ViewModel>(() => undefined));
     const events: SessionEvent[] = [];
     const handle = runStartupAuth({
       handlers: handlers({ authStatus }),
@@ -255,11 +251,7 @@ describe("runStartupAuth", () => {
       detail: "CONNECTED",
     });
     await handle.run;
-    expect(
-      events.some(
-        (e) => e.type === "AUTH_RESOLVED" && e.attemptId === 1,
-      ),
-    ).toBe(false);
+    expect(events.some((e) => e.type === "AUTH_RESOLVED" && e.attemptId === 1)).toBe(false);
     handle.dispose();
   });
 
@@ -325,9 +317,7 @@ describe("runStartupAuth", () => {
     });
     await vi.runAllTimersAsync();
     await handle.run;
-    const ctx = vi.mocked(authStatus).mock.calls[0]?.[1] as
-      | CommandContext
-      | undefined;
+    const ctx = vi.mocked(authStatus).mock.calls[0]?.[1] as CommandContext | undefined;
     expect(ctx?.signal).toBeDefined();
     handle.dispose();
   });
@@ -474,11 +464,9 @@ describe("runStartupAuth", () => {
     expect(vi.getTimerCount()).toBe(0);
     // Every registered parent abort callback must have been removed.
     for (const listener of registeredAbortListeners) {
-      expect(
-        removeSpy.mock.calls.some(
-          (call) => call[0] === "abort" && call[1] === listener,
-        ),
-      ).toBe(true);
+      expect(removeSpy.mock.calls.some((call) => call[0] === "abort" && call[1] === listener)).toBe(
+        true,
+      );
     }
     // Child signal was aborted so handler-side cleanup can run.
     expect(capturedSignal?.aborted).toBe(true);
@@ -491,79 +479,76 @@ describe("runStartupAuth", () => {
     removeSpy.mockRestore();
   });
 
+  describe("admission slot (pure runtime guard)", () => {
+    it("admits the first submission and rejects a second submission in the same tick", () => {
+      // The OLD admission guard used React `busy` state, which is
+      // deferred — two `submit()` calls dispatched in the same tick both
+      // passed the guard and both ran their handlers. The pure
+      // `AdmissionSlot` is the synchronous replacement that fails the
+      // OLD code: the second `tryAdmit` in the same tick must return
+      // `null` while the first is still active.
+      let slot = createAdmissionSlot();
+      const first = tryAdmit(slot);
+      expect(first).not.toBeNull();
+      if (first === null) throw new Error("first admit must succeed");
+      slot = first.slot;
+      const second = tryAdmit(slot);
+      expect(second).toBeNull();
+      // The slot state must reflect the active admission.
+      expect(slot.running).toBe(true);
+      expect(slot.activeId).toBe(first.token.id);
+    });
 
-describe("admission slot (pure runtime guard)", () => {
-  it("admits the first submission and rejects a second submission in the same tick", () => {
-    // The OLD admission guard used React `busy` state, which is
-    // deferred — two `submit()` calls dispatched in the same tick both
-    // passed the guard and both ran their handlers. The pure
-    // `AdmissionSlot` is the synchronous replacement that fails the
-    // OLD code: the second `tryAdmit` in the same tick must return
-    // `null` while the first is still active.
-    let slot = createAdmissionSlot();
-    const first = tryAdmit(slot);
-    expect(first).not.toBeNull();
-    if (first === null) throw new Error("first admit must succeed");
-    slot = first.slot;
-    const second = tryAdmit(slot);
-    expect(second).toBeNull();
-    // The slot state must reflect the active admission.
-    expect(slot.running).toBe(true);
-    expect(slot.activeId).toBe(first.token.id);
-  });
+    it("releases the slot only when the token matches the active operation", () => {
+      // Stale completion cannot clear a freshly installed child's busy
+      // state: the slot returns the original (unmodified) slot when the
+      // token no longer matches.
+      let slot = createAdmissionSlot();
+      const first = tryAdmit(slot);
+      expect(first).not.toBeNull();
+      if (first === null) throw new Error("first admit must succeed");
+      slot = first.slot;
+      // Replace the active operation with a new admission (simulates a
+      // newer submission landing while the first is still in flight).
+      const replacement = tryAdmit(slot);
+      expect(replacement).toBeNull();
+      // Manually simulate the replacement by re-trying after a manual
+      // release of the first token — proves the identity-check
+      // requirement.
+      const released = releaseAdmission(slot, first.token);
+      expect(released.released).toBe(true);
+      slot = released.slot;
+      // Now the slot is empty; a new admission succeeds and produces a
+      // different token.
+      const second = tryAdmit(slot);
+      expect(second).not.toBeNull();
+      if (second === null) throw new Error("second admit must succeed");
+      slot = second.slot;
+      expect(second.token.id).not.toBe(first.token.id);
+      // The OLD token can no longer release the slot.
+      const stale = releaseAdmission(slot, first.token);
+      expect(stale.released).toBe(false);
+      expect(stale.slot).toBe(slot);
+      // The matching token clears the slot.
+      const matching = releaseAdmission(slot, second.token);
+      expect(matching.released).toBe(true);
+      expect(matching.slot.running).toBe(false);
+      expect(matching.slot.activeId).toBeNull();
+    });
 
-  it("releases the slot only when the token matches the active operation", () => {
-    // Stale completion cannot clear a freshly installed child's busy
-    // state: the slot returns the original (unmodified) slot when the
-    // token no longer matches.
-    let slot = createAdmissionSlot();
-    const first = tryAdmit(slot);
-    expect(first).not.toBeNull();
-    if (first === null) throw new Error("first admit must succeed");
-    slot = first.slot;
-    // Replace the active operation with a new admission (simulates a
-    // newer submission landing while the first is still in flight).
-    const replacement = tryAdmit(slot);
-    expect(replacement).toBeNull();
-    // Manually simulate the replacement by re-trying after a manual
-    // release of the first token — proves the identity-check
-    // requirement.
-    const released = releaseAdmission(slot, first.token);
-    expect(released.released).toBe(true);
-    slot = released.slot;
-    // Now the slot is empty; a new admission succeeds and produces a
-    // different token.
-    const second = tryAdmit(slot);
-    expect(second).not.toBeNull();
-    if (second === null) throw new Error("second admit must succeed");
-    slot = second.slot;
-    expect(second.token.id).not.toBe(first.token.id);
-    // The OLD token can no longer release the slot.
-    const stale = releaseAdmission(slot, first.token);
-    expect(stale.released).toBe(false);
-    expect(stale.slot).toBe(slot);
-    // The matching token clears the slot.
-    const matching = releaseAdmission(slot, second.token);
-    expect(matching.released).toBe(true);
-    expect(matching.slot.running).toBe(false);
-    expect(matching.slot.activeId).toBeNull();
-  });
-
-  it("issues strictly increasing token ids so identity checks never collide", () => {
-    let slot = createAdmissionSlot();
-    const ids = new Set<number>();
-    for (let i = 0; i < 5; i += 1) {
-      const admit = tryAdmit(slot);
-      expect(admit).not.toBeNull();
-      if (admit === null) throw new Error(`admit ${i} must succeed`);
-      ids.add(admit.token.id);
-      slot = admit.slot;
-      const release = releaseAdmission(slot, admit.token);
-      slot = release.slot;
-    }
-    expect(ids.size).toBe(5);
+    it("issues strictly increasing token ids so identity checks never collide", () => {
+      let slot = createAdmissionSlot();
+      const ids = new Set<number>();
+      for (let i = 0; i < 5; i += 1) {
+        const admit = tryAdmit(slot);
+        expect(admit).not.toBeNull();
+        if (admit === null) throw new Error(`admit ${i} must succeed`);
+        ids.add(admit.token.id);
+        slot = admit.slot;
+        const release = releaseAdmission(slot, admit.token);
+        slot = release.slot;
+      }
+      expect(ids.size).toBe(5);
+    });
   });
 });
-
-});
-

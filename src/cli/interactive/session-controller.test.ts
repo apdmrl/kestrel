@@ -209,7 +209,9 @@ describe("session controller", () => {
       return view;
     });
     const notices: ViewModel[] = [];
-    const controller = createSessionController(commandHandlers, (received) => notices.push(received));
+    const controller = createSessionController(commandHandlers, (received) =>
+      notices.push(received),
+    );
 
     await controller({ kind: "auth-login" }, emptyContext);
 
@@ -238,12 +240,28 @@ describe("session controller", () => {
     });
   });
 
-  it("lists /auth in the session help", async () => {
+  it("renders each session help entry on its own line", async () => {
     const controller = createSessionController(handlers());
     const result = await controller({ kind: "help" }, emptyContext);
-    expect(result).toMatchObject({
+    expect(result).toEqual({
       kind: "output",
-      view: { kind: "verification", text: expect.stringContaining("/auth") },
+      view: {
+        kind: "verification",
+        text: [
+          "/help",
+          "/clear",
+          "/exit",
+          "/auth login",
+          "/auth status",
+          "/auth logout --confirm github.com",
+          "/find",
+          "/mission current",
+          "/mission ...",
+          "/progress",
+          "/journey",
+          "/preferences ...",
+        ].join("\n"),
+      },
     });
   });
 });

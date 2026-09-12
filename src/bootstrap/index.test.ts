@@ -1,6 +1,6 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createChallenge } from "../domain/challenge/challenge.js";
 import type { Challenge } from "../domain/challenge/challenge.js";
@@ -31,6 +31,26 @@ afterEach(async () => {
   await rm(dir, { recursive: true, force: true });
 });
 
+/** A configured helper that intentionally holds no credential. */
+async function createNoCredentialGitShim(parent: string): Promise<string> {
+  const shimDir = await mkdtemp(join(parent, "git-shim-"));
+  const script = [
+    "#!/usr/bin/env node",
+    "const args = process.argv.slice(2);",
+    "if (args[0] === 'credential' && args[1] === 'fill') process.exit(0);",
+    "if (args[0] === 'config' && args[1] === '--get' && args[2] === 'credential.helper') {",
+    "  process.stdout.write('test-helper\\n');",
+    "  process.exit(0);",
+    "}",
+    "process.exit(0);",
+    "",
+  ].join("\n");
+  await writeFile(join(shimDir, "git"), script, "utf8");
+  await writeFile(join(shimDir, "git.cmd"), '@echo off\r\nnode "%~dp0git" %*\r\n', "utf8");
+  await chmod(join(shimDir, "git"), 0o755);
+  return shimDir;
+}
+
 describe("bootstrap", () => {
   it("resolves the config from environment", () => {
     const config = createConfig({
@@ -49,9 +69,7 @@ describe("bootstrap", () => {
 
   it("uses the production GitHub client ID for blank environment overrides", () => {
     expect(createConfig({ GITHUB_CLIENT_ID: "" }).githubClientId).toBe("Ov23lizdZtG8goMx2GZC");
-    expect(createConfig({ GITHUB_CLIENT_ID: " \t " }).githubClientId).toBe(
-      "Ov23lizdZtG8goMx2GZC",
-    );
+    expect(createConfig({ GITHUB_CLIENT_ID: " \t " }).githubClientId).toBe("Ov23lizdZtG8goMx2GZC");
   });
 
   it("returns an empty journey without credentials", async () => {
@@ -90,15 +108,29 @@ describe("bootstrap", () => {
   });
 
   it("find fails with USER_ACTION_REQUIRED instead of a hard-coded auth error", async () => {
-    const previous = {
-      HOME: process.env.HOME,
-      GIT_CONFIG_NOSYSTEM: process.env.GIT_CONFIG_NOSYSTEM,
-      GIT_CONFIG_GLOBAL: process.env.GIT_CONFIG_GLOBAL,
-      GIT_TERMINAL_PROMPT: process.env.GIT_TERMINAL_PROMPT,
-    };
+    const isolatedKeys = new Set([
+      "HOME",
+      "PATH",
+      "GIT_TERMINAL_PROMPT",
+      "GIT_ASKPASS",
+      "SSH_ASKPASS",
+      "GIT_CONFIG_NOSYSTEM",
+      "GIT_CONFIG_GLOBAL",
+      ...Object.keys(process.env).filter(
+        (key) => key.startsWith("GIT_CONFIG_") || key.startsWith("GIT_CREDENTIAL_"),
+      ),
+    ]);
+    const previous = new Map([...isolatedKeys].map((key) => [key, process.env[key]] as const));
     try {
-      // Isolate git credential resolution so no user helper returns a token.
+      // The production composition reaches the real credential adapter. Replace
+      // only its Git executable with a helper that is configured but empty, and
+      // clear inherited Git configuration before it can select a host helper.
+      const shimDir = await createNoCredentialGitShim(dir);
+      for (const key of isolatedKeys) {
+        delete process.env[key];
+      }
       process.env.HOME = dir;
+      process.env.PATH = shimDir + delimiter + (previous.get("PATH") ?? "");
       process.env.GIT_CONFIG_NOSYSTEM = "1";
       process.env.GIT_CONFIG_GLOBAL = join(dir, "empty-gitconfig");
       process.env.GIT_TERMINAL_PROMPT = "0";
@@ -107,7 +139,7 @@ describe("bootstrap", () => {
         code: "DM_GITHUB_AUTH_REQUIRED",
       });
     } finally {
-      for (const [key, value] of Object.entries(previous)) {
+      for (const [key, value] of previous) {
         if (value === undefined) {
           delete process.env[key];
         } else {

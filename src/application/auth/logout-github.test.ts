@@ -115,10 +115,7 @@ describe("logoutGitHub", () => {
     const credentialStore = new FakeCredentialStore();
     credentialStore.credential = { service: "github", account: "octocat", token: "cached-token" };
     const controller = new AbortController();
-    await logoutGitHub(
-      { credentialStore },
-      { confirmation: token, signal: controller.signal },
-    );
+    await logoutGitHub({ credentialStore }, { confirmation: token, signal: controller.signal });
     expect(credentialStore.getSignals).toEqual([controller.signal]);
     expect(credentialStore.deleted).toEqual([{ service: "github", account: "octocat" }]);
   });
@@ -126,11 +123,7 @@ describe("logoutGitHub", () => {
   it("propagates an aborted lookup signal as a DM_PROCESS_CANCELLED error before any deletion", async () => {
     const credentialStore = new FakeCredentialStore();
     let receivedSignal: AbortSignal | undefined;
-    credentialStore.get = async (
-      _service: string,
-      _account: string,
-      signal: AbortSignal,
-    ) => {
+    credentialStore.get = async (_service: string, _account: string, signal: AbortSignal) => {
       receivedSignal = signal;
       if (signal.aborted === true) {
         throw Object.assign(new Error("lookup aborted"), {
@@ -149,10 +142,7 @@ describe("logoutGitHub", () => {
     const controller = new AbortController();
     controller.abort();
     await expect(
-      logoutGitHub(
-        { credentialStore },
-        { confirmation: token, signal: controller.signal },
-      ),
+      logoutGitHub({ credentialStore }, { confirmation: token, signal: controller.signal }),
     ).rejects.toMatchObject({ code: "DM_PROCESS_CANCELLED" });
     expect(receivedSignal).toBe(controller.signal);
     expect(credentialStore.deleted).toEqual([]);
@@ -171,10 +161,7 @@ describe("logoutGitHub", () => {
     const credentialStore = new FakeCredentialStore();
     credentialStore.credential = { service: "github", account: "octocat", token: "cached-token" };
     const controller = new AbortController();
-    await logoutGitHub(
-      { credentialStore },
-      { confirmation: token, signal: controller.signal },
-    );
+    await logoutGitHub({ credentialStore }, { confirmation: token, signal: controller.signal });
     // The same AbortSignal that reaches the credential lookup must also
     // reach the credential delete — otherwise a hung `git credential
     // reject` subprocess outlives the caller's CTRL+C.

@@ -308,20 +308,20 @@ describe("persistent session — keyboard navigation", () => {
   ])(
     "compact navigation shows the focused section at $columns×$rows",
     async ({ columns, rows }) => {
-    const harness = mountInteractive({
-      handlers: handlers(),
-      signal: new AbortController().signal,
-      capabilities: { columns, rows, color: true },
-    });
-    try {
-      await settle();
-      harness.stdin.send(downArrow());
-      await settle();
-      expect(harness.lastFrame()).toMatch(/>\*-\s+Home/u);
-      expect(harness.lastFrame()).toContain("↑↓ move");
-    } finally {
-      harness.unmount();
-    }
+      const harness = mountInteractive({
+        handlers: handlers(),
+        signal: new AbortController().signal,
+        capabilities: { columns, rows, color: true },
+      });
+      try {
+        await settle();
+        harness.stdin.send(downArrow());
+        await settle();
+        expect(harness.lastFrame()).toMatch(/>\*-\s+Home/u);
+        expect(harness.lastFrame()).toContain("↑↓ move");
+      } finally {
+        harness.unmount();
+      }
     },
   );
 
@@ -661,14 +661,14 @@ describe("persistent session — keyboard navigation", () => {
     let missionAcceptCalls = 0;
     let capturedRecommendationId: string | undefined;
     vi.mocked(commandHandlers.missionAccept).mockImplementation(async ({ recommendationId }) => {
-        missionAcceptCalls += 1;
-        capturedRecommendationId = recommendationId;
-        return {
-          kind: "mission",
-          id: "mission-42",
-          status: "ACCEPTED",
-          title: "Fix something",
-        };
+      missionAcceptCalls += 1;
+      capturedRecommendationId = recommendationId;
+      return {
+        kind: "mission",
+        id: "mission-42",
+        status: "ACCEPTED",
+        title: "Fix something",
+      };
     });
     const harness = mountInteractive({
       handlers: commandHandlers,
@@ -926,7 +926,7 @@ describe("persistent session — auth state propagation", () => {
       harness.stdin.send("/auth status\r");
       await settle();
       // Move focus to sidebar then jump to the action panel; the Find action
- // (id "find.run") should now render as enabled (`-`) rather than `x`.
+      // (id "find.run") should now render as enabled (`-`) rather than `x`.
       harness.stdin.send(upArrow());
       await settle();
       harness.stdin.send(downArrow());
